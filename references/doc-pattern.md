@@ -95,4 +95,7 @@ A set already written in one language does not get retranslated because the prof
 - No stray `---` immediately under a heading with nothing between — put the section's first line (or an HTML comment) before the rule, so a bare heading isn't followed by a horizontal rule that reads as an empty section. Lint the generated docs before handing off.
 
 ## Changelog discipline
+
+Two different records, do not merge them: the **changelog** below is per-revision, prose, and written for the human who approves the set. `_log.md` (`references/handoff.md`) is per-round, append-only, and written for the next agent — it records file versions and finding dispositions, and is never synced into the docs.
+
 - The set shares a changelog spine (from `_facts.yml dates.revisions[]`). Each doc's changelog shows the entries relevant to it, newest first, using the SAME tag+date. Divergent tags/dates are a `CONTRADICTION`.

@@ -3,6 +3,7 @@
 Mechanical consistency checks for a feature spec set. Run in order. Output = correspondence matrix + findings list. This is deterministic checking, NOT opinion — every finding cites a concrete mismatch.
 
 ## Inputs
+- `_log.md` (**read first** — who last edited, against which versions; outranks context)
 - `_facts.yml` (source of truth — what is claimed)
 - `_profile.yml` (how this repo verifies — where every `cmd` must come from)
 - All docs listed in `_facts.yml docs[]`.
@@ -109,7 +110,17 @@ Contract in `references/evidence.md`. These are the checks a clean consistency p
 - **`_facts.yml profile:` pointing at a different file than the upward walk resolves today → `DRIFT`.** A second profile appeared, or the set moved. Two profiles in one repo is the drift the single-source rule exists to prevent — reconcile before anything else, since every other check reads commands through it.
 - **A starter in the skill's own `profiles/` holding a concrete value where the template has `<angle brackets>`** — a real `app_id`, a real repo name, a machine-specific `deep_review_agent` — → `DRIFT`. Starters are copied, never filled; a filled one leaks one project's identity into every other project that uses this skill.
 
-### 16. Doc size
+### 16. Handoff log
+Contract in `references/handoff.md`. Only applies once `_log.md` exists — a single-agent set never needs one, and its absence is not a finding.
+- **A file's current `wc -l` + `git hash-object` differ from what the last entry naming it recorded → `DRIFT`.** Someone edited without appending. The next round is about to review a version no entry describes, and every disposition it writes will be against the wrong text.
+- **A finding carried two or more rounds with no disposition → `DRIFT`.** Silence is how a finding gets rediscovered every round and settled in none.
+- **A disposition of `rejected` with no command output or observation behind it → `DRIFT`.** "I disagree" is the finding surviving in disguise; a rejection is a claim and takes the same basis as any other.
+- **An entry missing `agent`, `Read:`, or `Log read through:` → `DRIFT`.** Without them the entry cannot be checked against anything, which is the only thing it was for.
+- **`Log read through:` naming a round earlier than the previous entry → `POLISH`**, and note it in the findings: that round skipped history and its dispositions may re-litigate settled items.
+- **A transcribed entry with no `Source:` line → `DRIFT`.** A finding raised against a pasted excerpt and one raised against the full file are not the same claim.
+- Round ids non-monotonic, or two entries with the same id → `CONTRADICTION`. Findings are addressed as `R<n>-F<m>`; ambiguous ids break every reference to them.
+
+### 17. Doc size
 `wc -l` every file in `docs[]`.
 - >500 lines → `POLISH`: approaching the split threshold. Split NOW, on the next top-level phase boundary, before more cross-refs are written against the current numbering.
 - >600 lines → `DRIFT`: split overdue. Crossing this mid-authoring means renumbering sections and re-qualifying every cross-ref by hand, in the middle of writing. Procedure in `references/doc-pattern.md` §Splitting an oversized doc.

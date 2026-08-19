@@ -14,6 +14,7 @@ Directory layout for a feature named `<slug>`:
 ```
 docs/features/<slug>/
   _facts.yml          # single source of truth — the ONLY place shared data is authored
+  _log.md             # append-only handoff log — who edited what, against which version
   01-master-plan.md
   02-implementation-and-e2e.md
   03-stakeholder-requirements.md
@@ -22,6 +23,9 @@ docs/features/<slug>/
 (If the project keeps specs flat like `docs/features/<slug>-01-...md`, honor that — put `_facts.yml` as `docs/features/<slug>/_facts.yml` or `<slug>-_facts.yml`. Match the repo's existing convention; do not impose a new one.)
 
 ## Modes
+
+**Every mode starts by reading `_log.md` from disk** (`references/handoff.md`). It records which agent last touched the set, which file versions they read, and what they decided about the previous round's findings. **It outranks your context window** — if the two disagree, your context is stale and the files must be re-read at the versions the log names. Every mode that edits appends an entry before finishing; one that does not is invisible to the next round.
+
 
 ### `new <slug>` — scaffold a spec set
 0. **Resolve the profile.** Walk UP from the spec's own directory to the git root and take the **first** `_profile.yml` found (`<spec dir>/_profile.yml`, then `docs/features/_profile.yml`, then any parent, then the root). Nearest wins, and the resolved path is recorded in `_facts.yml profile:` so audit checks the same file the author used.
@@ -49,7 +53,8 @@ docs/features/<slug>/
    - Doc 02 follows `references/implementable.md`: paste-ready code, resolved paths, named symbols, anchors, and the repo's real test-mock preamble. Assume the builder is a smaller model with zero context on this conversation.
    - **Prose language is `_profile.yml prose_language:`.** The `.tpl` files carry the `es` rendering of the fixed headings; for `en`, translate the headings using the map in `references/doc-pattern.md` §Heading language and keep the numbering identical. The headings are what audit checks 4/5/6 navigate by, so they must be consistent across the set — but they are not required to be Spanish.
 5. **Lint the registry before first `sync`.** Spellcheck the prose fields (notes, acceptance items, titles) — a typo in the registry (`accionabe`) propagates verbatim to every doc. Strings containing `"` are authored as single-quoted YAML scalars, so they match the prose byte-for-byte and don't trip acceptance parity.
-6. Run `audit <slug>` (inline) before declaring done.
+6. Scaffold `_log.md` from `templates/_log.md.tpl` and append the `R1 · author` entry — what you wrote, and what you left `basis: asserted`. Skip only for a set you know will never leave this session; adding it later costs the history you already lost.
+7. Run `audit <slug>` (inline) before declaring done.
 
 ### `audit <slug>` — consistency check (default: inline)
 Run the mechanical checks in `references/audit-protocol.md` and emit:
@@ -79,6 +84,13 @@ Reconcile `_facts.yml` against observations from a device run or instrumented se
 
 `audit` asks whether the docs agree with the registry. `review` asks whether the plan is safe to build. **`verify` asks whether the registry is TRUE** — and it is the only one of the three that can fail after a clean `audit`. Run it before flipping `status: shipped`; gate G1 in `references/evidence.md` refuses that flip while a root cause is still `asserted`.
 
+### `handoff <slug> [round]` — hand the set to another agent, or take it from one
+For sets worked by more than one model: one drafts, a second reviews it cold, the first dispositions the findings. Appends a round entry to `_log.md` recording the agent, the **line count and blob hash of every file read** (`git hash-object <file>` — no commit needed, works on gitignored specs), how far back it read the log, and one disposition per prior finding: `confirmed` / `rejected` / `deferred` / `superseded`.
+
+A rejected finding states the evidence that killed it and **stays in the log** — same reasoning as a dead hypothesis in `verify`: a rejection with evidence stops the next round re-deriving it, and a rejection without evidence is exactly what a later round should reopen. An external model with no filesystem gets its entry transcribed, and the entry says so plus what it was actually shown — a finding raised against a pasted excerpt was made without the preamble and the surrounding phases.
+
+Format, disposition rules, and the round protocol: `references/handoff.md`.
+
 ### `sync <slug>` — propagate registry changes
 When `_facts.yml` changes, find every doc occurrence of each changed datum and update it (or, if `--dry`, report the drift without editing). This is the write-side counterpart of `audit`.
 
@@ -89,6 +101,7 @@ When `_facts.yml` changes, find every doc occurrence of each changed datum and u
 > (A) is the one that reaches past the docs. Consistency and safety are both checkable *before* anything runs — truth is not. That is what `verify` is for, and why `status: shipped` is gated on it rather than on a clean audit.
 
 - **Ask, never invent.** Anything only the user knows — a rate limit, an external owner, a Definition of Done, whether a defect is the root cause or a symptom — is asked before the prose exists, in one batch, each question carrying a default detected from the repo. An invented value is indistinguishable from a measured one once it is copied into three docs, and `audit` will call it clean. Unknowns are fine; they are carried as `null`, `[MANUAL]`, or `basis: asserted` + `falsified_by:`. **Unmarked** unknowns are the defect. Full protocol in `references/intake.md`.
+- **The log outranks the context window.** A spec set outlives the session that wrote it and is often worked by several models. An agent that reviews its own context instead of the file on disk validates against a version that may be two rounds old, and nothing in its output says so. Read `_log.md` first, re-read at the versions it names, and append an entry for anything you change — recording the line count and hash of what you read is what makes "I reviewed doc 02" falsifiable instead of merely stated. `references/handoff.md`.
 - **Registry is authoritative.** If a doc and `_facts.yml` disagree, the doc is wrong (unless the user says the registry is stale — then fix the registry and `sync`).
 - **The registry says what is true; the profile says how this repo finds out.** Two files, two lifetimes: `_facts.yml` is per feature, `_profile.yml` is per repo. A command belongs to the profile, its output belongs to the registry. Hand-typing a command into a doc creates a third, unauditable copy — and it is the copy the executor actually runs.
 - **A clean audit does not mean the registry is true.** Verbatim copy propagates the registry's errors with perfect fidelity. `basis:` is what separates measured from asserted; `verify` is the gate that resolves it. A root cause still on `basis: asserted` blocks `status: shipped`.
@@ -111,8 +124,9 @@ When `_facts.yml` changes, find every doc occurrence of each changed datum and u
 - `references/audit-protocol.md` — the exact mechanical checks + severity taxonomy + matrix format.
 - `references/gap-sweep.md` — the `review` mode checklist: does this spec add functional/security gaps? Stack layers alongside it: `gap-sweep-web-baas.md`, `gap-sweep-android-native.md`, `gap-sweep-mobile-tv.md`.
 - `references/intake.md` — the questions to ask before writing anything, batched, with what may never be guessed.
+- `references/handoff.md` — the append-only `_log.md`, for sets passed between agents: entry format, dispositions, and why the log beats the context window.
 - `references/evidence.md` — the `basis:` / `evidence:` contract, the `verify` mode, and the gates that keep an asserted root cause from shipping.
 - `references/implementable.md` — how to write doc 02 so a context-free executor can build it.
-- `templates/` — `_facts.yml.tpl` and one `.tpl` per doc.
+- `templates/` — `_facts.yml.tpl`, `_log.md.tpl`, and one `.tpl` per doc.
 - `profiles/` — `_profile.yml.tpl` (the contract) plus starter profiles per stack. Copy one into the repo as its `_profile.yml`; **never fill one in place** — a real `app_id` or agent name written into a starter leaks into every other project using this skill.
   - The starters and the `gap-sweep-<layer>.md` files are **independent and disposable**. A repo needs only the ones matching its stacks; delete the rest, nothing else references them. Adding one for a new stack is ~20 lines (profile) and ~40 (layer), and is the normal way this skill grows.
