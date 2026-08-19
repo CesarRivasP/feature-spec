@@ -26,6 +26,12 @@ Or install it once for every project:
 cp -R feature-spec ~/.claude/skills/
 ```
 
+To pin a version instead of tracking `main`:
+
+```bash
+git clone --branch v1.1.0 --depth 1 git@github.com:CesarRivasP/feature-spec.git
+```
+
 Restart the session so the skill is picked up. No dependencies — 20 markdown and YAML files, no scripts, no MCP servers, no package to install.
 
 ## Set up the profile (once per repo)
@@ -176,6 +182,13 @@ This skill was written and iterated on while running [`caveman`](https://github.
 **Where it must not reach: the artifacts.** The docs, the registry, and the intake questions are not conversation. Doc 02 is written for an executor with no context, where a dropped article in a numbered device procedure is exactly the ambiguity this skill spends a whole reference file forbidding. Registry prose — `claim:`, `falsified_by:`, `acceptance[]` — is copied verbatim into three documents, so compression there propagates and then gets audited as a shared datum. `caveman`'s own rules already carve this out (it disables itself for multi-step sequences where fragment order risks a misread); the point is to notice that a generated spec is *always* that case. **Terse in the terminal, complete in the files.**
 
 **What it does not do: improve the analysis.** It is an output style. It changes how findings are worded, not whether they were found — a compressed wrong answer is still wrong, and reads more confident. Stating otherwise in this particular README would be the exact defect the skill exists to catch: a pleasant, plausible claim that nobody measured. Use `caveman` because the reports are easier to read, which is a real benefit and enough of one.
+
+## Releases
+
+| version | what it added |
+|---|---|
+| [**v1.1.0**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.1.0) | `_log.md` — the append-only handoff log, so a set worked by several models is reviewed against the file on disk rather than a stale context window |
+| [v1.0.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.0.0) | first public release — the registry, the four modes, the `basis:` contract, `_profile.yml`, intake, gap-sweep layers |
 
 ## License
 
