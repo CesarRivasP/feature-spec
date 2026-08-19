@@ -1,0 +1,31 @@
+# Profile — web app on a BaaS backend (Supabase/Firebase edge functions, webhooks, RLS)
+# ============================================================
+# STARTER — copy me, never fill me in place.
+#   cp profiles/web-baas.yml <your repo>/docs/features/_profile.yml
+# Filling a real app_id / agent / repo name HERE leaks it into every other
+# project that uses this skill. Values in <angle brackets> must be replaced
+# in the COPY. Delete the starters whose stacks you don't work in.
+# ============================================================
+
+repo: <basename of the git root>
+app: null
+
+stack: web-baas
+prose_language: <es | en>
+
+app_id: null               # no device target
+log_tag: <FEATURESPEC>
+
+commands:
+  tests:        "npx vitest run 2>&1 | tail -1"
+  tests_expect: "passed"
+  lint:         "npx eslint ."
+  build:        "npm run build"
+  device_log:   null       # browser console / provider dashboard — see gap-sweep-web-baas.md
+  force_stop:   null
+  file_tracked: "git ls-files --error-unmatch {path}"
+  file_ignored: "git check-ignore -v {path}"
+
+gap_sweep_layers: [web-baas]
+
+deep_review_agent: null

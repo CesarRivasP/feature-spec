@@ -1,0 +1,31 @@
+# Profile — React Native for TV (react-native-tvos, Android TV / Apple TV)
+# ============================================================
+# STARTER — copy me, never fill me in place.
+#   cp profiles/rn-tv.yml <your repo>/docs/features/_profile.yml
+# Filling a real app_id / agent / repo name HERE leaks it into every other
+# project that uses this skill. Values in <angle brackets> must be replaced
+# in the COPY. Delete the starters whose stacks you don't work in.
+# ============================================================
+
+repo: <basename of the git root>
+app: null
+
+stack: rn-tv
+prose_language: <es | en>
+
+app_id: <com.example.tvapp>
+log_tag: <FEATURESPEC>
+
+commands:
+  tests:        "yarn jest 2>&1 | tail -3"
+  tests_expect: "Tests:"
+  lint:         "yarn lint"
+  build:        "yarn android"
+  device_log:   "adb logcat -s ReactNativeJS:V {log_tag}:D"
+  force_stop:   "adb shell am force-stop {app_id}"
+  file_tracked: "git ls-files --error-unmatch {path}"
+  file_ignored: "git check-ignore -v {path}"
+
+gap_sweep_layers: [mobile-tv]
+
+deep_review_agent: null      # ask in intake set A; agent names are per-machine

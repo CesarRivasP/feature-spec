@@ -1,0 +1,11 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# editors
+.vscode/
+.idea/
+*.swp
+
+# a filled profile belongs to a repo, never to this one
+_profile.yml
