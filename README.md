@@ -138,6 +138,16 @@ templates/                            _facts.yml.tpl + one .tpl per doc
 profiles/                             _profile.yml.tpl + starters per stack
 ```
 
+## A note on pairing this with `caveman`
+
+This skill was written and iterated on while running [`caveman`](https://github.com/mattpocock/skills) — an output-style skill that strips articles, hedging and pleasantries from the agent's replies. Recommended, with one boundary that matters.
+
+**Where it helps: the conversation.** Three of the four modes produce *reports* — an audit's findings list, a gap sweep's one-line-per-gap output, a verify reconciliation. Those formats are already specified as terse and scenario-first: `doc0X §sec: TAG: what mismatches. fix.` and *no failure scenario, not a finding*. A compressed reply style pushes in the same direction, and the effect is real when a `--deep` audit comes back with twenty findings: what you read is the mismatch and the fix, not the framing around them.
+
+**Where it must not reach: the artifacts.** The docs, the registry, and the intake questions are not conversation. Doc 02 is written for an executor with no context, where a dropped article in a numbered device procedure is exactly the ambiguity this skill spends a whole reference file forbidding. Registry prose — `claim:`, `falsified_by:`, `acceptance[]` — is copied verbatim into three documents, so compression there propagates and then gets audited as a shared datum. `caveman`'s own rules already carve this out (it disables itself for multi-step sequences where fragment order risks a misread); the point is to notice that a generated spec is *always* that case. **Terse in the terminal, complete in the files.**
+
+**What it does not do: improve the analysis.** It is an output style. It changes how findings are worded, not whether they were found — a compressed wrong answer is still wrong, and reads more confident. Stating otherwise in this particular README would be the exact defect the skill exists to catch: a pleasant, plausible claim that nobody measured. Use `caveman` because the reports are easier to read, which is a real benefit and enough of one.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
