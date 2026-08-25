@@ -80,7 +80,11 @@ Run it after `new`, and again whenever `changes[]` grows.
 ### `verify <slug>` — is the registry true?
 Ask intake set C first (`references/intake.md`): who runs the procedure, on which device and **which build type**, and whether the decisive log line is readable there. A procedure written for hardware nobody has, or for a debug build when the defect is release-only, comes back inconclusive and costs the full build/install/navigate cycle anyway.
 
-Reconcile `_facts.yml` against observations from a device run or instrumented session. Confirmed hypotheses become `basis: measured` with their `evidence:` filled; refuted ones become `status: dead` (kept, never overwritten — a dead hypothesis stops the next session re-deriving it); every `alternatives[]` entry that `depends_on` a dead id and was discarded by reasoning flips to `outcome: reopened`. Then `sync`.
+Reconcile `_facts.yml` against observations from a device run or instrumented session. Confirmed hypotheses become `basis: measured` with their `evidence:` filled; refuted ones become `status: dead` (kept, never overwritten — a dead hypothesis stops the next session re-deriving it); every `alternatives[]` entry that `depends_on` a dead id and was discarded by reasoning flips to `outcome: reopened`.
+
+**Then ask whether the PLAN still has the same shape.** A refuted hypothesis does not only correct the registry — it can move the fix. If `changes[]` gained, lost, or replaced an entry, the plan you are about to `sync` is not the plan `review` swept: re-run **`review`** first, then `sync`. Skipping that edge is how a spec ships a fix that never passed a gap sweep at all.
+
+*Real case (React Native TV):* a device run killed the "the value stays 0" hypothesis and the fix changed from *seed the value* to *stop a stale sample from overwriting it* — an early-return guard that did not exist when the sweep ran. Nothing re-swept it, and the guard landed **below** a sibling write of the same stale sample, leaving a second consumer still corrupted. Found in review, after implementation. See §Adding a check in `references/gap-sweep.md`.
 
 `audit` asks whether the docs agree with the registry. `review` asks whether the plan is safe to build. **`verify` asks whether the registry is TRUE** — and it is the only one of the three that can fail after a clean `audit`. Run it before flipping `status: shipped`; gate G1 in `references/evidence.md` refuses that flip while a root cause is still `asserted`.
 
