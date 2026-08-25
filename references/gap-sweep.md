@@ -22,6 +22,8 @@ No layer for this stack yet? Run the base sweep and say so in the output — a m
 
 Output: one line per gap, `FUNCTIONAL` or `SECURITY`, with the failure scenario spelled out (inputs/state → wrong behavior). No scenario = not a finding, drop it.
 
+**A clean sweep is clean *for the kinds that exist*, and says so.** The same rule as a missing layer, one level down: the kinds below are the ones this file has grown so far, not a closed taxonomy of how software breaks. A `changes[]` entry that fits none of them gets swept on its own terms and the output names it as unclassified. Reporting a bare "clean" over a change no kind covers is the failure this sentence exists to prevent — write the kind instead, it is ~10 lines.
+
 ## By kind of change
 
 ### Any call to a third-party API or auth provider
@@ -49,11 +51,23 @@ Output: one line per gap, `FUNCTIONAL` or `SECURITY`, with the failure scenario 
 ### Deleting / relaxing a check
 - What was the check protecting against? Is that threat now handled elsewhere, or accepted? Say which.
 
+### Adding a check — a guard, an early return, a `return`/`continue`/`break`
+The inverse of the kind above, and it fails differently. An early return **partitions the function**: everything *above* it keeps running on the very input you just declared untrustworthy. The diff looks like one line; the blast radius is every statement that precedes it.
+
+- **What executes ABOVE the new return, on the same input?** Read the whole function, not the hunk. List every statement between the function's entry and the guard.
+- **Which of those WRITE state?** Assignments to refs, shared values, module state, stores, out-params. Each one is now writing a value the guard exists to reject.
+- **Who READS that state?** A write nobody reads is fine. A write feeding a second consumer means the guard fixed one symptom and left its sibling — often *worse* than before, because the two consumers now disagree on screen where they used to be consistently wrong.
+- **What ELSE does the guard skip?** A `return` placed before a call skips *everything that call does*, not just the part you cared about. Enumerate the callee's side effects and say, for each, whether skipping it is intended.
+- **Can the guard's condition get stuck?** A guard on a flag cleared by a *later* event freezes everything it protects if that event never arrives. State the stuck case and either bound it or accept it in writing.
+
+A one-line answer to all five is fine. Not answering them is the finding.
+
 ## Cross-cutting sweeps
 
 - **Bulk mutation on user records.** Any update/delete across a user collection must be specified with an explicit key list, never a bare predicate (`WHERE x IS NULL`, `filter { it.foo == null }`). The predicate that matches 16 records today matches 400 next month.
 - **Secrets in the doc set.** Names of env vars / keystore entries belong in the registry; values never. If the spec asks a third party to hand over a secret, it must name the channel — and rule out the insecure one by name.
 - **Untrusted text.** Data pulled from user-controlled fields (emails, names, uploads, stored rows, intent extras) and shown to an operator or an LLM is untrusted. Say so where it's read.
+- **Every consumer of the corrupted datum.** A defect corrupts a *value*, not a file. Before accepting a fix, name every place that value is written and every place it is read — then say which of them the fix covers. `changes[]` is organised by file and will not ask this for you. `references/implementable.md` §Wire every constant end to end encodes the same "N sites, you touched 1" failure for new constants; this is that rule generalised to the data an existing defect flows through. Two shared values fed by one event, a store read by two screens, a ref consumed by three handlers — each is a place the fix either reaches or silently does not.
 - **New dependency on an external owner.** Anything the team cannot execute alone gets `blocked_by:` in the registry, an owner, and a date that reflects *their* clock. Otherwise the plan quietly assumes a stranger's cooperation.
 
 ## Recording the result
