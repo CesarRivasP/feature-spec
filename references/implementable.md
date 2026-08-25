@@ -38,7 +38,11 @@ Instrumentation added to prove or kill a hypothesis is part of the spec, not sca
 - **Doc 02 shows one sample line per emitter, side by side**, demonstrating they are distinguishable at a glance. If two samples differ only in a value that can legitimately coincide, the tag is not sufficient.
 - **Name the filter.** The exact filter that surfaces only these lines and nothing else — `_profile.yml commands.device_log`, with `{log_tag}` substituted. If the profile has `device_log: null`, the spec says where the output is read instead, and that step is `[MANUAL]`.
 - **Each line maps to a `defects[].falsified_by`.** A diagnostic line that falsifies nothing is noise; a `falsified_by` with no line behind it is a hypothesis you cannot test. Both directions are audit findings (check 14).
-- **Removal is a phase.** `[TEMPORARY INSTRUMENTATION — remove before merge]` in the block itself, plus an explicit removal step in the last phase.
+- **Removal is a phase, ordered after the last RUN that needs it — not after the last code phase.** `[TEMPORARY INSTRUMENTATION — remove in <phase>]` in the block itself, plus an explicit removal step placed after every run that reads it.
+  - **"Before merge" contains more than one moment.** On a defect whose symptom is what the user *sees*, the confirming run happens after the fix and before the merge. Removing at the end of the code phases takes the oracle away from the only run that can close those criteria.
+  - **A `[MANUAL]` phase is a phase for this purpose.** The last code phase is not the last phase; §What still belongs to a human is where the real last one usually lives.
+  - **Before scheduling removal, ask which acceptance criteria are still unclosed, and whether any of them is observable ONLY through this instrumentation.** If yes, removal comes after that run. If the answer is "we will just look at it", that is the finding — a spec that removes its own oracle pushes the next step toward eyeballing pixels, which most stacks explicitly forbid as evidence.
+  - A fix landing after the diagnostic run may need a *different* line than the one that diagnosed it: the diagnosis observes the broken state, the confirmation observes the fixed one. Two emitters, two phases, both temporary.
 
 ## Tests
 

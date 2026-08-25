@@ -29,7 +29,7 @@ cp -R feature-spec ~/.claude/skills/
 To pin a version instead of tracking `main`:
 
 ```bash
-git clone --branch v1.2.0 --depth 1 git@github.com:CesarRivasP/feature-spec.git
+git clone --branch v1.2.1 --depth 1 git@github.com:CesarRivasP/feature-spec.git
 ```
 
 Restart the session so the skill is picked up. No dependencies — 20 markdown and YAML files, no scripts, no MCP servers, no package to install.
@@ -187,7 +187,8 @@ This skill was written and iterated on while running [`caveman`](https://github.
 
 | version | what it added |
 |---|---|
-| [**v1.2.0**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.2.0) | a gap-sweep kind for **adding** a check, not only removing one — an early return partitions its function and everything above it keeps running on the input the guard rejects; plus `verify` routing back through `review` when a refuted hypothesis moves the fix |
+| [**v1.2.1**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.2.1) | instrumentation removal is ordered after the last **run** that reads it, not after the last code phase — a `[MANUAL]` confirmation run comes later, and a spec that deletes its own oracle pushes the next step toward eyeballing pixels |
+| [v1.2.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.2.0) | a gap-sweep kind for **adding** a check, not only removing one — an early return partitions its function and everything above it keeps running on the input the guard rejects; plus `verify` routing back through `review` when a refuted hypothesis moves the fix |
 | [v1.1.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.1.0) | `_log.md` — the append-only handoff log, so a set worked by several models is reviewed against the file on disk rather than a stale context window |
 | [v1.0.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.0.0) | first public release — the registry, the four modes, the `basis:` contract, `_profile.yml`, intake, gap-sweep layers |
 

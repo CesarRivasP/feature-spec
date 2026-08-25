@@ -86,6 +86,8 @@ Reconcile `_facts.yml` against observations from a device run or instrumented se
 
 *Real case (React Native TV):* a device run killed the "the value stays 0" hypothesis and the fix changed from *seed the value* to *stop a stale sample from overwriting it* — an early-return guard that did not exist when the sweep ran. Nothing re-swept it, and the guard landed **below** a sibling write of the same stale sample, leaving a second consumer still corrupted. Found in review, after implementation. See §Adding a check in `references/gap-sweep.md`.
 
+**Before running it, check the oracle is still in the tree.** `verify` reads instrumentation, and a spec that scheduled removal at the end of its code phases has already deleted it — see `references/implementable.md` §Diagnostic log lines. Re-adding a confirmation emitter is a phase, not a patch.
+
 `audit` asks whether the docs agree with the registry. `review` asks whether the plan is safe to build. **`verify` asks whether the registry is TRUE** — and it is the only one of the three that can fail after a clean `audit`. Run it before flipping `status: shipped`; gate G1 in `references/evidence.md` refuses that flip while a root cause is still `asserted`.
 
 ### `handoff <slug> [round]` — hand the set to another agent, or take it from one
