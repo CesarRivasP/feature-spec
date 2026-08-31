@@ -267,6 +267,17 @@ def check_changes_vocabulary(facts: dict, f: Findings) -> None:
                   "is an undecided one, and `implement` refuses to run on it",
                   "23 changes[] lifecycle")
             continue
+        # "the daily peak passes ~200 distinct users. Today: 5" is a condition.
+        # "when traffic grows" is an opinion, and reopening on an opinion never
+        # happens. Without the number the discussion is one view against another.
+        if str(kind) == "deferred" and e.get("reopens_when") \
+                and not re.search(r"\d", str(e["reopens_when"])):
+            f.add(DRIFT, f"changes.{cid}",
+                  "`reopens_when:` states no measured value",
+                  "name the number that reopens it and today's number beside it — "
+                  "a threshold with no measurement is an opinion, and nothing "
+                  "reopens on an opinion",
+                  "23 changes[] lifecycle")
         for field in required.get(str(kind), ()):
             if not e.get(field):
                 f.add(DRIFT, f"changes.{cid}",
@@ -275,6 +286,108 @@ def check_changes_vocabulary(facts: dict, f: Findings) -> None:
                       "better wording" if field == "reopens_when"
                       else f"state `{field}:`",
                       "23 changes[] lifecycle")
+
+
+def normalize_acceptance(facts: dict) -> list[dict]:
+    """A plain string is still a valid criterion and reads as `status: written`,
+    so sets written before the field existed keep auditing."""
+    out = []
+    for i, e in enumerate(facts.get("acceptance") or []):
+        if isinstance(e, dict):
+            out.append({"id": str(e.get("id") or f"[{i}]"),
+                        "item": str(e.get("item") or e.get("claim") or ""),
+                        "status": str(e.get("status") or ""),
+                        "verified_on": e.get("verified_on")})
+        else:
+            out.append({"id": f"[{i}]", "item": str(e), "status": "", "verified_on": None})
+    return out
+
+
+def check_acceptance_state(facts: dict, status_rank: int, f: Findings) -> None:
+    """§2.4 + §4.2. `acceptance[]` is the contract; `_log.md` is narrative. A set
+    was marked `shipped` holding two criteria nothing could satisfy — one of them
+    annotated "this is THE test of the set" — because the decision that killed them
+    was recorded in the log and never propagated to the contract. The audit passed
+    clean: no check compared acceptance[] against reality. This is that check."""
+    if status_rank < STATUS_RANK["shipped"]:
+        return
+    items = normalize_acceptance(facts)
+    if not items:
+        return
+
+    # A set that predates the field has NO criterion carrying a status. Reporting
+    # each one is a wall of identical findings that buries the other contradictions
+    # in the same set — the failure this protocol names one level up. Collapse it
+    # into one, and say plainly that it is an adoption gap.
+    # A set where SOME criteria carry a status and others do not is a different
+    # thing entirely: somebody adopted the field and skipped items. Report those
+    # one by one, because each is a specific criterion nobody verified.
+    if all(e["status"] == "" for e in items):
+        f.add(CONTRADICTION, "acceptance[]",
+              f"the set is `shipped` and none of its {len(items)} criteria carry a "
+              "`status:` — nothing records whether any of them was ever verified",
+              "adopt `status: written|executed|approved` per criterion and fill it "
+              "from what actually ran. Until then the set's own contract cannot say "
+              "whether it was met, which is how one shipped holding two criteria "
+              "nothing could satisfy",
+              "26 acceptance state")
+        return
+
+    for e in items:
+        label = f"acceptance.{e['id']}"
+        detail = f": {e['item'][:60]!r}" if e["item"] else ""
+        if e["status"] in ("", "written"):
+            f.add(CONTRADICTION, label,
+                  f"the set is `shipped` but this criterion was never verified"
+                  f" (status {e['status'] or 'absent'}){detail}",
+                  "run it and record `status: executed|approved` with its date — or, "
+                  "if a trimmed scope made it unreachable, rewrite it against the "
+                  "substitute mechanism or delete it and write down the accepted risk",
+                  "26 acceptance state")
+        elif e["status"] == "executed":
+            f.add(DRIFT, label,
+                  f"`shipped` with this criterion executed but not approved{detail}",
+                  "someone ran it; nobody signed it off",
+                  "26 acceptance state")
+        elif e["status"] == "approved" and not e["verified_on"]:
+            f.add(DRIFT, label, "`approved` with no date",
+                  "`verified_on:` — an approval with no date cannot be checked for "
+                  "staleness. (Never name this field `on:`: YAML 1.1 reads it as "
+                  "the boolean True and the value silently lands under a key "
+                  "nothing reads.)",
+                  "26 acceptance state")
+
+
+def check_dead_dependency_cascade(facts: dict, f: Findings) -> None:
+    """§4.3. `verify` already reopens a discarded `alternatives[]` entry whose
+    premise died. The other half — and the more common one — was missing: an entry
+    whose open question was ANSWERED by the death of its dependency, which nobody
+    goes back to.
+
+    F2 depended on F3. A later round measured F3 and left it `dead` — a clean round,
+    with evidence. Nobody returned to F2: its note still said "lo NO MEDIDO" about
+    something measured hours earlier. The set shipped and the audit passed clean.
+    Staying `open` is a perfectly valid answer; staying open with no `outcome:` is
+    a question the set declared closed without answering."""
+    entries = {}
+    for key in ("defects", "alternatives"):
+        for e in facts.get(key) or []:
+            if isinstance(e, dict) and e.get("id"):
+                entries[str(e["id"])] = (key, e)
+    for eid, (key, e) in entries.items():
+        if str(e.get("status")) != "open" or e.get("outcome"):
+            continue
+        for dep in e.get("depends_on") or []:
+            target = entries.get(str(dep), (None, {}))[1]
+            if str(target.get("status")) == "dead":
+                f.add(DRIFT, f"{key}.{eid}",
+                      f"still `open` with no `outcome:`, but `{dep}` — which it "
+                      "depends on — is now `dead`",
+                      f"the question this entry was waiting on has an answer: write "
+                      f"the `outcome:` it now has. Remaining open as an accepted risk "
+                      f"is fine, and is itself an outcome worth stating",
+                      "27 dead-dependency cascade")
+                break
 
 
 def check_file_existence(facts: dict, repo_root: Path, status_rank: int,
@@ -705,6 +818,8 @@ def main(argv: list[str] | None = None) -> int:
     check_basis_gates(facts, f)
     check_declared_dependencies(facts, f)
     check_changes_vocabulary(facts, f)
+    check_acceptance_state(facts, rank, f)
+    check_dead_dependency_cascade(facts, f)
     check_file_existence(facts, repo_root, rank, f)
     check_anchors(facts, prose, repo_root, f)
     check_orphan_and_dangling_ids(facts, prose, f)

@@ -48,6 +48,21 @@ Output: one line per gap, `FUNCTIONAL` or `SECURITY`, with the failure scenario 
 - **Who reads it, and when?** A log line nobody opens does not close a frente. If the whole point is that a failure currently passes silently, the destination must be something a person or a query actually reaches.
 - **Does it log the untrusted value itself?** User-controlled text in a log destination that renders markup, or that an LLM later reads, is an injection surface.
 
+### Any change that answers a limit of scale
+This file asks what breaks if the spec is built literally. It never asked whether it is worth building **today**.
+
+For each `changes[]` entry that exists because something will not scale, three numbers, and **the measurement is mandatory, not optional**:
+
+- **What is the real value today?** Measured, in production, with the command recorded in `evidence`. Not estimated.
+- **What is the threshold** at which the thing actually breaks?
+- **What is the distance** between them?
+
+If the distance is orders of magnitude, the change is a candidate for `kind: deferred` with its `reopens_when:` naming the threshold and today's number beside it. Without the number this is one opinion against another, and the opinion with more conviction wins.
+
+Real case, and the most valuable moment of the session that produced this file: the user stopped and asked *"this isn't an app with that much traffic — what's the basis?"*. Production volume was measured: the fix was **~200x ahead of the need**. The set was cut in half, and what remained turned out to be **observability, not scalability** — a different problem than the one being solved. A spec can pass this entire sweep and still be premature work.
+
+**This is the gate between stage 1 and stage 2** (`SKILL.md` §Modes). It is asked while the set is still a registry and a doc 01, which is when cutting it in half costs a registry edit. Asked after `implement` has run, the same answer costs the phases that were written around the entry.
+
 ### Deleting / relaxing a check
 - What was the check protecting against? Is that threat now handled elsewhere, or accepted? Say which.
 

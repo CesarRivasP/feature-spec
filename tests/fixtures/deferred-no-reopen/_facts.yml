@@ -11,5 +11,8 @@ changes:
       deferred_because: decisions.scope_trimmed,
       reopens_when: 'el pico diario pasa de ~200 usuarios distintos. Hoy: 5' }
   - { id: C3, file: src/c.ts, change: 'sin kind — alcance sin decidir' }
+  - { id: C4, file: src/d.ts, kind: deferred, change: 'el cache de sesion',
+      deferred_because: decisions.scope_trimmed,
+      reopens_when: 'cuando el trafico crezca' }
 docs:
   - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

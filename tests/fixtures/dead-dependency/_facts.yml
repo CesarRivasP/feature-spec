@@ -1,0 +1,20 @@
+# F2's open question was ANSWERED by the death of F3, and nobody went back. F5
+# depends on the same dead id but wrote its outcome — staying open as an accepted
+# risk is a valid answer, and is itself an outcome. F6 depends on something alive.
+feature: dead-dependency
+status: draft
+profile: _profile.yml
+defects:
+  - { id: F2, role: symptom, basis: decided, status: open, depends_on: [F3],
+      claim: 'el filtro acepta application/pdf/x' }
+  - { id: F3, role: contributing, basis: decided, status: dead,
+      claim: 'la cabecera habilita MIME sniffing' }
+  - { id: F5, role: symptom, basis: decided, status: open, depends_on: [F3],
+      outcome: 'riesgo aceptado: el navegador lo trata como descarga',
+      claim: 'la extension no coincide con el MIME' }
+  - { id: F6, role: symptom, basis: decided, status: open, depends_on: [F7],
+      claim: 'el toast no aparece en el estado de error' }
+  - { id: F7, role: contributing, basis: decided, status: open,
+      claim: 'el branch de error no renderiza nada' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

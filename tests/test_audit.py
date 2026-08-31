@@ -66,8 +66,9 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
 
     # §2.1 — a deferral with no reopen condition is abandonment with better wording.
     ("deferred-no-reopen",
-     [("23", "C1"), ("23", "C3")],
-     [("23", "C2")]),            # has both required fields
+     [("23", "C1"), ("23", "C3"),
+      ("23", "C4")],             # a threshold with no number is an opinion
+     [("23", "C2")]),            # has both required fields, with the measurement
 
     # §4.3 — F2 named F3 in prose, F3 died, nobody went back to F2.
     ("undeclared-depends",
@@ -78,6 +79,19 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
     ("cmd-alternation",
      [("1b/14", "l1_alternation")],
      [("1b/14", "l2_shell_pipe")]),  # a shell pipe is not an alternation
+
+    # §2.4 + §4.2 — the set shipped holding criteria nothing could satisfy.
+    ("acceptance-unverified",
+     [("26", "AC1"),          # never verified
+      ("26", "AC2"),          # executed, never approved
+      ("26", "AC4")],         # approved with no date
+     [("26", "AC3")]),        # approved, dated
+
+    # §4.3 — the open question its dead dependency already answered.
+    ("dead-dependency",
+     [("27", "F2")],
+     [("27", "F5"),           # wrote its outcome
+      ("27", "F6")]),         # its dependency is still alive
 
     # Staging: docs 02/03 declared, not yet due, and not reported.
     ("stage-draft",

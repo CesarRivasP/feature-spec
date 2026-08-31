@@ -1,0 +1,23 @@
+# Real case, and the strongest evidence in the report because it RECURRED two days
+# after the rule against it was written. A heartbeat to Sentry Crons was discarded
+# — the substitute that covered "the cron stopped running". The decision was
+# recorded correctly in _log.md. But acceptance[] kept two criteria that nothing
+# could satisfy, one of them annotated "this is THE test of the set: it is the only
+# path by which anyone finds out the cron stopped". The set was marked shipped that
+# way. Verified afterwards: find_monitors returned {"monitors":[]} and the merged
+# code sends no check-in. And the audit passed CLEAN, because no check compared
+# acceptance[] against reality.
+#
+# The log is narrative. acceptance[] is contract. Recording a decision in one is
+# not propagating it to the other.
+feature: acceptance-unverified
+status: shipped
+profile: _profile.yml
+defects: []
+acceptance:
+  - { id: AC1, item: 'alguien se entera de que el cron dejó de correr', status: written }
+  - { id: AC2, item: 'la corrida deja rastro durable', status: executed, verified_on: 2026-08-30 }
+  - { id: AC3, item: 'el borrado respeta el batch cap', status: approved, verified_on: 2026-08-30 }
+  - { id: AC4, item: 'sin estado — la forma vieja, un string suelto', status: approved }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

@@ -122,12 +122,20 @@ Output: findings tagged `FUNCTIONAL` / `SECURITY`, each with a concrete failure 
 
 Run it after `new`, and again whenever `changes[]` grows.
 
+It also asks the question that is not about safety at all: **is this worth building now, at this scale?** For every `changes[]` entry answering a limit of scale — the real measured value today, the threshold, and the distance between them. Orders of magnitude apart makes the entry a candidate for `kind: deferred` with its `reopens_when:`. *Real case:* the measurement showed the fix was ~200x ahead of the need; the set was cut in half and what remained was observability, not scalability. **The measurement is mandatory** — without the number it is one opinion against another.
+
 **`review` is the gate between stage 1 and stage 2.** Its findings are dispositioned, the user confirms, `status:` flips to `reviewed`, and only then does `implement` write docs 02 and 03. Running it while doc 02 does not exist yet is the point, not a limitation: a finding that lands in `changes[]` here costs a registry edit, and the same finding after 02 exists costs the phase that was written around it.
 
 ### `verify <slug>` — is the registry true?
 Ask intake set C first (`references/intake.md`): who runs the procedure, on which device and **which build type**, and whether the decisive log line is readable there. A procedure written for hardware nobody has, or for a debug build when the defect is release-only, comes back inconclusive and costs the full build/install/navigate cycle anyway.
 
-Reconcile `_facts.yml` against observations from a device run or instrumented session. Confirmed hypotheses become `basis: measured` with their `evidence:` filled; refuted ones become `status: dead` (kept, never overwritten — a dead hypothesis stops the next session re-deriving it); every `alternatives[]` entry that `depends_on` a dead id and was discarded by reasoning flips to `outcome: reopened`.
+Reconcile `_facts.yml` against observations from a device run or instrumented session. Confirmed hypotheses become `basis: measured` with their `evidence:` filled; refuted ones become `status: dead` (kept, never overwritten — a dead hypothesis stops the next session re-deriving it).
+
+**Then walk the cascade, in both directions.** When an id goes `dead` or changes `basis`, every entry that `depends_on` it is revisited — `defects[]` as well as `alternatives[]`:
+- an `alternatives[]` entry discarded *by reasoning* on a premise that just died flips to `outcome: reopened`. The discard is void, not merely doubtful.
+- **any entry still `open` writes its `outcome:`** — the answer it now has. Staying `open` is a perfectly valid resolution and is itself an outcome worth stating; *`open` with no `outcome:` after its dependency died* is the finding, because from outside the two are indistinguishable.
+
+*Real case:* `F2`'s note said, in prose, that what decided whether it mattered was `F3`. A later round measured `F3` and left it `dead` — a clean round, with evidence. Nobody returned to `F2`; its note still claimed "not measured" about something measured hours earlier, and the set shipped with a clean audit. The arrow existed and nothing could follow it, because it was written in prose and not in `depends_on:`. That is now check 25; this is the other half.
 
 **Then ask whether the PLAN still has the same shape.** A refuted hypothesis does not only correct the registry — it can move the fix. If `changes[]` gained, lost, or replaced an entry, the plan you are about to `sync` is not the plan `review` swept: re-run **`review`** first, then `sync`. Skipping that edge is how a spec ships a fix that never passed a gap sweep at all. If doc 02 already exists, `sync` is not enough either — a moved entry changes the plan's *shape*, and shape is what `implement` writes; regenerate the affected phases.
 

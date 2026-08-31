@@ -143,6 +143,18 @@ defects: []
   #   falsified_by: 'a log line proving row 0 DID mount while focus still died'
   #   log_line: '<TAG>.mount id=<uid> row=0' # emitter that produces it; null = must be built
   #   status: open            # open | fixed | dead
+  #   # An entry that STAYS open needs to say why, or a cold reader — and audit —
+  #   # reads it as unfinished work this set forgot about:
+  #   outcome: null           # the answer this entry now has. Required once a
+  #                           #   depends_on target dies or changes basis: the
+  #                           #   question got answered elsewhere and nobody came
+  #                           #   back. Staying `open` as an accepted risk is
+  #                           #   valid; staying open with no `outcome:` is not.
+  #   owned_by: null          # where the fix lives, if it is not this set. A defect
+  #                           #   this set FOUND but another set FIXES stays `open`
+  #                           #   on purpose — closing it would be a lie — but
+  #                           #   without this field it reads as pending work here.
+  #   note_ownership: null    # why it is still open in THIS set
   #   # once measured:
   #   #   basis: measured
   #   #   evidence: { how: log, cmd: "<commands.device_log>", date: YYYY-MM-DD,
@@ -176,13 +188,36 @@ tests_baseline:
   basis: measured
   evidence: { how: shell, cmd: "<test runner cmd>", date: "<YYYY-MM-DD>",
               value: "<n/n passing (m files)>" }
-acceptance: []          # bullet list of Definition-of-Done items (shared across docs).
+acceptance: []          # Definition-of-Done items (shared across docs).
                         #   Authored by `new`, in STAGE 1: "what would make this done" is an
                         #   INPUT to deciding whether to build it, not an output of building.
                         #   Only its rendering as doc 02's Definition of Done waits for
                         #   `implement`. Until then this list is the only home the criteria
                         #   have — which is why they carry their own state rather than
                         #   depending on a doc that does not exist yet.
+                        #
+                        #   EACH CRITERION CARRIES ITS OWN STATE. A plain string is still
+                        #   accepted and reads as `status: written`, so existing sets do not
+                        #   break — but a set cannot reach `shipped` on strings alone.
+                        #     status: written  - the criterion exists. Nothing was run.
+                        #     status: executed - it was run. Record when, and what happened.
+                        #     status: approved - it was run AND it passed.
+                        #   - { id: AC1, item: 'el cron deja rastro de cada corrida',
+                        #       status: approved, verified_on: YYYY-MM-DD,
+                        #       evidence: 'la corrida de las 06:00 quedó registrada' }
+                        #
+                        #   Why the field exists: an E2E step was executed and approved and
+                        #   the fact lived ONLY in prose inside a log entry. Later entries
+                        #   kept saying it was pending. Nobody lied — there was nowhere to
+                        #   write it, and the log is append-only, so the last mention wins
+                        #   even when it is the oldest.
+                        #
+                        #   And the harder case it exists to stop: a set was marked `shipped`
+                        #   holding two criteria that NOTHING could satisfy, one of them
+                        #   annotated "this is THE test of the set". The decision that killed
+                        #   them was recorded correctly in _log.md — but the log is narrative
+                        #   and acceptance[] is contract. The audit passed clean because no
+                        #   check compared acceptance[] against reality. Now one does.
 
 # --- cross-doc registry ---
 # List the docs in this set so audit knows what to check and cross-refs can resolve.

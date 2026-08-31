@@ -220,6 +220,7 @@ Real case: a "Fase 8" was inserted into a doc that already had a Fase 8 and a Fa
 ### 23. `changes[]` lifecycle — [script]
 Every entry declares `kind:`. Missing → `DRIFT`: an unclassified change is an undecided one, and `implement` refuses to run on it.
 - `kind: deferred` with no `reopens_when:` → `DRIFT`. **A deferral with no condition of reopening is not a deferred change: it is a change abandoned with better wording.** Also requires `deferred_because:` naming a `decisions.*` key.
+- `kind: deferred` whose `reopens_when:` states no measured value → `DRIFT`. *"when traffic grows"* is an opinion and nothing reopens on an opinion. *"the daily peak passes ~200 distinct users. Today: 5"* is a condition someone can check.
 - `kind: moved_out` with no `moved_to:` → `DRIFT`.
 - `kind: pending` with no `transferred_from:` → `DRIFT`.
 
@@ -237,6 +238,30 @@ Apply **only** when `evidence.how` is executable (`shell|git|sql|psql|bash|curl`
 An entry whose `claim`/`note`/`because` names another registry id in prose but does not declare it in `depends_on:` → `DRIFT`. The arrow exists either way; undeclared, the cascade in `verify` cannot follow it.
 
 Real case, and the twin of check 14's `alternatives[]` gate: `F2` (open) carried the note *"Lo NO MEDIDO —y lo que decide si esto importa— es qué se sirve después: **ver `F3`**"*. A later round measured `F3` and left it `dead` — a clean round, with evidence. **Nobody went back to `F2`.** Its open question already had an answer, its note still said "lo NO MEDIDO" about something measured hours earlier, and the set was marked `shipped` and passed the audit **clean**. `F2` named `F3` in prose and not in a field, so no tool could follow that arrow.
+
+### 26. Acceptance state — [script]
+Every `acceptance[]` criterion carries `status: written | executed | approved`. A plain string is still valid and reads as `written`, so older sets keep auditing — but a set cannot reach `shipped` on strings alone.
+- `status: shipped` with a criterion `written` or with no status → `CONTRADICTION`.
+- `shipped` with a criterion `executed` but not `approved` → `DRIFT`. Someone ran it; nobody signed it off.
+- `approved` with no `verified_on:` → `DRIFT`. An approval with no date cannot be checked for staleness.
+- **A set where NO criterion carries a status collapses to one finding, not N.** It predates the field, and reporting each of fifteen identical misses buries the other contradictions in the same set — the wall this file's §Stage gating exists to prevent, one level down. A set where *some* criteria carry a status and others do not is the opposite case and is reported per criterion: somebody adopted the field and skipped items, and each skipped one is a specific criterion nobody verified.
+
+Two real cases, and the second is why this is a check and not a paragraph.
+
+An E2E step was executed and approved and the fact lived **only** in prose inside a log entry. Later entries kept saying it was pending. Nobody lied — there was nowhere to write it, and the log is append-only, so the last mention wins even when it is the oldest.
+
+Then: a heartbeat was discarded — the substitute covering "the cron stopped running" — and the decision was recorded correctly in `_log.md`. `acceptance[]` kept **two criteria nothing could satisfy**, one annotated *"this is THE test of the set: it is the only path by which anyone finds out the cron stopped"*. The set was marked `shipped` that way, and **the audit passed clean**, because no check compared `acceptance[]` against reality. Verified afterwards: the monitor query returned `{"monitors":[]}` and the merged code sends no check-in.
+
+**The log is narrative; `acceptance[]` is contract.** Recording a decision in one is not propagating it to the other. And note the recurrence: the rule against this was already written, in prose, in `references/gap-sweep.md`, two days before it happened again in the same set.
+
+> **Never name a date field `on:`.** YAML 1.1 reads `on`/`off`/`yes`/`no` as booleans, so `on: 2026-08-30` lands under the key `True` and every lookup for `"on"` misses. The field is `verified_on:`. This was found by a test, not by review.
+
+### 27. Dead-dependency cascade — [script]
+Check 14 reopens a *discarded* `alternatives[]` entry whose premise died. This is the other half, and the more common one: an entry with a `depends_on` target now `status: dead`, still `open`, with no `outcome:` → `DRIFT`.
+
+Real case: `F2` depended on `F3`. A later round measured `F3` and left it `dead` — a clean round, with evidence and a cleaned-up probe. **Nobody returned to `F2`.** Its open question already had an answer and its note still said *"lo NO MEDIDO"* about something measured hours earlier. The set was marked `shipped` and passed the audit clean, because no check looks at whether an entry's note is still true.
+
+Remaining `open` is a perfectly valid resolution — `F2` stayed open as an accepted risk. **`open` with no `outcome:` after its dependency died is the finding**, because the two are indistinguishable from the outside.
 
 ## Normalization before comparing
 Before flagging any string mismatch (checks 1, 2, 6, 7): strip surrounding YAML quoting, collapse runs of whitespace, normalize typographic quotes/dashes to ASCII, and **unescape markdown table syntax — `\|` is a literal `|`**. A registry gate `data?.length === 0 || !selectedId` appears in a doc's table as `data?.length === 0 \|\| !selectedId`; comparing raw reports it as absent from every doc and sends you hunting an orphan fact that was never orphaned. The audit's own tooling is a source of false positives — when a datum looks missing from a doc that obviously should cite it, check the escaping before writing the finding. A registry entry authored as `"Botón 'Reenviar…'"` and prose reading `Botón "Reenviar…"` is a **quoting artifact, not a finding** — the fix is to re-author that registry entry as a single-quoted YAML scalar, not to edit the prose. Report those separately as `POLISH: quoting`, never as `CONTRADICTION`.
