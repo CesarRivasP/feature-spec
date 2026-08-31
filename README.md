@@ -29,7 +29,7 @@ cp -R feature-spec ~/.claude/skills/
 To pin a version instead of tracking `main`:
 
 ```bash
-git clone --branch v1.4.0 --depth 1 git@github.com:CesarRivasP/feature-spec.git
+git clone --branch v1.4.1 --depth 1 git@github.com:CesarRivasP/feature-spec.git
 ```
 
 Restart the session so the skill is picked up. No MCP servers, no package to install: the skill itself is markdown and YAML.
@@ -238,7 +238,8 @@ If anything outside this repo reads `docs/features/`, check its patterns when yo
 
 | version | what it added |
 |---|---|
-| [**v1.4.0**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.4.0) | the set is written in **two stages** — `new` writes the registry and doc 01, `implement` writes docs 02 and 03 once the plan is confirmed. Those two are 71-83% of a set's prose and the only part rewritten whole when the plan moves, and a plan gets bounced two to four times before anyone commits to it. Plus `scripts/audit.py`: the protocol mechanized, because an agent runs the checks it *remembers* — twelve new checks, each shipped with the real failure that motivated it as a test |
+| [**v1.4.1**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.4.1) | the `view` says which documents are **not due yet** rather than staying silent — a stage-1 set rendered as "1 docs" is indistinguishable from a set someone abandoned halfway, and correct is not the same as silent |
+| [v1.4.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.4.0) | the set is written in **two stages** — `new` writes the registry and doc 01, `implement` writes docs 02 and 03 once the plan is confirmed. Those two are 71-83% of a set's prose and the only part rewritten whole when the plan moves, and a plan gets bounced two to four times before anyone commits to it. Plus `scripts/audit.py`: the protocol mechanized, because an agent runs the checks it *remembers* — twelve new checks, each shipped with the real failure that motivated it as a test |
 | [v1.3.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.3.0) | `view` — a spec set rendered to one self-contained `view.html`: `basis:` as a chip on every claim with its evidence attached, each registry datum marked where it is cited in prose, the defect board with `depends_on` navigable, and the `evidence.md` gates on the front page. In markdown a guessed root cause and a measured one read identically; here they do not |
 | [v1.2.1](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.2.1) | instrumentation removal is ordered after the last **run** that reads it, not after the last code phase — a `[MANUAL]` confirmation run comes later, and a spec that deletes its own oracle pushes the next step toward eyeballing pixels |
 | [v1.2.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.2.0) | a gap-sweep kind for **adding** a check, not only removing one — an early return partitions its function and everything above it keeps running on the input the guard rejects; plus `verify` routing back through `review` when a refuted hypothesis moves the fix |
