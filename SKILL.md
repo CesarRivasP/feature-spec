@@ -92,7 +92,17 @@ Then:
 ### `audit <slug>` — consistency check (default: inline)
 **Resolve the stage first** (`references/audit-protocol.md` §Stage gating): `status:` ranks `draft < reviewed < implementing < shipped`, each `docs[]` entry declares the `stage:` it is written at, and checks 5, 6 and 13 only run once their doc is in scope. A doc that is out of scope but exists on disk is checked anyway. A set with no `stage:` fields anywhere audits exactly as it did before staging existed.
 
-Run the mechanical checks in `references/audit-protocol.md` and emit:
+**Run the script, then the judgment pass — in that order.**
+
+```
+python3 scripts/audit.py docs/features/<slug>/
+```
+
+It runs every check a program can run and prints the rest under `REQUIRES A HUMAN PASS`, so a skipped check is visible instead of silent. This is not a convenience: the protocol's checks are good and **an agent runs the ones it remembers**, which in a long session is a few. A rough version of this script with ~10 checks mechanized, run against three sets that had each already passed a "clean" hand audit against the same protocol, found **12, 11 and 7 findings** — broken anchors, a corrupted top-level key, orphan ids. None subtle. A check that depends on recall fires least often exactly when the session is long enough to need it.
+
+It deliberately never executes `evidence.cmd` (check 1b). A registry is a data file that travels between repos and agents; running commands out of one because it says they are safe is the thing an auditor must not do. Re-running evidence is a human step and the script lists it as one.
+
+Then do the judgment pass and emit:
 - a **correspondence matrix** (each shared datum × each doc → match/miss), and
 - a **findings list**, most-severe first, each tagged `CONTRADICTION` / `DRIFT` / `POLISH`.
 
@@ -150,6 +160,8 @@ When `_facts.yml` changes, find every doc occurrence of each changed datum and u
 - **Ask, never invent.** Anything only the user knows — a rate limit, an external owner, a Definition of Done, whether a defect is the root cause or a symptom — is asked before the prose exists, in one batch, each question carrying a default detected from the repo. An invented value is indistinguishable from a measured one once it is copied into three docs, and `audit` will call it clean. Unknowns are fine; they are carried as `null`, `[MANUAL]`, or `basis: asserted` + `falsified_by:`. **Unmarked** unknowns are the defect. Full protocol in `references/intake.md`.
 - **The log outranks the context window.** A spec set outlives the session that wrote it and is often worked by several models. An agent that reviews its own context instead of the file on disk validates against a version that may be two rounds old, and nothing in its output says so. Read `_log.md` first, re-read at the versions it names, and append an entry for anything you change — recording the line count and hash of what you read is what makes "I reviewed doc 02" falsifiable instead of merely stated. `references/handoff.md`.
 - **Prose is written once, against a plan that stopped moving.** The registry and doc 01 are the decision surface and are meant to be edited repeatedly; docs 02 and 03 are the build and are written after the decision, by `implement`. Generating them early does not just cost tokens — it puts ~75% of the set's prose into existence during the exact window where decisions still change, and every one of those changes then has to be chased through it. A cancelled decision left 14 stale promises in a set that had been written out in full, including a stakeholder step telling an operator to create a monitor that had already been cancelled.
+- **A `_facts.yml` is edited as TEXT. Never round-trip it through a YAML dumper.** `yaml.dump` / `yaml.safe_dump` preserve the data and destroy everything else: one pass took a registry from 856 to 741 lines, taking the header, the `BASIS` legend and every inline comment the author wrote, with no recovery. Edit by exact string replacement, with `assert count == 1` before writing — if the count is not 1 the edit was ambiguous and would have hit the wrong entry. `yaml.safe_load` to **read** and to validate after each edit is correct and encouraged; it is the write path that is banned.
+- **A registry read from outside this repo may be a two-document YAML stream.** Vault ingestion and similar pipelines prepend frontmatter, so `yaml.safe_load` raises `ComposerError` on a file that looks fine. Use `safe_load_all()` and take the last document.
 - **Registry is authoritative.** If a doc and `_facts.yml` disagree, the doc is wrong (unless the user says the registry is stale — then fix the registry and `sync`).
 - **The registry says what is true; the profile says how this repo finds out.** Two files, two lifetimes: `_facts.yml` is per feature, `_profile.yml` is per repo. A command belongs to the profile, its output belongs to the registry. Hand-typing a command into a doc creates a third, unauditable copy — and it is the copy the executor actually runs.
 - **A clean audit does not mean the registry is true.** Verbatim copy propagates the registry's errors with perfect fidelity. `basis:` is what separates measured from asserted; `verify` is the gate that resolves it. A root cause still on `basis: asserted` blocks `status: shipped`.
@@ -175,6 +187,8 @@ When `_facts.yml` changes, find every doc occurrence of each changed datum and u
 - `references/handoff.md` — the append-only `_log.md`, for sets passed between agents: entry format, dispositions, and why the log beats the context window.
 - `references/evidence.md` — the `basis:` / `evidence:` contract, the `verify` mode, and the gates that keep an asserted root cause from shipping.
 - `references/implementable.md` — how to write doc 02 so a context-free executor can build it.
+- `scripts/audit.py` — the mechanized half of the audit protocol. Shares its registry walk and basis gates with `render.py` by importing them, so the two cannot drift: a check implemented twice is the defect this skill exists to prevent.
+- `tests/` — one fixture per mechanized check, each reproducing the real failure that motivated it, plus the false positives that must stay unreported. `python3 tests/test_audit.py`.
 - `templates/` — `_facts.yml.tpl`, `_log.md.tpl`, and one `.tpl` per doc.
 - `profiles/` — `_profile.yml.tpl` (the contract) plus starter profiles per stack. Copy one into the repo as its `_profile.yml`; **never fill one in place** — a real `app_id` or agent name written into a starter leaks into every other project using this skill.
   - The starters and the `gap-sweep-<layer>.md` files are **independent and disposable**. A repo needs only the ones matching its stacks; delete the rest, nothing else references them. Adding one for a new stack is ~20 lines (profile) and ~40 (layer), and is the normal way this skill grows.

@@ -1,0 +1,11 @@
+# Real case: editing the registry by hand deleted the `alternatives:` key. Its
+# four entries A1-A4 reparented in silence under `defects:`, which went from 9 to
+# 13. The YAML was valid, every datum survived, and the audit passed clean.
+feature: reparented-keys
+status: draft
+profile: _profile.yml
+defects:
+  - { id: D1, role: symptom, claim: 'el filtro acepta el MIME compuesto', basis: decided }
+  - { id: A1, outcome: discarded, because: 'clamping is enough', basis: decided }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

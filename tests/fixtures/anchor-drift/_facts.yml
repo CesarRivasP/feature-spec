@@ -1,0 +1,10 @@
+# Real case: five anchors in one set had been moved by the author's own later
+# edits inside the same session (chat.ts:341 -> :342, InputForm.tsx:120 -> :129).
+# The sibling set carried eight bare `index.ts:18` with no path at all.
+feature: anchor-drift
+status: draft
+profile: _profile.yml
+changes:
+  - { id: C1, file: src/chat.ts, kind: planned, change: 'anchor at src/chat.ts:341 — moved by a later fix' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

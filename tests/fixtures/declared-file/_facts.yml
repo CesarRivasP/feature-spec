@@ -1,0 +1,16 @@
+# C1 is a real miss. C2 is `where: external` (real case: "cron.job jobid 1
+# (comando SQL, no vive en el repo)"). C3 is `kind: deferred` — the migration was
+# decided against, so its absence is by design. Only C1 may be reported.
+feature: declared-file
+status: shipped
+profile: _profile.yml
+defects: []
+changes:
+  - { id: C1, file: src/gone.ts, kind: planned, change: 'toca un archivo inexistente' }
+  - { id: C2, file: 'cron.job jobid 1', kind: planned, where: external, change: 'el cron' }
+  - { id: C3, file: supabase/migrations/20260827_cleanup_runs.sql, kind: deferred,
+      deferred_because: decisions.scope_trimmed,
+      reopens_when: 'el pico diario pasa de ~200 usuarios distintos. Hoy: 5',
+      change: 'tabla durable de corridas' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

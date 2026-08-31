@@ -1,0 +1,12 @@
+# D1 is cited. D2 is measured, correct and dead: no doc mentions it, by id or by
+# value (real case: 4 orphans in one set, 7 in a sibling). The doc also cites
+# `defects.D6` of ANOTHER set, qualified with a path to its registry — legitimate
+# (§2.2), and a local mirror id is never the answer.
+feature: orphan-and-crossset
+status: draft
+profile: _profile.yml
+defects:
+  - { id: D1, role: symptom, claim: 'el filtro acepta application/pdf/x', basis: decided }
+  - { id: D2, role: cosmetic, claim: 'el toast queda 300 ms de mas', basis: decided }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

@@ -1,0 +1,15 @@
+# A changes[] entry deferred with no condition of reopening is not a deferred
+# change: it is a change abandoned with better wording. C2 has its condition and
+# must NOT be reported.
+feature: deferred-no-reopen
+status: draft
+profile: _profile.yml
+defects: []
+changes:
+  - { id: C1, file: src/a.ts, kind: deferred, change: 'la tabla durable de corridas' }
+  - { id: C2, file: src/b.ts, kind: deferred, change: 'el indice compuesto',
+      deferred_because: decisions.scope_trimmed,
+      reopens_when: 'el pico diario pasa de ~200 usuarios distintos. Hoy: 5' }
+  - { id: C3, file: src/c.ts, change: 'sin kind — alcance sin decidir' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

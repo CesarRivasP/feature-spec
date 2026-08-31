@@ -1,0 +1,24 @@
+# `rg 'A|B'` fuses two result sets, so no member of the output can be attributed
+# to one symbol. Real case (React Native TV): one
+# `rg 'VerticalCarousel|VerticalPaginated'` put 3 screens under the wrong
+# component in changes[].
+# The shipped regex required a quote immediately after `rg`, so ANY invocation
+# with flags escaped it — including this one, the protocol's own cited case.
+# l2 is a shell pipe, not an alternation, and must NOT be reported.
+feature: cmd-alternation
+status: draft
+profile: _profile.yml
+defects: []
+limits:
+  l1_alternation:
+    claim: 'tres pantallas usan el carrusel vertical'
+    basis: measured
+    evidence: { how: shell, cmd: "rg -n 'VerticalCarousel|VerticalPaginated' src/",
+                date: 2026-08-27, value: '3' }
+  l2_shell_pipe:
+    claim: 'hay 12 pantallas en total'
+    basis: measured
+    evidence: { how: shell, cmd: "rg -l 'Screen' src/ | wc -l",
+                date: 2026-08-27, value: '12' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

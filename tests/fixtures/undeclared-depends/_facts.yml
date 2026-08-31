@@ -1,0 +1,19 @@
+# Real case. F2's note said, literally: "Lo NO MEDIDO —y lo que decide si esto
+# importa— es qué se sirve después: ver `F3`". A later round measured F3 and left
+# it `dead`. Nobody went back to F2: its open question already had an answer, and
+# its note still said "lo NO MEDIDO" about something measured hours earlier. The
+# set was marked shipped and the audit passed clean, because F2 named F3 in PROSE
+# and not in a field, so no tool could follow the arrow.
+feature: undeclared-depends
+status: draft
+profile: _profile.yml
+defects:
+  - { id: F2, role: symptom, basis: decided, status: open,
+      claim: 'el filtro acepta application/pdf/x',
+      note: 'Mitad medida, mitad no. Lo que decide si esto importa es que se sirve despues: ver `F3`' }
+  - { id: F3, role: contributing, basis: decided, status: dead,
+      claim: 'la cabecera se sirve literal y habilita MIME sniffing' }
+  - { id: F4, role: cosmetic, basis: decided, status: open,
+      claim: 'depende de F3 y lo declara', note: 'esto cuelga de `F3`', depends_on: [F3] }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

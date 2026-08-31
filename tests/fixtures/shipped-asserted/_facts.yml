@@ -1,0 +1,22 @@
+# Real case, and the most expensive omission in the report: a set closed with
+# `status: shipped` while defects.D1 was `role: root_cause` + `basis: asserted`.
+# Neither the prose protocol nor the hand-rolled script caught it; it was found by
+# reading the registry by hand two days later.
+# D2 is the cheap detector: `open` in a shipped set, no `owned_by`, no `outcome`.
+# A3 was discarded on a premise (D3) that has since died.
+feature: shipped-asserted
+status: shipped
+profile: _profile.yml
+defects:
+  - { id: D1, role: root_cause, claim: 'el cron deja de correr sin avisar',
+      basis: asserted, falsified_by: 'una corrida registrada en las ultimas 3h',
+      log_line: null, status: open }
+  - { id: D2, role: symptom, claim: 'el filtro acepta application/pdf/x',
+      basis: decided, status: open }
+  - { id: D3, role: contributing, claim: 'la cabecera habilita MIME sniffing',
+      basis: decided, status: dead }
+alternatives:
+  - { id: A3, name: widen-charset, outcome: discarded, because: 'D3 lo cubre',
+      basis: asserted, depends_on: [D3], falsified_by: 'que el sniffing no ocurra' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

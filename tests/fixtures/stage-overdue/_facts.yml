@@ -1,0 +1,9 @@
+# The set claims `implementing`, so doc 02's stage is reached — but nobody wrote
+# it. A set claiming a stage it never wrote the docs for.
+feature: stage-overdue
+status: implementing
+profile: _profile.yml
+defects: []
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation-and-e2e.md, role: implementation, stage: reviewed }

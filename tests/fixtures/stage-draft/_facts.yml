@@ -1,0 +1,11 @@
+# A stage-1 set: `new` has run, `implement` has not. Docs 02 and 03 are declared
+# in docs[] but are not on disk, and that is correct — not a finding, and not
+# silence either: the verdict says they are not due yet.
+feature: stage-draft
+status: draft
+profile: _profile.yml
+defects: []
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation-and-e2e.md, role: implementation, stage: reviewed }
+  - { id: "03", file: 03-stakeholder-requirements.md, role: stakeholder, stage: reviewed }
