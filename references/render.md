@@ -29,6 +29,13 @@ the same facts, not a second opinion.
 ## What it reads
 
 - `_facts.yml` — required. Absent → the directory is not a spec set, hard error.
+- every file in `docs[]` that exists on disk, **and a note naming the ones that do
+  not exist yet because their `stage:` has not been reached**. A stage-1 set holds
+  the registry and doc 01 only; without that line it is indistinguishable from a set
+  someone abandoned halfway. Same contract as `references/audit-protocol.md`
+  §Stage gating: a doc whose stage is not reached and which is absent is correct,
+  not missing — and correct is not the same as silent. A `docs[]` entry with no
+  `stage:` reads as `draft`, so sets written before staging render exactly as before.
 - every file in `docs[]` that exists on disk. No `docs[]` → falls back to
   `[0-9][0-9]*.md` in the directory, so a half-scaffolded set still renders.
 - `_log.md` — optional; absent, the Log view says so rather than hiding it.
