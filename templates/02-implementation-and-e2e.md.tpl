@@ -1,6 +1,7 @@
 # Implementación + Pruebas E2E — {{title}}
 
 > Complementa a `01-master-plan.md`. Pasos de código (archivo por archivo) + plan de pruebas end-to-end.
+> Escrito por `implement` (stage 2) — después de que `review` corrió, sus hallazgos quedaron dispositionados, y el usuario confirmó con el flip a `status: reviewed`. No lo escribe `new`.
 
 - **Fecha:** {{dates.drafted}}
 - **Baseline de tests:** {{tests_baseline}}

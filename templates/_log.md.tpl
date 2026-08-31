@@ -32,6 +32,16 @@ disposition rules in `references/handoff.md`.
 **Edits:** none (review changes nothing)
 **Still open:** <carried forward>
 
+## R4 · YYYY-MM-DD · <model> · implement
+**Read:** <every file re-opened, with lines + blob>
+**Log read through:** R3
+**Stage:** draft → reviewed — <who confirmed, and when; `review` findings all dispositioned>
+**Edits:** `02-implementation-and-e2e.md` (nuevo, <n> líneas) · `03-stakeholder-requirements.md` (nuevo, <n> líneas)
+**Still open:** <what remains>
+<!-- Stub FIRST (agent + versions read + what you are about to write), generate, THEN
+     complete. This round writes the two biggest files in the set; if it dies partway,
+     the stub is the only thing that says so. -->
+
 ## R3 · YYYY-MM-DD · <model> · validate
 **Read:** <every file re-opened, with lines + blob>
 **Log read through:** R2

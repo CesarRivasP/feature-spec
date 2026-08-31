@@ -48,6 +48,21 @@ Output: one line per gap, `FUNCTIONAL` or `SECURITY`, with the failure scenario 
 - **Who reads it, and when?** A log line nobody opens does not close a frente. If the whole point is that a failure currently passes silently, the destination must be something a person or a query actually reaches.
 - **Does it log the untrusted value itself?** User-controlled text in a log destination that renders markup, or that an LLM later reads, is an injection surface.
 
+### Any change that answers a limit of scale
+This file asks what breaks if the spec is built literally. It never asked whether it is worth building **today**.
+
+For each `changes[]` entry that exists because something will not scale, three numbers, and **the measurement is mandatory, not optional**:
+
+- **What is the real value today?** Measured, in production, with the command recorded in `evidence`. Not estimated.
+- **What is the threshold** at which the thing actually breaks?
+- **What is the distance** between them?
+
+If the distance is orders of magnitude, the change is a candidate for `kind: deferred` with its `reopens_when:` naming the threshold and today's number beside it. Without the number this is one opinion against another, and the opinion with more conviction wins.
+
+Real case, and the most valuable moment of the session that produced this file: the user stopped and asked *"this isn't an app with that much traffic — what's the basis?"*. Production volume was measured: the fix was **~200x ahead of the need**. The set was cut in half, and what remained turned out to be **observability, not scalability** — a different problem than the one being solved. A spec can pass this entire sweep and still be premature work.
+
+**This is the gate between stage 1 and stage 2** (`SKILL.md` §Modes). It is asked while the set is still a registry and a doc 01, which is when cutting it in half costs a registry edit. Asked after `implement` has run, the same answer costs the phases that were written around the entry.
+
 ### Deleting / relaxing a check
 - What was the check protecting against? Is that threat now handled elsewhere, or accepted? Say which.
 
@@ -69,6 +84,19 @@ A one-line answer to all five is fine. Not answering them is the finding.
 - **Untrusted text.** Data pulled from user-controlled fields (emails, names, uploads, stored rows, intent extras) and shown to an operator or an LLM is untrusted. Say so where it's read.
 - **Every consumer of the corrupted datum.** A defect corrupts a *value*, not a file. Before accepting a fix, name every place that value is written and every place it is read — then say which of them the fix covers. `changes[]` is organised by file and will not ask this for you. `references/implementable.md` §Wire every constant end to end encodes the same "N sites, you touched 1" failure for new constants; this is that rule generalised to the data an existing defect flows through. Two shared values fed by one event, a store read by two screens, a ref consumed by three handlers — each is a place the fix either reaches or silently does not.
 - **New dependency on an external owner.** Anything the team cannot execute alone gets `blocked_by:` in the registry, an owner, and a date that reflects *their* clock. Otherwise the plan quietly assumes a stranger's cooperation.
+
+## Trimming scope — what a deferral silently breaks
+
+Cutting a `changes[]` entry down to `kind: deferred` or `kind: moved_out` is not a subtraction. It is the same event as a refuted hypothesis in `verify`, from the other direction: something the rest of the set was resting on stopped being true, and nothing follows that arrow on its own.
+
+When an entry leaves the build, re-walk two lists before moving on:
+
+- **`acceptance[]`** — every criterion that depended on the deferred entry. Each one is either (a) rewritten against the substitute mechanism, or (b) deleted, with the accepted risk written down. **A criterion that survives a trim without review is one nobody will be able to meet.** *Real case:* deferring a durable table nearly killed the set's own objective — the alert condition was "zero runs recorded in the last 3h", which needs durable rows; an error event does not fire when a cron simply stops running, because the code that would emit it does not run either. Caught by chance, re-reading the condition.
+- **`decisions.*`** — every decision whose stated rationale named the deferred entry. **A decision that dies can orphan the justification of another decision.** *Real case:* a table's deferral had been justified with "for alerting we don't need it, the Crons monitor covers the absence". When the monitor was later cancelled, the table stayed deferred — but no longer for the reason written next to it. The registry still read as settled.
+
+This rule **reincidió two days after it was written**, in the same set, which is why it is also a mechanical check rather than only a paragraph here: a cancelled heartbeat left two acceptance criteria nothing could satisfy — one of them annotated *"this is THE test of the set"* — and the set was marked `status: shipped` with a clean audit, because no check compared `acceptance[]` against reality. Registering the decision in `_log.md` is **not** the same as propagating it: the log is narrative, `acceptance[]` is contract.
+
+Deferring before doc 02 exists is the cheap case and the reason `implement` is a separate stage — a trimmed entry costs a registry edit instead of a rewritten phase. Deferring after 02 exists means regenerating the phases that were written around it; `sync` cannot do this, because it propagates values and a trim changes shape.
 
 ## Recording the result
 

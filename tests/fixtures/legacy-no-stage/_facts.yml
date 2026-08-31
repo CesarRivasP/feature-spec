@@ -1,0 +1,11 @@
+# Written before staging existed: no `stage:` on any docs[] entry. It must audit
+# exactly as it did before — every doc read as stage `draft`, so all three are in
+# scope and their absence IS reported. This is what makes the field safe to adopt
+# one set at a time.
+feature: legacy-no-stage
+status: draft
+profile: _profile.yml
+defects: []
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan }
+  - { id: "02", file: 02-implementation-and-e2e.md, role: implementation }

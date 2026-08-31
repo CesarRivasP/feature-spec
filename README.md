@@ -29,10 +29,18 @@ cp -R feature-spec ~/.claude/skills/
 To pin a version instead of tracking `main`:
 
 ```bash
-git clone --branch v1.2.1 --depth 1 git@github.com:CesarRivasP/feature-spec.git
+git clone --branch v1.4.0 --depth 1 git@github.com:CesarRivasP/feature-spec.git
 ```
 
-Restart the session so the skill is picked up. No dependencies — 20 markdown and YAML files, no scripts, no MCP servers, no package to install.
+Restart the session so the skill is picked up. No MCP servers, no package to install: the skill itself is markdown and YAML.
+
+Two modes ship a script — `audit` and `view` — and between them they need one library:
+
+```bash
+python3 -m pip install --user pyyaml
+```
+
+Every other mode runs without it.
 
 ## Set up the profile (once per repo)
 
@@ -75,13 +83,43 @@ Every command the skill emits — into evidence, into a phase's verification lin
 
 | mode | asks | catches |
 |---|---|---|
-| `new <slug>` | — | scaffolds the registry + 3 docs, after a gap sweep and a batch of intake questions |
-| `audit <slug>` | do the docs agree with the registry? | contradictions, drift, orphan facts, dangling cross-refs |
+| `new <slug>` | is this worth building? | scaffolds the registry + doc 01, after a gap sweep and a batch of intake questions |
 | `review <slug>` | if this is built literally, what breaks? | rate-limit dead ends, unauthenticated writes, PII, silent fallbacks, stack-specific hazards |
+| `implement <slug>` | — | writes docs 02 and 03, once the plan is confirmed |
+| `audit <slug>` | do the docs agree with the registry? | contradictions, drift, orphan facts, dangling cross-refs, broken anchors |
 | `verify <slug>` | **is the registry true?** | a root cause that was reasoned, never observed |
 | `handoff <slug>` | who touched this, against which version? | an agent reviewing its stale context instead of the file on disk |
+| `view <slug>` | what does this set actually look like? | a guessed root cause reading exactly like a measured one |
 
 `verify` is the only one that can fail after a clean `audit`. `status: shipped` is gated on it: the set may not claim to have shipped while the defect it blames is still `basis: asserted`.
+
+### Two stages, not one
+
+`new` writes the registry and doc 01 — the decision surface. `implement` writes docs 02 and 03 — the build. In between, you argue about the plan.
+
+The split is measured: across four real sets, docs 02 and 03 are **71-83%** of the prose, and they are the part invalidated wholesale when the plan changes — doc 01 gets edited, doc 02 gets rewritten. A plan gets bounced two to four times before anyone commits to it, so writing them up front pays for that prose repeatedly and, worse, keeps ~75% of the set in existence during the window where decisions are still moving. That window is where prose goes stale: one cancelled decision left **14 stale promises** across a set already written out in full, including a step telling an operator to create a monitor that had been cancelled.
+
+`implement` refuses to run until `review` has been dispositioned, the user has confirmed (the `draft` → `reviewed` flip *is* the record), and every `changes[]` entry carries a `kind:`. For a decision already made, `new <slug> --with-build` runs both.
+
+### Auditing a set
+
+```bash
+python3 scripts/audit.py docs/features/<slug>/
+```
+
+The protocol's checks are good; the problem was that **an agent runs the ones it remembers**. A rough version of this script, run against three sets that had each already passed a "clean" hand audit against the same protocol, found 12, 11 and 7 findings — broken anchors, a corrupted top-level key, orphan ids. None subtle.
+
+It runs every check a program can run and prints the rest under `REQUIRES A HUMAN PASS`, so a skipped check is visible rather than silent. It never executes `evidence.cmd`: a registry is a data file that travels between repos and agents, and running commands out of one because it says they are safe is what an auditor must not do.
+
+### Reading a set
+
+```bash
+python3 scripts/render.py docs/features/<slug>/ --open
+```
+
+One self-contained `view.html` — no network, no build step, no account. It shows what the markdown cannot: `basis:` as a chip on every claim with its evidence attached, each registry datum marked where it is cited in prose (clickable both ways), `changes[]` next to `related_docs[]`, the defect board, the correspondence matrix, and `_log.md` as a timeline. Dangling cross-refs render red; registry facts nobody ever cited are counted on the front page.
+
+It is a derived artifact — edit the registry, re-render. Sharing it means sending the file.
 
 ## The idea that holds it together
 
@@ -169,6 +207,11 @@ references/
   gap-sweep-mobile-tv.md              layer: D-pad focus, low-end memory, playback lifecycle
   doc-pattern.md                      the 3-doc pattern, splitting, heading language
   implementable.md                    how to write doc 02 for a context-free executor
+  render.md                           what the HTML view reads, its invariants, the gates it surfaces
+scripts/
+  audit.py                            the mechanized checks; shares its registry core with render.py
+  render.py                           the renderer: spec set -> one self-contained view.html
+tests/                                one fixture per check, each reproducing the failure it exists for
 templates/                            _facts.yml.tpl, _log.md.tpl + one .tpl per doc
 profiles/                             _profile.yml.tpl + starters per stack
 ```
@@ -183,11 +226,21 @@ This skill was written and iterated on while running [`caveman`](https://github.
 
 **What it does not do: improve the analysis.** It is an output style. It changes how findings are worded, not whether they were found — a compressed wrong answer is still wrong, and reads more confident. Stating otherwise in this particular README would be the exact defect the skill exists to catch: a pleasant, plausible claim that nobody measured. Use `caveman` because the reports are easier to read, which is a real benefit and enough of one.
 
+## If your repo syncs `docs/features/` somewhere
+
+Changing the layout convention is a change with downstream consumers, and they fail quietly.
+
+This skill moved from flat specs (`docs/features/<slug>-01-….md`) to one directory per feature (`docs/features/<slug>/…`). A repo using it had a vault-sync manifest matching `docs/features/*_facts.yml` — after the migration that pattern matched **zero files**. Nobody noticed, because the `.md` files travelled under a different pattern, so the sync reported success while every registry stayed behind. The result would have been three documents per feature citing values from a source of truth that was not there: it looks complete and is not.
+
+If anything outside this repo reads `docs/features/`, check its patterns when you adopt or change the layout.
+
 ## Releases
 
 | version | what it added |
 |---|---|
-| [**v1.2.1**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.2.1) | instrumentation removal is ordered after the last **run** that reads it, not after the last code phase — a `[MANUAL]` confirmation run comes later, and a spec that deletes its own oracle pushes the next step toward eyeballing pixels |
+| [**v1.4.0**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.4.0) | the set is written in **two stages** — `new` writes the registry and doc 01, `implement` writes docs 02 and 03 once the plan is confirmed. Those two are 71-83% of a set's prose and the only part rewritten whole when the plan moves, and a plan gets bounced two to four times before anyone commits to it. Plus `scripts/audit.py`: the protocol mechanized, because an agent runs the checks it *remembers* — twelve new checks, each shipped with the real failure that motivated it as a test |
+| [v1.3.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.3.0) | `view` — a spec set rendered to one self-contained `view.html`: `basis:` as a chip on every claim with its evidence attached, each registry datum marked where it is cited in prose, the defect board with `depends_on` navigable, and the `evidence.md` gates on the front page. In markdown a guessed root cause and a measured one read identically; here they do not |
+| [v1.2.1](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.2.1) | instrumentation removal is ordered after the last **run** that reads it, not after the last code phase — a `[MANUAL]` confirmation run comes later, and a spec that deletes its own oracle pushes the next step toward eyeballing pixels |
 | [v1.2.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.2.0) | a gap-sweep kind for **adding** a check, not only removing one — an early return partitions its function and everything above it keeps running on the input the guard rejects; plus `verify` routing back through `review` when a refuted hypothesis moves the fix |
 | [v1.1.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.1.0) | `_log.md` — the append-only handoff log, so a set worked by several models is reviewed against the file on disk rather than a stale context window |
 | [v1.0.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.0.0) | first public release — the registry, the four modes, the `basis:` contract, `_profile.yml`, intake, gap-sweep layers |

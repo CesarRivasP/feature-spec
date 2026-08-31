@@ -1,0 +1,17 @@
+# The skill's own rule is "cheap-to-verify state is never asserted", and tracking.*
+# is where it breaks most often. `branch` said `main` while the real branch was the
+# feature one; it was corrected, and after the merge it was wrong the other way.
+# `issues: []` stayed empty in three sets long after the issues existed.
+feature: tracking-drift
+status: shipped
+profile: _profile.yml
+defects: []
+acceptance:
+  - { id: AC1, item: 'el borrado respeta el cap', status: approved, verified_on: 2026-08-30 }
+tracking:
+  issues: []
+  pr: null
+  milestone: null
+  branch: feat/a-branch-that-was-never-created
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

@@ -35,7 +35,8 @@ Required fields. A missing one is an audit finding, not a style choice:
 | round id | `R<n>`, monotonic | findings are addressed as `R<n>-F<m>` across rounds |
 | date | `YYYY-MM-DD` | staleness checks |
 | agent | model or tool identity, self-reported | `basis: decided` — nobody can verify it, but a wrong one is traceable |
-| action | `author` · `review` · `validate` · `verify` · `sync` | says what kind of claim the entry makes |
+| action | `author` · `review` · `implement` · `validate` · `verify` · `sync` | says what kind of claim the entry makes |
+| **Stage** | `<from> → <to>`, **required on any entry that changes `status:`** | a stage transition is a decision with consequences — it puts docs into scope for audit and unlocks `implement`. Recorded nowhere else, it is indistinguishable from a typo in the registry |
 | **Read** | every file opened, with **line count and blob hash** | the only field that proves which version was reviewed |
 | **Log read through** | the last round id this agent actually read | catches an agent that skipped the middle of the history |
 | Dispositions | one line per prior finding | see below |
@@ -88,7 +89,42 @@ The shape generalizes; three is just the common case.
 
 Repeat from 2 as needed. `verify` (device/instrumented observation) is its own action and can enter at any point; it is the only one that can turn an `asserted` claim into a `measured` one.
 
-**A round that edits without appending an entry is invisible**, and the next round reviews a file matching no entry in the log. Audit check 17 catches it after the fact; appending as you go is what prevents it.
+**A round that edits without appending an entry is invisible**, and the next round reviews a file matching no entry in the log. Audit check 16 catches it after the fact; appending as you go is what prevents it.
+
+## Delegating a defect to a set of its own
+
+`handoff` covers agent → agent on an **existing** set. It does not cover *"this defect is a front of its own, let another agent build it a set"* — done three times in one session, invented from scratch each time, and once left half-finished by an agent that died with nothing recording what it had produced.
+
+This is **not a mode.** It was used three times in five days, and the expensive half — deciding what of the registry travels with the defect and what is re-derived — is judgment, not mechanics. What it needed was a checklist, and the vocabulary it needs (`owned_by:`, `moved_to:`, `kind: moved_out`) now exists in the registry. If it turns out to be used often, promote it.
+
+Five pieces, in order:
+
+1. **Write the log stub first**, in the *originating* set, before anything else exists — `action: delegate`, the defect id, the agent you are handing to. A delegation that dies partway then leaves a trace instead of silence.
+2. **The brief.** From the registry, not from memory: the defect itself, its related `limits.*`, the constraints, and — the part that pays for itself — **what has already been measured**, so the new set does not re-measure it. Anything omitted here gets re-derived, usually differently.
+3. **Mark the originating entry.** `kind: moved_out` + `moved_to:` for a `changes[]` entry; for a defect the originating set still tracks, `owned_by:` + `note_ownership:` and it stays `open` on purpose — closing it would be a lie.
+4. **The issue**, so the work has an address outside both registries.
+5. **The backlink.** The new set carries `owned_by:` pointing back, with **the same id as in the owning set**. Never a mirror id: a `D4_ajeno` invented to make a sibling's defect locally referenceable had to be renamed across four files the moment the owner changed.
+
+Cross-set citations are always **qualified** — `` `docs/features/<slug>/_facts.yml` defects.D4 `` — which is also what keeps audit check 21 from reading them as dangling.
+
+## Stage transitions
+
+The set is written in two stages (`SKILL.md` §Modes): `new` writes the registry and doc 01, `implement` writes docs 02 and 03 once the plan is confirmed. The flip of `status:` from `draft` to `reviewed` **is** the user's confirmation — there is no other record of it, so the entry that performs the flip states it:
+
+```markdown
+## R4 · 2026-08-31 · claude-opus-5 · implement
+**Read:** _facts.yml (204 lines, blob 8b2e004) · 01-master-plan.md (197 lines, blob 1c4d77a)
+**Log read through:** R3
+**Stage:** draft → reviewed — user confirmed after R3 dispositions; `review` findings all settled.
+**Dispositions:** R3-F1 → **confirmed**. C4 flipped to `kind: deferred` + `reopens_when:`.
+**Edits:** `02-implementation-and-e2e.md` (new, 640 lines) · `03-stakeholder-requirements.md` (new, 158 lines)
+**Still open:** —
+```
+
+Two rules that are not obvious:
+
+- **The stub goes in before the generation, not after.** `implement` produces the two largest files in the set; a round that dies partway through leaves ~1000 lines on disk that no entry accounts for. *Real case:* a delegated subagent wrote all four documents and died on a session limit before writing its entry — from outside, it looked like it had produced nothing, and the next round spent its time reconstructing what had already been done. Write the stub (agent, versions read, what you are about to do), generate, then complete the entry.
+- **An agent never writes the `reviewed` flip on its own reading of the conversation.** Confirmation is obtained, not inferred. An entry recording a transition the user did not make is worse than no entry: it reads as settled, and every later round trusts it.
 
 ## What this does not fix
 

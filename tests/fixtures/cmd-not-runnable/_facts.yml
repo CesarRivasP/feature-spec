@@ -1,0 +1,29 @@
+# Real case: defects.D5 carried `basis: measured` and was INVERTED — it claimed
+# two names collide when they do not — and survived for months because its `cmd`
+# was a placeholder that could never be re-run.
+# L1 is a prose reference, L2 has an unfilled profile placeholder. L3 must NOT be
+# reported: `%{http_code}` is curl's own --write-out syntax, not an empty slot,
+# and a naive sweep flags every measured curl probe in the set.
+feature: cmd-not-runnable
+status: draft
+profile: _profile.yml
+defects: []
+limits:
+  l1_prose_ref:
+    claim: 'el filtro tolera 100 keys'
+    basis: measured
+    evidence: { how: shell, cmd: 'ver el probe de arriba',
+                date: 2026-08-27, value: '100' }
+  l2_placeholder:
+    claim: 'el bucket devuelve 400 con el MIME compuesto'
+    basis: measured
+    evidence: { how: shell, cmd: "curl -sS '$URL/storage/v1/object/<b64>'",
+                date: 2026-08-27, value: '400' }
+  l3_real_curl:
+    claim: 'la mediana de .list() es 0.32 s desde fuera de la region'
+    basis: measured
+    evidence: { how: shell,
+                cmd: "curl -s -o /dev/null -w '%{http_code} %{time_total}' \"$URL/list\"",
+                date: 2026-08-27, value: '200 0.321' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
