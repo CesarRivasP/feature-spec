@@ -263,6 +263,19 @@ Real case: `F2` depended on `F3`. A later round measured `F3` and left it `dead`
 
 Remaining `open` is a perfectly valid resolution — `F2` stayed open as an accepted risk. **`open` with no `outcome:` after its dependency died is the finding**, because the two are indistinguishable from the outside.
 
+### 28. Tracking vs reality — [script + human]
+`tracking.*` is where "cheap-to-verify state is never asserted" is broken most often.
+- `tracking.branch` naming a branch that does not exist in this checkout → `DRIFT`. One command settles it.
+- `status: implementing|shipped` with `issues: []` and `pr: null` → `DRIFT`. The work is trackable somewhere by now; an empty block in a shipped set is a field nobody went back to fill.
+- `tracking.issues[]` / `pr` / `milestone` existing on GitHub and being coherent with `status:` → **[human]**, deliberately. `gh issue view` / `gh pr view` are network calls, and an auditor that reaches the network is a different kind of tool.
+
+Real case: `branch` said `main` while the real branch was the feature one. It was corrected. After the merge it was wrong the other way. `issues: []` stayed empty in three sets long after the issues existed.
+
+### 29. Provider behavior is observed, not described — [script]
+`evidence.how: provider-behavior` claims what a third party actually does. Its `value` must be an **observed HTTP response** — status code and body. A `value` recording no status code → `CONTRADICTION`.
+
+Real case: a claim about a file-type filter was corrected **twice, in opposite directions** — first understating the defence (*"only validated client-side"*), then overstating it (*"a tampered client cannot bypass it"*). Both times the error was reasoning about the provider's **configuration** instead of executing the flow. A configuration is what you asked for; behavior is what you get. `references/gap-sweep-web-baas.md` already warned about this class; the registry had no way to mark it.
+
 ## Normalization before comparing
 Before flagging any string mismatch (checks 1, 2, 6, 7): strip surrounding YAML quoting, collapse runs of whitespace, normalize typographic quotes/dashes to ASCII, and **unescape markdown table syntax — `\|` is a literal `|`**. A registry gate `data?.length === 0 || !selectedId` appears in a doc's table as `data?.length === 0 \|\| !selectedId`; comparing raw reports it as absent from every doc and sends you hunting an orphan fact that was never orphaned. The audit's own tooling is a source of false positives — when a datum looks missing from a doc that obviously should cite it, check the escaping before writing the finding. A registry entry authored as `"Botón 'Reenviar…'"` and prose reading `Botón "Reenviar…"` is a **quoting artifact, not a finding** — the fix is to re-author that registry entry as a single-quoted YAML scalar, not to edit the prose. Report those separately as `POLISH: quoting`, never as `CONTRADICTION`.
 

@@ -1,0 +1,27 @@
+# Real case: a claim about a file-type filter was corrected TWICE, in opposite
+# directions — first understating the defence ("only validated client-side"), then
+# overstating it ("a tampered client cannot bypass it"). Both times the error was
+# reasoning about the provider's CONFIGURATION instead of executing the flow.
+# A config is what you asked for; behavior is what you get.
+# p1 describes the config. p2 pastes what the provider actually answered.
+feature: provider-behavior
+status: draft
+profile: _profile.yml
+defects: []
+limits:
+  p1_described:
+    claim: 'el bucket rechaza el MIME compuesto'
+    basis: measured
+    evidence: { how: provider-behavior,
+                cmd: "curl -sS -X POST '$URL/storage/v1/object/probe' -H 'ct: application/pdf/x'",
+                date: 2026-08-27,
+                value: 'allowed_mime_types esta configurado con application/pdf' }
+  p2_observed:
+    claim: 'el bucket acepta el MIME compuesto y devuelve 200'
+    basis: measured
+    evidence: { how: provider-behavior,
+                cmd: "curl -sS -X POST '$URL/storage/v1/object/probe2' -H 'ct: application/pdf/x'",
+                date: 2026-08-27,
+                value: '200 {"Key":"chat-uploads/probe2"}' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

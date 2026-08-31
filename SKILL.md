@@ -150,12 +150,16 @@ For sets worked by more than one model: one drafts, a second reviews it cold, th
 
 A rejected finding states the evidence that killed it and **stays in the log** — same reasoning as a dead hypothesis in `verify`: a rejection with evidence stops the next round re-deriving it, and a rejection without evidence is exactly what a later round should reopen. An external model with no filesystem gets its entry transcribed, and the entry says so plus what it was actually shown — a finding raised against a pasted excerpt was made without the preamble and the surrounding phases.
 
+**Delegating a defect to a set of its own** — *"this is a front of its own, let another agent build it a set"* — is a five-step checklist in `references/handoff.md` §Delegating, not a mode. It was used three times in five days, and the expensive half of it is judgment: which of the registry travels with the defect, and what gets re-derived. The vocabulary it needs (`owned_by:`, `moved_to:`, `kind: moved_out`) is in the registry; promote it to a mode if it starts being used often.
+
 Format, disposition rules, and the round protocol: `references/handoff.md`.
 
 ### `sync <slug>` — propagate registry changes
 When `_facts.yml` changes, find every doc occurrence of each changed datum and update it (or, if `--dry`, report the drift without editing). This is the write-side counterpart of `audit`.
 
 **Only over docs whose stage the set has reached.** A datum with no occurrence in doc 02 because doc 02 does not exist yet is not drift, and reporting it as such under `--dry` buries the real findings. Resolve the stage exactly as `audit` does (`references/audit-protocol.md` §Stage gating), and say which docs were out of scope rather than staying silent about them.
+
+**`sync <slug> --decision <key>`** lists the sections a `decisions.*` entry's `cited_in:` names, and does **not** edit them. Changing a decision is almost never a string replacement — the prose that rests on it has to be rewritten by someone who knows what replaced it. Reporting and letting a human rewrite is the correct behavior, not a limitation.
 
 **`sync` moves data, not shape.** It finds a value and replaces it. A plan that *changed shape* — an entry that left `changes[]`, a decision that was cancelled — has no value to replace: it has prose hanging off a premise that is now false, and nothing follows that arrow. That is `implement`'s problem for doc 02's phases and `references/gap-sweep.md` §Trimming scope's for `acceptance[]` and `decisions.*`. Running `sync` and calling the set consistent is how a cancelled decision left 14 stale promises across a set that audited clean.
 
@@ -191,6 +195,8 @@ Contract and invariants: `references/render.md`.
 - **Scope a `verified.cmd` positively.** Allowlist the extensions/paths that can legitimately hold the thing (`-g '*.ts'`, `git ls-files`); never denylist directories. A denylist only knows the files that existed when you wrote it — the next scratch note or session transcript dropped in the repo joins the count and flips the value. If the doc pastes the command with an `Esperado: N`, the executor now reads a contaminated result as a real finding.
 - **Scope is two lists.** `changes` (created/modified) drives scope-parity; `related_docs` (referenced, unmodified) never does. Don't mix them.
 - **No contract in prose only.** Every JSON payload and endpoint/URL that appears in a doc must have a home in `contracts.*` / `endpoints.*`. A contract that lives only in prose is an orphan — promote it.
+- **A reference to another set is always qualified, and never mirrored.** Cite it as `` `docs/features/<slug>/_facts.yml` defects.D4 `` so it is distinguishable from a dangling ref — mechanically it is otherwise identical, and audit will report it. **Never create a local mirror id** for a sibling's entry: a `D4_ajeno` invented to make one referenceable had to be renamed across four files the moment the owner changed. If this set must track it locally, it is an entry with an explicit `owned_by:` and **the same id the owning set uses**.
+- **A decision is not a datum, and `sync` cannot follow it.** `decisions.*` is a premise that prose hangs off; changing it leaves every dependent sentence intact and wrong. Each one carries `cited_in:` listing the sections that rest on it, and changing it means walking that list. *Real case:* a cancelled heartbeat left 14 places still promising it, including a full step in doc 03 instructing an operator to create a monitor that had already been cancelled — and doc 03 is the one handed to a person to execute. Second-order: one decision's death can orphan **another** decision's written justification.
 - **No orphan facts.** A shared datum that appears in ≥2 docs MUST live in `_facts.yml`. If audit finds one that doesn't, that's a finding: promote it to the registry.
 - **Cross-refs must resolve.** Every "see doc 0X §Y" points to a real section.
 - **Contracts match shape.** JSON payload/response blocks in prose match `contracts.*` in the registry field-for-field.

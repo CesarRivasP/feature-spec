@@ -56,11 +56,20 @@ dates:
 #   basis: asserted   -> requires falsified_by: <observation that kills it>
 #   basis: decided    -> a choice, not a claim. No evidence needed.
 #
-# evidence.how: shell | git | device | log   (cmd comes from _profile.yml commands.*)
+# evidence.how: shell | git | device | log | provider-behavior
+#   (cmd comes from _profile.yml commands.*)
 #   shell  - a command. value = its output, verbatim.        <- commands.tests/lint/build
 #   git    - repo/file state.                                <- commands.file_tracked/file_ignored
 #   device - a NUMBERED manual procedure. value = observed.  <- commands.force_stop
 #   log    - a log line. value = the decisive line, quoted.  <- commands.device_log
+#   provider-behavior - what a third party ACTUALLY does. The strictest one:
+#            `value` must be an observed HTTP response — status code and body —
+#            never a description of the configuration. Real case: a claim about a
+#            file-type filter was corrected TWICE, in opposite directions, first
+#            understating the defence ("only validated client-side") and then
+#            overstating it ("a tampered client cannot bypass it"). Both times the
+#            error was reasoning about the provider's config instead of executing
+#            the flow. A config is what you asked for; behavior is what you get.
 #
 # This is NOT only for numbers. Behavioral claims ("the framework focuses the
 # first item") and file/git-state claims ("not committed yet") are claims too.
@@ -82,7 +91,23 @@ dates:
 # prose keeps promising what was cancelled. Give each one a key and cite the key.
 decisions: {}           # e.g. { scope_trimmed: { date: YYYY-MM-DD, basis: decided,
                         #          what: 'deferred the durable table; peak is 200x below
-                        #                 the threshold that motivated it' } }
+                        #                 the threshold that motivated it',
+                        #          cited_in: ['01 §2.4', '02 Fase 5', '03 §3.1'] } }
+                        #
+                        # `cited_in:` lists the sections that REST on this decision.
+                        # Changing the decision means walking that list — `sync` cannot,
+                        # because it replaces values and a premise has no value to
+                        # replace. Real case: a cancelled heartbeat left 14 places in
+                        # prose still promising it, including a complete step in doc 03
+                        # telling an operator to create a monitor that was already
+                        # cancelled. Doc 03 is the one handed to a person to execute; an
+                        # obsolete instruction there is not cosmetic drift, it is work
+                        # done wrong.
+                        # And the second-order case: one decision's death can orphan
+                        # ANOTHER decision's justification. A table's deferral was
+                        # justified with "for alerting we don't need it, the Crons
+                        # monitor covers the absence". When the monitor was cancelled the
+                        # table stayed deferred — but no longer for the written reason.
 
 # --- domain facts (fill with the real shared numbers/names) ---
 limits: {}              # e.g. { cloudflare: { timeout_s: 100, error: 524 } }

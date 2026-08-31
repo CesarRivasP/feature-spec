@@ -93,6 +93,17 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("27", "F5"),           # wrote its outcome
       ("27", "F6")]),         # its dependency is still alive
 
+    # §1.6 — cheap-to-verify state asserted anyway.
+    ("tracking-drift",
+     [("28", "a-branch-that-was-never-created"),
+      ("28", "no `issues:` and no `pr:`")],
+     []),
+
+    # §3.4 — a provider claim reasoned from config instead of executed.
+    ("provider-behavior",
+     [("29", "p1_described")],
+     [("29", "p2_observed")]),   # pastes the observed status and body
+
     # Staging: docs 02/03 declared, not yet due, and not reported.
     ("stage-draft",
      [],

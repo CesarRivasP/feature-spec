@@ -226,6 +226,14 @@ This skill was written and iterated on while running [`caveman`](https://github.
 
 **What it does not do: improve the analysis.** It is an output style. It changes how findings are worded, not whether they were found — a compressed wrong answer is still wrong, and reads more confident. Stating otherwise in this particular README would be the exact defect the skill exists to catch: a pleasant, plausible claim that nobody measured. Use `caveman` because the reports are easier to read, which is a real benefit and enough of one.
 
+## If your repo syncs `docs/features/` somewhere
+
+Changing the layout convention is a change with downstream consumers, and they fail quietly.
+
+This skill moved from flat specs (`docs/features/<slug>-01-….md`) to one directory per feature (`docs/features/<slug>/…`). A repo using it had a vault-sync manifest matching `docs/features/*_facts.yml` — after the migration that pattern matched **zero files**. Nobody noticed, because the `.md` files travelled under a different pattern, so the sync reported success while every registry stayed behind. The result would have been three documents per feature citing values from a source of truth that was not there: it looks complete and is not.
+
+If anything outside this repo reads `docs/features/`, check its patterns when you adopt or change the layout.
+
 ## Releases
 
 | version | what it added |

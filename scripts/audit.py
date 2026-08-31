@@ -639,6 +639,63 @@ def check_evidence_cmd_runnable(facts: dict, f: Findings) -> None:
                   "24 cmd runnable verbatim")
 
 
+def check_tracking(facts: dict, spec_dir: Path, f: Findings) -> None:
+    """§1.6. The skill's own rule is "cheap-to-verify state is never asserted", and
+    `tracking.*` is the field that breaks it most often: `branch` said `main` while
+    the real branch was the feature one, was corrected, and went wrong the other way
+    after the merge. `issues: []` stayed empty in three sets after the issues existed.
+
+    Only `branch` is settled here. `issues`/`pr`/`milestone` live on GitHub, and an
+    auditor that makes network calls is a different kind of tool — they are listed
+    as a human pass instead."""
+    tracking = facts.get("tracking")
+    if not isinstance(tracking, dict):
+        return
+    branch = tracking.get("branch")
+    if branch:
+        ok = subprocess.run(["git", "rev-parse", "--verify", "--quiet",
+                             f"refs/heads/{branch}"],
+                            cwd=spec_dir, capture_output=True, text=True)
+        if ok.returncode != 0:
+            f.add(DRIFT, "tracking.branch",
+                  f"`{branch}` is not a branch in this checkout",
+                  "one command settles it (`git rev-parse --verify`), so asserting it "
+                  "is the same defect as copying a test count",
+                  "28 tracking vs reality")
+    status = str(facts.get("status") or "")
+    if status in ("implementing", "shipped") and not (tracking.get("issues") or
+                                                      tracking.get("pr")):
+        f.add(DRIFT, "tracking",
+              f"`status: {status}` with no `issues:` and no `pr:`",
+              "the work exists somewhere trackable by now; an empty tracking block "
+              "in a shipped set is a field nobody went back to fill",
+              "28 tracking vs reality")
+
+
+def check_provider_behavior(facts: dict, f: Findings) -> None:
+    """§3.4. `how: provider-behavior` claims what a third party ACTUALLY does, and
+    the only acceptable value is an observed response — a status code and a body.
+    A claim about a file-type filter was corrected twice in opposite directions
+    because both times it reasoned about the provider's configuration instead of
+    executing the flow."""
+    for path, node in walk(facts):
+        if not (isinstance(node, dict) and str(node.get("basis")) == "measured"):
+            continue
+        ev = node.get("evidence") or {}
+        if str(ev.get("how", "")).lower() != "provider-behavior":
+            continue
+        value = str(ev.get("value") or "")
+        if not re.search(r"\b[1-5]\d{2}\b", value):
+            f.add(CONTRADICTION, pretty_path(facts, path) or "_facts.yml",
+                  "`how: provider-behavior` whose `value` records no observed HTTP "
+                  f"status: {value[:60]!r}",
+                  "run the flow and paste the response — status code and body. A "
+                  "configuration is what you asked for; behavior is what you get, and "
+                  "reasoning about the first is how this claim got corrected twice in "
+                  "opposite directions",
+                  "29 provider behavior is observed")
+
+
 def check_placeholders(facts: dict, f: Findings) -> None:
     """Check 10."""
     if str(facts.get("status") or "draft") == "draft":
@@ -733,6 +790,11 @@ HUMAN_PASS = [
     ("7", "scope parity", "`changes[]` vs each doc's affected-components table"),
     ("13", "doc 02 executability", "resolved paths, named symbols, paste-ready code, "
      "`[MANUAL]` labels"),
+    ("28", "`tracking.issues` / `pr` / `milestone` on GitHub", "deliberately NOT "
+     "automated: an auditor that makes network calls is a different kind of tool. "
+     "`gh issue view` / `gh pr view` and check the state matches `status:`"),
+    ("3.5", "`decisions.*` cited_in", "when a decision changes, walk its `cited_in:` "
+     "sections by hand — `sync` replaces values and a premise has no value to replace"),
 ]
 
 
@@ -826,6 +888,8 @@ def main(argv: list[str] | None = None) -> int:
     check_phase_numbering(prose, f)
     check_evidence_cmd_runnable(facts, f)
     check_placeholders(facts, f)
+    check_tracking(facts, spec_dir, f)
+    check_provider_behavior(facts, f)
     check_doc_size(in_scope, f)
     check_profile_and_log(facts, spec_dir, repo_root, f)
     check_log_stage(facts, spec_dir, f)
