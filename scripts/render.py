@@ -354,7 +354,7 @@ def status_gate(facts: dict, claims: list[dict]) -> list[str]:
                     f"`{c['path']}` is `measured` but evidence lacks: {', '.join(missing)}."
                 )
             cmd = str(ev.get("cmd", ""))
-            if re.search(r"rg\s+['\"][^'\"]*\|", cmd):
+            if re.search(r"\brg\b[^'\"\n]*(['\"])[^'\"\n]*\|[^'\"\n]*\1", cmd):
                 warnings.append(
                     f"`{c['path']}` evidence.cmd uses regex alternation — "
                     "fused result sets cannot be attributed per symbol."
