@@ -8,11 +8,26 @@
 # Reconciling with reality → `feature-spec verify <slug>` checks THIS FILE against
 #   observations. audit proves the docs agree with the registry; only verify
 #   proves the registry is true.
+#
+# THE SET IS WRITTEN IN TWO STAGES. `new` writes this file + doc 01 — the decision
+#   surface, the part that gets bounced until someone says yes. `implement` writes
+#   docs 02 and 03 — the build, ~75% of the set's prose, authored ONCE against a
+#   plan that stopped moving. Which doc belongs to which stage is `docs[].stage`
+#   at the bottom of this file.
 
 feature: <slug>
 profile: <path to the _profile.yml this set was written against>   # resolved by the upward walk
 title: <Human-readable feature title>
 status: draft           # draft | reviewed | implementing | shipped | paused
+                        # ORDERED: draft < reviewed < implementing < shipped.
+                        # `paused` holds the last real stage it reached.
+                        # The ordering is what gates docs[].stage below:
+                        #   draft     - the decision is still open. Registry + doc 01.
+                        #   reviewed  - `review` ran, its findings are dispositioned in
+                        #               _log.md, and the user confirmed. `implement` may
+                        #               now write docs 02 and 03. The flip to `reviewed`
+                        #               IS the record of that confirmation.
+                        #   implementing / shipped - code exists or has landed.
                         # `shipped` is GATED: refused while any root_cause /
                         # contributing defect is still `basis: asserted`.
                         # See references/evidence.md §Gates (G1).
@@ -61,12 +76,55 @@ dates:
 #     evidence: { how: shell, cmd: "<commands.tests>",
 #                 date: 2026-08-03, value: "280/280 passing (28 files)" }
 
+# --- decisions taken about this feature ---
+# A decision is not a datum with a value to grep — it is a PREMISE that prose hangs
+# off. `sync` propagates data; nothing follows a premise when it changes, so the
+# prose keeps promising what was cancelled. Give each one a key and cite the key.
+decisions: {}           # e.g. { scope_trimmed: { date: YYYY-MM-DD, basis: decided,
+                        #          what: 'deferred the durable table; peak is 200x below
+                        #                 the threshold that motivated it' } }
+
 # --- domain facts (fill with the real shared numbers/names) ---
 limits: {}              # e.g. { cloudflare: { timeout_s: 100, error: 524 } }
 
 # Scope is TWO disjoint lists — do not mix them:
 changes: []             # components CREATED or MODIFIED by this feature (bots, edge functions, modules).
                         #   ONLY these participate in scope-parity (audit check 7).
+                        #
+                        #   Every entry carries TWO orthogonal fields. The template used to
+                        #   assume each change simply gets built; in practice three other
+                        #   states exist, and a session that has to invent them invents them
+                        #   differently each time — the exact drift this registry prevents.
+                        #
+                        #   kind: (lifecycle)  planned | deferred | moved_out | pending
+                        #     planned    - will be built by this set. The default.
+                        #     deferred   - written, decided NOT to apply now. REQUIRES
+                        #                  `deferred_because:` (a decisions.* key) and
+                        #                  `reopens_when:`. A deferral with no reopen
+                        #                  condition is not deferred — it is abandoned
+                        #                  with better wording.
+                        #     moved_out  - left for another set or issue. REQUIRES `moved_to:`.
+                        #     pending    - adopted from another set, not applied here yet.
+                        #                  REQUIRES `transferred_from:`.
+                        #   where: (location)  repo | external
+                        #     repo       - `file:` is a path in this checkout. The default.
+                        #     external   - the change is real but has no file here (a cron
+                        #                  job, a dashboard setting, a provider config).
+                        #                  Audit does not try to resolve `file:` on disk.
+                        #
+                        #   `implement` REFUSES to run while any entry has no `kind:` —
+                        #   an unclassified change is an undecided one, and doc 02 would
+                        #   be written against a scope nobody settled.
+                        #   - { id: C1, file: src/x.ts, kind: planned, change: '...' }
+                        #   - { id: C2, file: src/y.ts, kind: deferred, change: '...',
+                        #       deferred_because: decisions.scope_trimmed,
+                        #       reopens_when: 'daily peak passes ~200 distinct users. Today: 5' }
+                        #   - { id: C6, file: src/z.ts, kind: moved_out, moved_to: 'issue #28 — 2026-08-28' }
+                        #   - { id: C7, file: 'cron.job jobid 1', kind: planned, where: external }
+                        #
+                        #   A `file:` under `kind: planned, where: repo` that does not exist on
+                        #   disk is only a finding once `status:` reaches `implementing` — before
+                        #   that, a file this set is going to create legitimately isn't there yet.
 related_docs: []        # docs/guides REFERENCED but NOT modified (e.g. manual-user-creation.md).
                         #   context pointers only — never scope-parity members.
                         #   A related_doc's STATE is a claim: "sin commitear" needs
@@ -118,11 +176,29 @@ tests_baseline:
   basis: measured
   evidence: { how: shell, cmd: "<test runner cmd>", date: "<YYYY-MM-DD>",
               value: "<n/n passing (m files)>" }
-acceptance: []          # bullet list of Definition-of-Done items (shared across docs)
+acceptance: []          # bullet list of Definition-of-Done items (shared across docs).
+                        #   Authored by `new`, in STAGE 1: "what would make this done" is an
+                        #   INPUT to deciding whether to build it, not an output of building.
+                        #   Only its rendering as doc 02's Definition of Done waits for
+                        #   `implement`. Until then this list is the only home the criteria
+                        #   have — which is why they carry their own state rather than
+                        #   depending on a doc that does not exist yet.
 
 # --- cross-doc registry ---
 # List the docs in this set so audit knows what to check and cross-refs can resolve.
+#
+# `stage:` is the `status:` this doc is written AT. A doc whose stage the set has
+# not reached is NOT expected on disk, and audit skips the checks that read it
+# (5 checklist coverage, 6 acceptance parity, 13 doc-02 executability) instead of
+# reporting a pile of DRIFT against a file nobody was supposed to write yet.
+# Stage reached and the file is missing → that IS a finding.
+#
+# A doc with no `stage:` is read as `draft`. Sets written before staging keep
+# auditing exactly as they did.
+#
+# Never add an `exists:` field here. File presence is cheap to verify, so it is
+# read from disk — asserting it is the same defect as copying a test count.
 docs:
-  - { id: "01", file: 01-master-plan.md, role: master-plan }
-  - { id: "02", file: 02-implementation-and-e2e.md, role: implementation }
-  - { id: "03", file: 03-stakeholder-requirements.md, role: stakeholder }
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation-and-e2e.md, role: implementation, stage: reviewed }
+  - { id: "03", file: 03-stakeholder-requirements.md, role: stakeholder, stage: reviewed }

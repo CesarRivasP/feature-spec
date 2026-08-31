@@ -6,7 +6,41 @@ Mechanical consistency checks for a feature spec set. Run in order. Output = cor
 - `_log.md` (**read first** — who last edited, against which versions; outranks context)
 - `_facts.yml` (source of truth — what is claimed)
 - `_profile.yml` (how this repo verifies — where every `cmd` must come from)
-- All docs listed in `_facts.yml docs[]`.
+- All docs listed in `_facts.yml docs[]` **whose `stage:` the set has reached** (below).
+
+## Stage gating — resolve this BEFORE running any check
+
+A set is written in two stages: `new` produces the registry and doc 01, `implement`
+produces docs 02 and 03 once the plan is confirmed. Auditing a stage-1 set with the
+full check list reports a wall of DRIFT against files nobody was supposed to write
+yet, which trains the reader to skim the findings — the failure this protocol exists
+to prevent, one level up.
+
+Resolve, in order:
+
+1. `STATUS = _facts.yml status:`, ranked `draft(0) < reviewed(1) < implementing(2) < shipped(3)`.
+   `paused` takes the rank of the last stage the set actually reached (`_log.md` says which);
+   unknown or absent → `draft`.
+2. For each `docs[]` entry, `STAGE = entry.stage` (absent → `draft`). **A set with no
+   `stage:` anywhere audits exactly as it did before staging existed** — that is what
+   makes the field safe to adopt one set at a time.
+3. A doc is **in scope** when `rank(STAGE) <= rank(STATUS)`.
+
+Then:
+
+- **Out of scope and absent from disk → not a finding, and not silence either.** Say so
+  in the verdict line: `stage draft — docs 02, 03 not due yet`. A reader must be able to
+  tell "clean" from "clean so far", the same rule as a missing gap-sweep layer.
+- **In scope and absent from disk → `DRIFT`.** The set claims a status it has not written
+  the docs for.
+- **Out of scope but present on disk → run every check against it anyway**, and flag the
+  mismatch as `POLISH`: someone wrote ahead of the stage, or `status:` was rolled back
+  and the doc was not. Never skip a file that exists — the checks are what catch the
+  version that got written against the old plan.
+
+Checks **5**, **6** and **13** read docs 02/03 and are the ones this gating switches off.
+Every other check runs at every stage: they read the registry and doc 01, which exist
+from the first minute.
 
 ## Checks
 
@@ -43,11 +77,13 @@ Every "ver doc 0X §Y" / "see doc 0X" points to a doc in `docs[]` and a section 
 - **Refs inside changelog rows are still refs.** They're the ones that survive a doc split unqualified, because nobody re-reads a changelog when moving sections. Include changelog tables in the sweep — especially the "pending work you inherit" column, which is read as instructions.
 - **Two shapes are exempt, and a sweep that flags them is producing noise:** (a) a section number quoted *as text* — a defect being described (`` fixed the cross-ref `§3.6`→`§3.5` ``) or an example — is not a ref; (b) a changelog clause that names the doc once and then enumerates what changed inside it (`` `02` gained §0.3b, §1.1, §2.5 ``) is narrative about one doc, not five navigation targets. Judge by whether a reader would *follow* the ref. Mechanical sweeps over-report here: verify each hit by eye before writing it up.
 
-### 5. Checklist coverage
+### 5. Checklist coverage — *stage-gated (needs 02 or 03)*
 Each master-plan (doc 01) checklist item has a counterpart in doc 02 (implementation/test) and/or doc 03 (stakeholder). Item with no downstream counterpart → `DRIFT`.
+- **When neither 02 nor 03 is in scope yet, this check does not go quiet — it inverts.** Emit every doc 01 checklist item under `pending downstream coverage`, as a list, not a finding. That list is the input `implement` must cover; without it the items are simply unread until someone rediscovers them, which is how a checklist item becomes a shipped gap. Not covering one later IS the `DRIFT`.
 
-### 6. Acceptance parity
+### 6. Acceptance parity — *stage-gated (needs 02)*
 Doc 02 "Definition of Done" (or, if 02 is split, whichever half holds it) == `_facts.yml acceptance[]` item-for-item. Divergence → `CONTRADICTION`.
+- Before 02 exists, `acceptance[]` has no copy to diverge from and there is nothing to compare. It is still authored, still audited by every registry-level check, and still the contract — it is the *parity* that waits, not the criteria.
 
 ### 7. Scope parity
 Compare **only** `changes[]` (components created/modified) against each doc's "componentes que cambian" table / affected-modules enumeration. Missing/extra member → `CONTRADICTION`.
@@ -63,6 +99,7 @@ Any fence or URL with no registry home → `DRIFT` (prose-orphan contract — pr
 ### 9. Sibling-doc detection
 Glob `docs/features/*<slug>*` (and adjacent files on the same theme under other names). Every match must be listed in `_facts.yml docs[]`.
 - File on this feature's theme not in `docs[]` → `DRIFT`: an unregistered sibling. It's outside the source-of-truth net, so it drifts silently (real case: an `-actionables.md` said 17 where the set said 16). Resolve by integrating it into the set or registering it with `role: legacy`.
+- **The other direction, gated by stage:** a `docs[]` entry whose `stage:` the set has reached but whose file is not on disk → `DRIFT`. A set at `status: implementing` with no doc 02 is claiming a stage it never wrote. An entry whose stage is *not* reached and whose file is absent is correct and silent — see §Stage gating.
 
 ### 10. Placeholders resolved
 Scan `_facts.yml` for `—`, `TBD`, `?`, `xxx` in `owners.*`, `dates.*`, `schedule.*.owner`, `schedule.*.target`, and any tracking table in the docs.
@@ -77,7 +114,7 @@ For every `verified.date`, compare against today and against the last commit tou
 - `verified.date` older than the most recent change to what it measures → `CONTRADICTION` (re-run `cmd`).
 - `verified.date` older than 7 days on a volatile metric (prod counts, dashboard state) → `DRIFT`: re-measure before approval. Check 1b re-runs the command; this one flags the ones you'd never think to re-run because nothing looks wrong.
 
-### 13. Doc 02 executability
+### 13. Doc 02 executability — *stage-gated (needs 02)*
 Parte A is the input to the builder. Scan it for:
 - unresolved paths — `(o el componente correspondiente)`, `path/to/`, `…/algo` → `DRIFT`
 - named-but-undefined symbols — a constant/toast/env var referenced without its file, exported name, and literal value → `DRIFT`
@@ -116,6 +153,7 @@ Contract in `references/handoff.md`. Only applies once `_log.md` exists — a si
 - **A finding carried two or more rounds with no disposition → `DRIFT`.** Silence is how a finding gets rediscovered every round and settled in none.
 - **A disposition of `rejected` with no command output or observation behind it → `DRIFT`.** "I disagree" is the finding surviving in disguise; a rejection is a claim and takes the same basis as any other.
 - **An entry missing `agent`, `Read:`, or `Log read through:` → `DRIFT`.** Without them the entry cannot be checked against anything, which is the only thing it was for.
+- **`_facts.yml status:` differs from the last `**Stage:**` line the log records, and no entry explains the change → `DRIFT`.** A stage transition puts docs into audit scope and unlocks `implement`; unrecorded, it is indistinguishable from a typo in the registry. A set whose log has no `Stage:` line at all and sits at `draft` is fine — nothing transitioned yet.
 - **`Log read through:` naming a round earlier than the previous entry → `POLISH`**, and note it in the findings: that round skipped history and its dispositions may re-litigate settled items.
 - **A transcribed entry with no `Source:` line → `DRIFT`.** A finding raised against a pasted excerpt and one raised against the full file are not the same claim.
 - Round ids non-monotonic, or two entries with the same id → `CONTRADICTION`. Findings are addressed as `R<n>-F<m>`; ambiguous ids break every reference to them.

@@ -70,6 +70,19 @@ A one-line answer to all five is fine. Not answering them is the finding.
 - **Every consumer of the corrupted datum.** A defect corrupts a *value*, not a file. Before accepting a fix, name every place that value is written and every place it is read — then say which of them the fix covers. `changes[]` is organised by file and will not ask this for you. `references/implementable.md` §Wire every constant end to end encodes the same "N sites, you touched 1" failure for new constants; this is that rule generalised to the data an existing defect flows through. Two shared values fed by one event, a store read by two screens, a ref consumed by three handlers — each is a place the fix either reaches or silently does not.
 - **New dependency on an external owner.** Anything the team cannot execute alone gets `blocked_by:` in the registry, an owner, and a date that reflects *their* clock. Otherwise the plan quietly assumes a stranger's cooperation.
 
+## Trimming scope — what a deferral silently breaks
+
+Cutting a `changes[]` entry down to `kind: deferred` or `kind: moved_out` is not a subtraction. It is the same event as a refuted hypothesis in `verify`, from the other direction: something the rest of the set was resting on stopped being true, and nothing follows that arrow on its own.
+
+When an entry leaves the build, re-walk two lists before moving on:
+
+- **`acceptance[]`** — every criterion that depended on the deferred entry. Each one is either (a) rewritten against the substitute mechanism, or (b) deleted, with the accepted risk written down. **A criterion that survives a trim without review is one nobody will be able to meet.** *Real case:* deferring a durable table nearly killed the set's own objective — the alert condition was "zero runs recorded in the last 3h", which needs durable rows; an error event does not fire when a cron simply stops running, because the code that would emit it does not run either. Caught by chance, re-reading the condition.
+- **`decisions.*`** — every decision whose stated rationale named the deferred entry. **A decision that dies can orphan the justification of another decision.** *Real case:* a table's deferral had been justified with "for alerting we don't need it, the Crons monitor covers the absence". When the monitor was later cancelled, the table stayed deferred — but no longer for the reason written next to it. The registry still read as settled.
+
+This rule **reincidió two days after it was written**, in the same set, which is why it is also a mechanical check rather than only a paragraph here: a cancelled heartbeat left two acceptance criteria nothing could satisfy — one of them annotated *"this is THE test of the set"* — and the set was marked `status: shipped` with a clean audit, because no check compared `acceptance[]` against reality. Registering the decision in `_log.md` is **not** the same as propagating it: the log is narrative, `acceptance[]` is contract.
+
+Deferring before doc 02 exists is the cheap case and the reason `implement` is a separate stage — a trimmed entry costs a registry edit instead of a rewritten phase. Deferring after 02 exists means regenerating the phases that were written around it; `sync` cannot do this, because it propagates values and a trim changes shape.
+
 ## Recording the result
 
 Findings that are fixed → the fix lands in `_facts.yml` first (as `limits.*`, `contracts.*.auth`, a new `changes[]` entry, an `acceptance[]` item), then `sync`. A gap closed only in prose is invisible to the next audit.
