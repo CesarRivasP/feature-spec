@@ -13,7 +13,9 @@ Everything else here exists to make that rule checkable.
 
 ## Entry format
 
-One `##` block per round, appended at the end. Never edit or delete a previous entry.
+One `##` block per round, appended at the end of the file. Never edit or delete a *previous* entry — the current round's own entry is opened as a stub before the work and completed after it, which is the one case where an entry is written in two passes.
+
+**The stub goes in first.** `SKILL.md` used to say each mode "appends an entry before finishing", and that is backwards: the round that most needs a record is the one that does not reach the end. Open with the agent, the versions read, and what you are about to do; fill in findings, edits and dispositions when you finish.
 
 ```markdown
 ## R3 · 2026-08-19 · claude-opus-5 · validate
