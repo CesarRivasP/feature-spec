@@ -799,6 +799,9 @@ mark.fact:hover,mark.fact.lit{background:var(--accent-soft);
   padding:10px 14px;border-radius:0 var(--radius) var(--radius) 0;margin:0 0 12px;
   font-size:13.5px}
 .warn ul{margin:6px 0 0}
+.note{border-left:3px solid var(--asserted);background:var(--asserted-bg);
+  padding:10px 14px;border-radius:0 var(--radius) var(--radius) 0;margin:0 0 12px;
+  font-size:13.5px}
 .stat-row{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 18px}
 .stat{flex:1 1 130px;background:var(--bg-2);border:1px solid var(--line);
   border-radius:var(--radius);padding:11px 14px}
@@ -915,8 +918,30 @@ def stat(n, label: str, tone: str = "") -> str:
             f'<div class="l">{html.escape(label)}</div></div>')
 
 
+STATUS_RANK = {"draft": 0, "reviewed": 1, "implementing": 2, "shipped": 3}
+
+
+def deferred_docs(facts: dict, spec_dir: Path) -> list[dict]:
+    """`docs[]` entries whose `stage:` the set has not reached and which are not on
+    disk. They are not missing — `implement` has not run yet — so the view says so
+    rather than silently rendering a set that looks like it holds one document.
+    Same contract as references/audit-protocol.md §Stage gating."""
+    rank = STATUS_RANK.get(str(facts.get("status") or "draft").strip(), 0)
+    out = []
+    for entry in facts.get("docs") or []:
+        if not isinstance(entry, dict):
+            continue
+        stage = str(entry.get("stage") or "draft")
+        path = spec_dir / str(entry.get("file", ""))
+        if STATUS_RANK.get(stage, 0) > rank and not path.is_file():
+            out.append({"id": str(entry.get("id") or "?"),
+                        "file": str(entry.get("file", "")), "stage": stage})
+    return out
+
+
 def build_overview(facts: dict, claims: list[dict], warnings: list[str],
-                   dangling: list[str], orphans: list[str], docs: list[dict]) -> str:
+                   dangling: list[str], orphans: list[str], docs: list[dict],
+                   pending: list[dict] | None = None) -> str:
     counts = {b: sum(1 for c in claims if c["basis"] == b)
               for b in ("measured", "asserted", "decided")}
     parts = [f'<h1>{_inline(str(facts.get("title") or facts.get("feature", "spec")))}</h1>']
@@ -929,11 +954,23 @@ def build_overview(facts: dict, claims: list[dict], warnings: list[str],
     parts.append(stat(counts["asserted"], "asserted", "asserted"))
     parts.append(stat(counts["decided"], "decided", "decided"))
     parts.append(stat(len(docs), "docs"))
+    if pending:
+        parts.append(stat(len(pending), "docs pendientes"))
     parts.append(stat(len(dangling), "cross-refs rotos",
                       "danger" if dangling else ""))
     parts.append(stat(len(orphans), "datos sin citar",
                       "asserted" if orphans else ""))
     parts.append("</div>")
+
+    if pending:
+        listed = " &middot; ".join(
+            f'<code>{html.escape(d["file"])}</code> (stage {html.escape(d["stage"])})'
+            for d in pending)
+        parts.append(
+            '<div class="note"><strong>Etapa 1 &mdash; faltan documentos a '
+            f'prop\u00f3sito.</strong> {listed}. Los escribe <code>implement</code>, '
+            'una vez confirmado el plan. Sin esta l\u00ednea, un set incompleto y un '
+            'set en etapa 1 se ven igual.</div>')
 
     if warnings:
         parts.append('<div class="warn"><strong>Gates / evidencia</strong><ul>'
@@ -1164,7 +1201,8 @@ def build_page(spec_dir: Path) -> str:
     set_canonical(False)
     views: list[tuple[str, str, str]] = []  # id, nav label, html
     views.append(("v-overview", "Resumen",
-                  build_overview(facts, claims, warnings, dangling, orphans, docs)))
+                  build_overview(facts, claims, warnings, dangling, orphans, docs,
+                                 deferred_docs(facts, spec_dir))))
     for d in docs:
         label = f"{d['id']} · {d['role'] or d['file']}"
         views.append((f"v-doc-{d['id']}", label, d["html"]))
