@@ -151,6 +151,19 @@ When `_facts.yml` changes, find every doc occurrence of each changed datum and u
 
 **`sync` moves data, not shape.** It finds a value and replaces it. A plan that *changed shape* — an entry that left `changes[]`, a decision that was cancelled — has no value to replace: it has prose hanging off a premise that is now false, and nothing follows that arrow. That is `implement`'s problem for doc 02's phases and `references/gap-sweep.md` §Trimming scope's for `acceptance[]` and `decisions.*`. Running `sync` and calling the set consistent is how a cancelled decision left 14 stale promises across a set that audited clean.
 
+### `view <slug>` — render the set as one HTML page
+`python3 scripts/render.py docs/features/<slug>/ [--open] [--serve [PORT]]` → `<slug>/view.html`, a single self-contained file (CSS/JS inlined, no network).
+
+The view is a **derived artifact**: never edit it, never treat it as a source — edit `_facts.yml` or the docs and re-render. What it adds over reading the markdown is the structure the markdown cannot show: `basis:` as a chip on every claim with its evidence attached, each registry datum marked where it is cited in prose (click either direction), `changes[]` vs `related_docs[]` side by side, `defects[]`/`alternatives[]` as a board with `depends_on` navigable, the `audit` correspondence matrix as a table, and `_log.md` as a timeline with colored dispositions.
+
+It **shows** the same mechanical comparisons `audit` reports — dangling cross-refs, registry datums never cited in prose, and the `references/evidence.md` gates (G1, `measured` with incomplete evidence, `asserted` with no `falsified_by`, `cmd` with regex alternation or a denylist scope). It does not replace `audit`: a view is read by a person, a finding list is acted on.
+
+Needs PyYAML and nothing else; there is no fallback parser, because a registry parsed slightly wrong is the exact failure this skill exists to prevent.
+
+Sharing: the file itself is the unit — send `view.html` to the external owner of doc 03 and it opens offline, with no account and no expiring link. `--serve` binds `127.0.0.1`; `--serve --lan` binds `0.0.0.0` and says so, because a spec set names endpoints, env var names and internal paths.
+
+Contract and invariants: `references/render.md`.
+
 ## Rules that keep it honest
 
 > **Verbatim copy guarantees consistency with the registry — including any error IN the registry.** The mechanical audit proves the docs agree with `_facts.yml`; it does NOT prove `_facts.yml` is true. So the leverage is at the INPUT to the registry: every claim must declare its `basis` and measured data must be run not copied (A), scope must be categorized `changes` vs `related_docs` (B), contracts/endpoints must be promoted out of prose (C), and sibling docs must be detected (D). Harden the entry; the copy takes care of itself.
@@ -187,6 +200,8 @@ When `_facts.yml` changes, find every doc occurrence of each changed datum and u
 - `references/handoff.md` — the append-only `_log.md`, for sets passed between agents: entry format, dispositions, and why the log beats the context window.
 - `references/evidence.md` — the `basis:` / `evidence:` contract, the `verify` mode, and the gates that keep an asserted root cause from shipping.
 - `references/implementable.md` — how to write doc 02 so a context-free executor can build it.
+- `references/render.md` — the `view` mode: what the HTML render reads, the invariants it holds, and the gates it surfaces.
+- `scripts/render.py` — the renderer itself. Deterministic and standalone: no model writes the HTML, so the view cannot drift from the files it renders.
 - `scripts/audit.py` — the mechanized half of the audit protocol. Shares its registry walk and basis gates with `render.py` by importing them, so the two cannot drift: a check implemented twice is the defect this skill exists to prevent.
 - `tests/` — one fixture per mechanized check, each reproducing the real failure that motivated it, plus the false positives that must stay unreported. `python3 tests/test_audit.py`.
 - `templates/` — `_facts.yml.tpl`, `_log.md.tpl`, and one `.tpl` per doc.

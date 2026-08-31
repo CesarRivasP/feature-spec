@@ -9,3 +9,7 @@ Thumbs.db
 
 # a filled profile belongs to a repo, never to this one
 _profile.yml
+
+# derived: the HTML view is regenerated, never authored
+view.html
+__pycache__/

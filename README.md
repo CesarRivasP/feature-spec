@@ -32,7 +32,15 @@ To pin a version instead of tracking `main`:
 git clone --branch v1.2.1 --depth 1 git@github.com:CesarRivasP/feature-spec.git
 ```
 
-Restart the session so the skill is picked up. No dependencies — 20 markdown and YAML files, no scripts, no MCP servers, no package to install.
+Restart the session so the skill is picked up. No MCP servers, no package to install: the skill itself is markdown and YAML.
+
+The one exception is `view`, which renders a spec set to HTML. It is a single stdlib Python script plus PyYAML:
+
+```bash
+python3 -m pip install --user pyyaml
+```
+
+Every other mode runs without it.
 
 ## Set up the profile (once per repo)
 
@@ -80,8 +88,19 @@ Every command the skill emits — into evidence, into a phase's verification lin
 | `review <slug>` | if this is built literally, what breaks? | rate-limit dead ends, unauthenticated writes, PII, silent fallbacks, stack-specific hazards |
 | `verify <slug>` | **is the registry true?** | a root cause that was reasoned, never observed |
 | `handoff <slug>` | who touched this, against which version? | an agent reviewing its stale context instead of the file on disk |
+| `view <slug>` | what does this set actually look like? | a guessed root cause reading exactly like a measured one |
 
 `verify` is the only one that can fail after a clean `audit`. `status: shipped` is gated on it: the set may not claim to have shipped while the defect it blames is still `basis: asserted`.
+
+### Reading a set
+
+```bash
+python3 scripts/render.py docs/features/<slug>/ --open
+```
+
+One self-contained `view.html` — no network, no build step, no account. It shows what the markdown cannot: `basis:` as a chip on every claim with its evidence attached, each registry datum marked where it is cited in prose (clickable both ways), `changes[]` next to `related_docs[]`, the defect board, the correspondence matrix, and `_log.md` as a timeline. Dangling cross-refs render red; registry facts nobody ever cited are counted on the front page.
+
+It is a derived artifact — edit the registry, re-render. Sharing it means sending the file.
 
 ## The idea that holds it together
 
@@ -169,6 +188,9 @@ references/
   gap-sweep-mobile-tv.md              layer: D-pad focus, low-end memory, playback lifecycle
   doc-pattern.md                      the 3-doc pattern, splitting, heading language
   implementable.md                    how to write doc 02 for a context-free executor
+  render.md                           what the HTML view reads, its invariants, the gates it surfaces
+scripts/
+  render.py                           the renderer: spec set -> one self-contained view.html
 templates/                            _facts.yml.tpl, _log.md.tpl + one .tpl per doc
 profiles/                             _profile.yml.tpl + starters per stack
 ```
@@ -187,7 +209,8 @@ This skill was written and iterated on while running [`caveman`](https://github.
 
 | version | what it added |
 |---|---|
-| [**v1.2.1**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.2.1) | instrumentation removal is ordered after the last **run** that reads it, not after the last code phase — a `[MANUAL]` confirmation run comes later, and a spec that deletes its own oracle pushes the next step toward eyeballing pixels |
+| [**v1.3.0**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.3.0) | `view` — a spec set rendered to one self-contained `view.html`: `basis:` as a chip on every claim with its evidence attached, each registry datum marked where it is cited in prose, the defect board with `depends_on` navigable, and the `evidence.md` gates on the front page. In markdown a guessed root cause and a measured one read identically; here they do not |
+| [v1.2.1](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.2.1) | instrumentation removal is ordered after the last **run** that reads it, not after the last code phase — a `[MANUAL]` confirmation run comes later, and a spec that deletes its own oracle pushes the next step toward eyeballing pixels |
 | [v1.2.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.2.0) | a gap-sweep kind for **adding** a check, not only removing one — an early return partitions its function and everything above it keeps running on the input the guard rejects; plus `verify` routing back through `review` when a refuted hypothesis moves the fix |
 | [v1.1.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.1.0) | `_log.md` — the append-only handoff log, so a set worked by several models is reviewed against the file on disk rather than a stale context window |
 | [v1.0.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.0.0) | first public release — the registry, the four modes, the `basis:` contract, `_profile.yml`, intake, gap-sweep layers |
