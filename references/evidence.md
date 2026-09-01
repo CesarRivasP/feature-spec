@@ -100,6 +100,36 @@ never a plausible-looking command nobody has run.
 - **G1** `status: shipped` is refused while any `defects[]` entry with
   `role: root_cause` or `role: contributing` is `basis: asserted`. The fix may
   well work; the registry has not earned the right to say why.
+
+  **Unless the decision to ship anyway is written down, with a date it expires.**
+  There is a legitimate case G1 had no room for: the team knows the cause is
+  unproven, ships the trimmed scope deliberately, and schedules the measurement.
+  That is a real decision and it belongs in the registry:
+
+  ```yaml
+  accepted:
+    by: <a person>            # never an agent
+    decided_on: YYYY-MM-DD
+    until: YYYY-MM-DD         # when the measurement is due
+    because: '<why shipping now is the right call>'
+  ```
+
+  With a live `until:` the gate stands down and the audit **lists** the deferral
+  and its expiry — not a finding, not silence. Past `until:`, G1 refuses again and
+  names how late it is. Missing a field, or a `by:` that reads like a model id,
+  and the block excuses nothing.
+
+  It is a **deferral with a deadline, not an exemption** — the same rule the
+  registry already applies to `changes[]`, where a postponement with no reopen
+  condition is abandonment with better wording.
+
+  *Real case, and the reason this exists:* a set shipped with its root cause
+  asserted on purpose. The decision was recorded — in a `_log.md` round, and in an
+  agent's memory. **Neither is read by the audit, the next agent, or the view**, so
+  from outside "we looked and chose to wait" was indistinguishable from "nobody
+  looked", and the same violation was re-derived days later by a different session.
+  The log is narrative and a memory is private; the registry is contract, and only
+  the registry has an expiry a program can check.
 - **G2** `basis: asserted` with empty or absent `falsified_by:` → `DRIFT`.
 - **G3** `falsified_by:` naming an observation with no `log_line:` that produces
   it (and no existing emitter) → `DRIFT`: the instrumentation is part of the

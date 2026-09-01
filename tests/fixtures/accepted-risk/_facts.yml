@@ -1,0 +1,52 @@
+# Gate G1 refuses `shipped` while a root_cause/contributing defect is `asserted`,
+# and that is right. What it had no room for is the legitimate case, which happened:
+# the team knew the cause was unproven, shipped the trimmed scope anyway, and
+# scheduled the measurement for a few days later. The decision was recorded — in a
+# _log.md round, and in an agent's memory. Neither is read by the audit, by the next
+# agent, or by the view, so from outside it was indistinguishable from nobody having
+# looked. The set shipped and the same G1 violation was re-derived days later.
+#
+# `accepted:` is a deferral with a DEADLINE, not an exemption:
+#   R1 live      - recorded, not yet due. Not a finding; listed with its expiry.
+#   R2 expired   - the date passed. G1 refuses again and names how late it is.
+#   R3 malformed - missing a required field. The block does not excuse anything.
+#   R4 by-agent  - an agent cannot accept a risk on its own behalf.
+#   R5 none      - the original behaviour, unchanged.
+feature: accepted-risk
+status: shipped
+profile: _profile.yml
+acceptance:
+  - { id: AC1, item: 'el cron borra todo lo que supera el tope', status: approved,
+      verified_on: 2026-08-30 }
+defects:
+  - { id: R1, role: root_cause, basis: asserted, status: open,
+      claim: 'el cron corta en 1000 objetos y lo que queda afuera no se borra',
+      falsified_by: 'una corrida con >1000 objetos en un prefijo que los borre todos',
+      log_line: 'cleanup.run removed=<n> truncated=<bool>',
+      accepted: { by: 'Cesar Rivas', decided_on: 2026-08-28, until: 2027-12-31,
+                  because: 'se shippea el alcance recortado; la corrida con >1000
+                            objetos necesita volumen de produccion que hoy no existe' } }
+  - { id: R2, role: contributing, basis: asserted, status: open,
+      claim: 'la paginacion por offset es inestable si se borra mientras se pagina',
+      falsified_by: 'una corrida que borre pagina por pagina y aun asi los borre todos',
+      log_line: 'cleanup.page offset=<n> deleted=<n>',
+      accepted: { by: 'Cesar Rivas', decided_on: 2026-07-01, until: 2026-08-01,
+                  because: 'se difiere una semana' } }
+  - { id: R3, role: contributing, basis: asserted, status: open,
+      claim: 'el gateway devuelve 400 a partir de ~125 urls en el .in()',
+      falsified_by: 'una query con 200 urls que devuelva 200',
+      log_line: 'cleanup.nullify urls=<n> status=<code>',
+      accepted: { by: 'Cesar Rivas', decided_on: 2026-08-28,
+                  because: 'sin fecha de vencimiento' } }
+  - { id: R4, role: contributing, basis: asserted, status: open,
+      claim: 'el borrado por lotes supera el cap del proveedor',
+      falsified_by: 'un lote de 2000 que el proveedor acepte',
+      log_line: 'cleanup.remove batch=<n>',
+      accepted: { by: claude-opus-5, decided_on: 2026-08-28, until: 2027-12-31,
+                  because: 'lo decidio el agente' } }
+  - { id: R5, role: contributing, basis: asserted, status: open,
+      claim: 'el reporte de corrida no distingue cero borrados de cero corridas',
+      falsified_by: 'un reporte que los distinga',
+      log_line: 'cleanup.report deleted=<n> ran=<bool>' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

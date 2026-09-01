@@ -21,6 +21,7 @@ Contract: references/render.md
 from __future__ import annotations
 
 import argparse
+import datetime
 import html
 import json
 import os
@@ -334,6 +335,52 @@ def collect_datums(facts: dict) -> dict[str, list[str]]:
     return datums
 
 
+AGENT_RE = re.compile(r"claude|gpt|gemini|llama|opus|sonnet|haiku|o[0-9]|agent|bot",
+                      re.I)
+ACCEPTED_FIELDS = ("by", "decided_on", "until", "because")
+
+
+def _date(value) -> datetime.date | None:
+    if isinstance(value, datetime.date):
+        return value
+    try:
+        return datetime.date.fromisoformat(str(value).strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def accepted_state(entry: dict, today: datetime.date | None = None) -> tuple[str, str]:
+    """How an `accepted:` block stands right now.
+
+    -> ("none"|"live"|"expired"|"malformed", detail)
+
+    G1 refuses `shipped` while a root cause is asserted, and that is right. What it
+    had no room for is the legitimate case: the team knows the cause is unproven,
+    ships the trimmed scope anyway, and schedules the measurement. Without a field
+    that decision goes into a log entry or an agent's memory, and neither is read by
+    the audit, the next agent, or this view — so "we looked and chose to wait" is
+    indistinguishable from "nobody looked".
+
+    It is a deferral with a deadline, not an exemption: `until:` expires, and past it
+    G1 refuses again. That expiry is what a memory cannot do."""
+    acc = entry.get("accepted")
+    if not isinstance(acc, dict):
+        return "none", ""
+    missing = [k for k in ACCEPTED_FIELDS if not acc.get(k)]
+    if missing:
+        return "malformed", f"`accepted:` lacks {', '.join(missing)}"
+    if AGENT_RE.search(str(acc["by"])):
+        return "malformed", (f"`accepted.by: {acc['by']}` looks like an agent — a risk "
+                             "is accepted by a person, on their own behalf")
+    until = _date(acc["until"])
+    if until is None:
+        return "malformed", f"`accepted.until: {acc['until']}` is not a YYYY-MM-DD date"
+    today = today or datetime.date.today()
+    if until < today:
+        return "expired", f"accepted until {until}, which passed {(today - until).days} days ago"
+    return "live", f"accepted by {acc['by']} until {until}"
+
+
 def status_gate(facts: dict, claims: list[dict]) -> list[str]:
     """Gate G1 (references/evidence.md): `shipped` while a cause is asserted."""
     warnings = []
@@ -341,9 +388,17 @@ def status_gate(facts: dict, claims: list[dict]) -> list[str]:
         for d in facts.get("defects") or []:
             if isinstance(d, dict) and d.get("role") in ("root_cause", "contributing") \
                     and str(d.get("basis")) == "asserted" and d.get("status") != "dead":
+                state, detail = accepted_state(d)
+                if state == "live":
+                    continue  # a deferral with a deadline, recorded and not yet due
+                suffix = {
+                    "none": " and no `accepted:` block records a decision to ship anyway",
+                    "expired": f" — {detail}",
+                    "malformed": f" — {detail}",
+                }[state]
                 warnings.append(
                     f"G1: status is `shipped` but defect {d.get('id', '?')} "
-                    f"({d.get('role')}) is still `basis: asserted`."
+                    f"({d.get('role')}) is still `basis: asserted`{suffix}."
                 )
     for c in claims:
         if c["basis"] == "measured":

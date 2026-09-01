@@ -93,6 +93,14 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("27", "F5"),           # wrote its outcome
       ("27", "F6")]),         # its dependency is still alive
 
+    # G1 gains a third state: a deferral with a deadline, recorded on paper.
+    ("accepted-risk",
+     [("1b/14", "R2"),            # the date passed — G1 refuses again
+      ("1b/14", "R3"),            # `accepted:` with no `until:` excuses nothing
+      ("1b/14", "R4"),            # an agent cannot accept a risk on its own behalf
+      ("1b/14", "R5")],           # no `accepted:` at all — original behaviour
+     [("1b/14", "R1")]),          # recorded, not yet due
+
     # §1.6 — cheap-to-verify state asserted anyway.
     ("tracking-drift",
      [("28", "a-branch-that-was-never-created"),
