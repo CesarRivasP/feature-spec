@@ -139,6 +139,17 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("9", "02-implementation-and-e2e.md is not on disk")],
      []),
 
+    # §9, the direction that did not exist: disk -> docs[]. `check_docs_on_disk`
+    # asked whether each declared doc is present; nothing asked the inverse, so a
+    # file on the theme that no entry names sat outside the source-of-truth net.
+    # Both rejects are the classes a naive glob turns into noise.
+    ("sibling-doc/docs/features/sibling-doc",
+     [("9", "sibling-doc-actionables.md"),   # inside the spec dir, unregistered
+      ("9", "sibling-doc-decisions.md")],    # adjacent to it, matched by *<slug>*
+     [("9", "other-feature-notes.md"),       # same directory, another feature
+      ("9", "legacy-notes.md"),              # named by `related_docs[]`
+      ("9", "_log.md")]),                    # set machinery, never a docs[] member
+
     # §15 — a spec folder copied between projects, profile travelling along. Both
     # halves are pure string comparison and both were left to the human pass.
     ("foreign-profile",
@@ -171,6 +182,101 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
 ]
 
 
+# (fixture, expect[(check, text)], reject[(check, text)]) — CANDIDATES, not findings.
+#
+# A candidate is a mechanical hit on a check whose verdict needs a document read, so
+# it carries no severity and never enters `## Findings`. For these four checks the
+# `reject` column is the one that matters: an over-reporting sweep costs the reader
+# more tokens than the check saves, which is the opposite of why it was mechanized.
+CANDIDATE_CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
+    # §8 — the check the protocol says the mechanical audit is blind to, and the one
+    # nobody runs by hand: catching it by eye means re-reading every document looking
+    # for something defined by NOT being in the registry.
+    ("prose-orphan",
+     [("8", "invoice_id"),                    # ```json fence, no contract keys
+      ("8", "/webhook/billing-callback"),     # ```http fence, no endpoints entry
+      ("8", "abcd.supabase.co"),              # provider-hosted function URL
+      ("8", "/api/v2/invoices"),              # bare API path in prose
+      ("8", "miapp://reset-password")],       # deep-link URI
+     [("8", "conversation_id"),               # keys ARE contracts.chat_request's
+      ("8", "error_code"),                    # keys drifted, but the prose above
+                                              #   cites the contract by id — whether
+                                              #   the fields still match is check 3
+      ("8", "/webhook/chat-result"),          # endpoints.external_get's own value
+      ("8", "example.com"),                   # a host that exists to be an example
+      ("8", "developer.mozilla.org"),         # a markdown link target: documentation
+      ("8", "github.com/CesarRivasP"),        # a page URL, no API path, no function
+      ("8", "ts_only_key"),                   # ```ts is not interface material
+      ("8", "ts-fence.workers.dev"),          #   nor is the URL inside it
+      ("8", "bash-fence.workers.dev")]),      # a curl line is the command, not the
+                                              #   interface — the sweep is over PROSE
+
+    # Checks 3 and 8 partition the same fences and neither reports the other's
+    # cases. This is the seam, asserted from check 3's side in the fixture that
+    # belongs to check 8: a fence ATTRIBUTED to a contract by id is check 3's even
+    # when it shares no field with it, and a fence attributed to nothing has no
+    # contract to be compared against and is check 8's alone.
+    ("prose-orphan",
+     [("3", "error_code")],
+     [("3", "invoice_id")]),
+
+    # §3 — the diff is arithmetic; the exception is not. A field the sender injects
+    # downstream is legitimate IF a doc note explains it, and the script cannot read
+    # the note. So the diff is a candidate and finding the note is the human's job.
+    ("contract-shape",
+     [("3", "trace_id"),                      # a field injected downstream
+      ("3", "delivered_url"),                 # renamed: how a contract breaks quietly
+      ("3", "form_gamma")],                   # a field that is simply missing
+     [("3", "echo_alpha"),                    # same fields, different order
+      ("3", "chat_status"),                   # diffed against response_ok, not the
+                                              #   request body — comparing against the
+                                              #   entry's flattened fields would report
+                                              #   every response as broken
+      ("3", "href"),                          # a nested key is not a field of this
+                                              #   block; the contract declares the
+                                              #   field, not its interior
+      ("3", "tolerant_key"),                  # comments, elipsis and a trailing comma:
+                                              #   it does not parse and still has a shape
+      ("3", "unrelated_alpha"),               # shares nothing — check 8's, not this one
+      ("3", "ts_shape_key")]),                # ```ts is not interface material
+
+    # §4 — the check whose protocol entry says outright that mechanical sweeps
+    # over-report, so every guard here exists to keep the list short enough to read.
+    # The split doc is where its worst case lives: a ref that resolves in the other
+    # half reads as valid and sends the executor to the wrong file.
+    ("cross-refs",
+     [("4", "docs[]` does not list"),          # `ver doc 04` with no 04 in docs[]
+      ("4", "§9.9"),                          # resolves nowhere
+      ("4", "§7.2 is unqualified"),           # resolves in the OTHER half of a split
+      ("4", "§2.9 is unqualified")],          # a prefix does not distribute across a
+                                              #   list: only the first ref is into `02`
+     [("4", "1.5"),                           # local and present
+      ("4", "7.6"),                           # qualified and present
+      ("4", "3.1"),                           # `§3.1 de 02` — the prefix after the ref
+      ("4", "3.6"),                           # exempt shape (a): quoted AS TEXT, a
+                                              #   defect being described, not a target
+      ("4", "5.5")]),                         # inside a fenced block
+
+    # §13 — three of eight sub-bullets. The other five stay human and the protocol's
+    # own enumeration says why: the last one names "judgment" outright.
+    ("doc02-exec",
+     [("13", "path/to/"),                     # unresolved path
+      ("13", "…/c"),                          # an elided path is the same defect
+      ("13", "componente correspondiente"),   # the parenthetical that defers the choice
+      ("13", "etc."),                         # a step that enumerates by etc.
+      ("13", "análogo a lo anterior"),
+      ("13", "secreto")],                     # reaches outside the checkout, unlabelled
+     [("13", "DNS"),                          # labelled `[MANUAL]` — the label IS the
+                                              #   answer, not the absence of the step
+      ("13", "similares"),                    # narrative, not a step: no list marker
+      ("13", "and so on"),                    # inside a code fence
+      ("13", "API key"),                      # an identifier in a snippet is not an
+                                              #   instruction to go and get one
+      ("13", "01-master-plan.md")]),          # scoped to doc 02, which is what
+                                              #   stage-gates this check
+]
+
+
 def run(fixture: str) -> list[dict]:
     """Every fixture is a hermetic mini-repo.
 
@@ -198,9 +304,58 @@ def run(fixture: str) -> list[dict]:
     return json.loads(out.stdout)["findings"]
 
 
+def run_candidates(fixture: str) -> dict[str, list[dict]]:
+    root = FIXTURES / fixture.split("/", 1)[0]
+    spec = FIXTURES / fixture
+    out = subprocess.run(
+        [sys.executable, str(AUDIT), str(spec), "--repo-root", str(root), "--json"],
+        capture_output=True, text=True)
+    if out.returncode not in (0, 1):
+        raise AssertionError(f"{fixture}: audit.py crashed\n{out.stderr}")
+    return json.loads(out.stdout).get("candidates", {})
+
+
 def matches(findings: list[dict], check: str, text: str) -> bool:
     return any(check in f["check"] and (text in f["what"] or text in f["where"])
                for f in findings)
+
+
+def cand_matches(candidates: dict[str, list[dict]], check: str, text: str) -> bool:
+    return any(text in c["what"] or text in c["where"]
+               for c in candidates.get(check, []))
+
+
+def candidates_stay_out_of_findings() -> list[str]:
+    """The contract the whole design rests on, asserted across every fixture.
+
+    A candidate has no severity — the script does not know yet whether it is a
+    CONTRADICTION, a DRIFT or nothing at all. Putting one in `## Findings` means
+    inventing a severity, and then the verdict line counts something nobody has
+    judged. `N contradictions, M drift` has to mean what it says or the report is
+    worth less than no report.
+
+    The second half is the omission bug one level down: a candidate group whose
+    check is missing from `HUMAN_PASS` would be computed and then never printed
+    beside the check it belongs to. Every generator's key must be a listed check.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from audit import HUMAN_PASS  # noqa: E402
+
+    listed = {num for num, _, _, _ in HUMAN_PASS}
+    problems = []
+    for fixture, _, _ in CASES + CANDIDATE_CASES:
+        for check in run_candidates(fixture):
+            if check not in listed:
+                problems.append(
+                    f"{fixture}: candidates emitted under check {check}, which "
+                    "HUMAN_PASS does not list — they are computed and never printed")
+        for finding in run(fixture):
+            if finding["check"].split()[0] in ("3", "4", "8", "13"):
+                problems.append(
+                    f"{fixture}: check {finding['check']} produced a FINDING "
+                    f"({finding['where']}); these four generate candidates, and a "
+                    "candidate with an invented severity makes the verdict lie")
+    return problems
 
 
 def human_pass_is_complete() -> list[str]:
@@ -211,15 +366,25 @@ def human_pass_is_complete() -> list[str]:
     silently skipped, which is the one failure this script exists to prevent. A
     check leaves `HUMAN_PASS` only by being mechanized and losing its `[human]` tag
     in the protocol, and this test is what forces those two edits to happen together.
+
+    The regex reads BOTH tags, and that is the whole point. It used to read `[human]`
+    alone, so retagging a check to `[script + human]` — the correct move the moment a
+    script starts generating its candidates — silently released it from this test and
+    let it drop out of `HUMAN_PASS` with nothing failing. That is the v1.6.0 bug
+    rebuilt out of the fix for it. `[script + human]` means the script narrows the
+    search and a person still has to look; it does not mean the check is done, so it
+    STAYS listed. Checks 9, 15 and 16 were already tagged that way and already
+    missing, which is what this widening surfaced.
     """
     sys.path.insert(0, str(ROOT / "scripts"))
     from audit import HUMAN_PASS  # noqa: E402
 
     protocol = (ROOT / "references" / "audit-protocol.md").read_text(encoding="utf-8")
-    tagged = set(re.findall(r"^### ([\w.]+)\..* — \[human\]", protocol, re.M))
+    tagged = set(re.findall(
+        r"^### ([\w.]+)\..* — \[(?:human|script \+ human)\]", protocol, re.M))
     listed = {num for num, _, _, _ in HUMAN_PASS}
-    return [f"protocol tags check {n} `[human]` but HUMAN_PASS does not list it "
-            "— it is neither run nor printed" for n in sorted(tagged - listed)]
+    return [f"protocol tags check {n} for a human pass but HUMAN_PASS does not list "
+            "it — it is neither run nor printed" for n in sorted(tagged - listed)]
 
 
 def main() -> int:
@@ -228,6 +393,29 @@ def main() -> int:
 
     total += 1
     failures += human_pass_is_complete()
+    total += 1
+    failures += candidates_stay_out_of_findings()
+
+    for fixture, expect, reject in CANDIDATE_CASES:
+        candidates = run_candidates(fixture)
+        for check, text in expect:
+            total += 1
+            if not cand_matches(candidates, check, text):
+                failures.append(
+                    f"{fixture}: check {check} did NOT offer {text!r} as a candidate")
+        for check, text in reject:
+            total += 1
+            if cand_matches(candidates, check, text):
+                failures.append(
+                    f"{fixture}: check {check} wrongly offered {text!r} as a "
+                    "candidate (known false positive — an over-reporting sweep "
+                    "costs more tokens than the check saves)")
+        if verbose:
+            print(f"--- {fixture} (candidates)")
+            for check, items in sorted(candidates.items()):
+                for c in items:
+                    print(f"      [{check}] {c['where']}: {c['what'][:80]}")
+
     for fixture, expect, reject in CASES:
         findings = run(fixture)
         for check, text in expect:
@@ -246,7 +434,7 @@ def main() -> int:
                 print(f"      [{f['check']}] {f['where']}: {f['what'][:80]}")
 
     print(f"\n{total - len(failures)}/{total} assertions passed "
-          f"across {len(CASES)} fixtures")
+          f"across {len(CASES) + len(CANDIDATE_CASES)} fixtures")
     for f in failures:
         print(f"  FAIL {f}")
     return 1 if failures else 0

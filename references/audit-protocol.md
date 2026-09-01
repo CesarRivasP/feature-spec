@@ -18,6 +18,13 @@ Each check below is marked with who runs it:
 - **[human]** — needs judgment (wording, normalization, whether a reader would *follow* a ref) and is listed in the script's output so it cannot be quietly skipped.
 - **[script + human]** — the script finds candidates, a person confirms them.
 
+A `[script + human]` check is **still listed under `REQUIRES A HUMAN PASS`**. Narrowing
+the search is not finishing it, and a candidate list nobody is told to read is a list
+nobody reads. `tests/test_audit.py` derives the required listing from *both* tags, so
+retagging a check here without giving it an entry in `HUMAN_PASS` fails the suite —
+which is the v1.6.0 omission bug (checks 2, 5, 8, 11 and 12 tagged, unmechanized and
+unlisted, so skipped in silence on every run) rebuilt out of its own fix.
+
 One check is deliberately **not** automated: **1b's re-run of `evidence.cmd`**. A registry is a data file that travels between repos and agents; a tool that executes commands out of it because it claims they are safe is a tool that can be handed a malicious registry. Re-running evidence is a human step and the script says so.
 
 ## Inputs
@@ -85,11 +92,18 @@ Full contract in `references/evidence.md`.
 ### 2. Singletons unique — [human]
 `dates.*`, revision tags, `tests_baseline`, version numbers must be identical in every doc that mentions them. Any variance → `CONTRADICTION`.
 
-### 3. Contract shape — [human]
+### 3. Contract shape — [script + human]
 Each JSON payload/response block in prose must match `contracts.*` field-for-field (same keys, same nesting). Extra/missing/renamed field → `CONTRADICTION`. Note: a field the sender injects downstream (not in the client body) is allowed IF a doc note explains it — flag as `POLISH` if the note is missing.
 
-### 4. Cross-refs resolve — [human]
+- **[script]** — the key-set diff is arithmetic and comes out as **candidates**. A contract entry holds several payloads (`request_body`, `response_ok`, `response_err`) and a fence shows one of them, so a fence is diffed against the payload it resembles; comparing against the entry's flattened field set would report every response field as missing from every request fence. Only brace-depth-1 keys count — a contract that declares a field but not its interior must not have every nested key reported as extra.
+- **[human]** — the exception, which is the reason this is a candidate and not a finding: a field the sender injects downstream is legitimate **if a doc note explains it**, and the script cannot read the note. Find the note, or write the `POLISH`.
+- **The seam with check 8 is exact, and neither check reports the other's cases:** a fence sharing no field with any payload has no contract to be compared against and is check 8's (prose-orphan); a fence sharing some but not all is this check's; a fence matching one payload exactly is silent in both. A fence the prose cites by `contracts.<id>` is judged here even when it shares nothing — being *attributed* to a contract is a stronger claim than resembling one.
+
+### 4. Cross-refs resolve — [script + human]
 Every "ver doc 0X §Y" / "see doc 0X" points to a doc in `docs[]` and a section that exists. Dangling ref → `DRIFT`.
+
+- **[script]** — the sweep runs and emits **candidates**: it strips fenced blocks and inline spans (except a bare doc id, which is this file's own prefix notation) before comparing, binds a prefix only to the `§` it touches — a prefix does not distribute — reads the `§3.5 de 02b` shape, and resolves each ref against the target's headings. The unqualified ref that resolves in the *other* half of a split doc is called out as such, because it reads as valid and sends the executor to the wrong file.
+- **[human]** — every hit, by eye. See the two exempt shapes below: (a) is stripped mechanically, **(b) is not and cannot be** — telling a changelog clause from five navigation targets means reading the sentence.
 - **If the set contains a split doc** (`02` + `02b`), an unqualified `§X.Y` is read as local to its own file. One that resolves in neither the local file nor anywhere → `DRIFT`; one that silently resolves to the *other* half is worse: it reads as valid but sends the executor to the wrong file → `CONTRADICTION`. Sweep with `rg -n '§[0-9]'` over both halves and require the doc prefix on every boundary-crossing ref.
 - **A prefix does not distribute across a list.** `` `02` §1.5, `02` §2.6, §3.6, §4.5, §5.3 `` reads as five refs into `02`, but the last three are local. Every element of a comma-separated ref list carries its own prefix, or none of them do and they're all local. Same for a prefix that appears *after* the ref (`§3.5 de 02b`) — legible to a human, invisible to a mechanical sweep, so prefer the prefix first.
 - **Refs inside changelog rows are still refs.** They're the ones that survive a doc split unqualified, because nobody re-reads a changelog when moving sections. Include changelog tables in the sweep — especially the "pending work you inherit" column, which is read as instructions.
@@ -107,15 +121,21 @@ Doc 02 "Definition of Done" (or, if 02 is split, whichever half holds it) == `_f
 Compare **only** `changes[]` (components created/modified) against each doc's "componentes que cambian" table / affected-modules enumeration. Missing/extra member → `CONTRADICTION`.
 - `related_docs[]` (referenced-but-unmodified docs) do **NOT** participate in scope parity — they are context pointers, not scope. A `related_doc` appearing in a "what changes" table is itself a `CONTRADICTION` (miscategorized: it's referenced, not modified). This is the "`manual-user-creation.md` (a reference) sat next to `resend-webhook` (a real new function) in one list" bug.
 
-### 8. Prose-orphan contracts & endpoints — [human]
+### 8. Prose-orphan contracts & endpoints — [script + human]
 Scan every doc for interface material that should live in the registry but might not:
 - ` ```json ` (and ` ```http `) code-fences → each payload/response must map to a `contracts.*` entry.
 - URL / endpoint shapes in prose (absolute API paths, `/webhook/...`, provider-hosted function URLs, deep-link URIs) → each must map to an `endpoints.*` entry.
 
 Any fence or URL with no registry home → `DRIFT` (prose-orphan contract — promote to `contracts.*`/`endpoints.*` so it becomes auditable). The mechanical audit is blind to contracts that live only in prose; this check is what surfaces them instead of relying on a human catching it by eye.
 
+- **[script]** — the script emits **candidates**, not findings, under this check in `REQUIRES A HUMAN PASS`. It flags a ```json fence whose keys intersect no `contracts.*` entry and whose preceding lines cite no contract by id; a ```http fence whose request target matches no `endpoints.*`; and an API-shaped URL, provider-function host, bare `/webhook/…` path or non-http deep-link URI in prose with no `endpoints.*` home.
+- **[human]** — the verdict on each candidate. A fence can legitimately show a fragment, an error body, or a third party's payload this set only reads; a URL can be a provider's documented callback that belongs in nobody's registry. Deciding needs the paragraph around it.
+- **Four shapes are excluded by design, and a sweep that reports them is producing noise:** example hosts (`example.com`, `localhost`, `<placeholder>`), markdown link targets — a documentation link is written `[text](url)` while an endpoint this system calls is written bare or in backticks — fences in any other language, and URLs *inside* fenced blocks. The sweep is scoped to **prose**: a `curl` line in a ```bash fence is the command, not the interface.
+
 ### 9. Sibling-doc detection — [script + human]
 Glob `docs/features/*<slug>*` (and adjacent files on the same theme under other names). Every match must be listed in `_facts.yml docs[]`.
+- **[script]** — the two globs are mechanical and the script runs them: every `.md` in the spec dir, and every adjacent `*<slug>*.md` beside it. A match named by no `docs[]`, `related_docs[]` or `changes[]` entry is a finding, not a candidate — a file is in the registry or it is not, and there is no judgment in between. Set machinery (`_facts.yml`, `_log.md`, `_profile.yml`) is never a `docs[]` member and is exempt.
+- **[human]** — the residue: a file on this feature's theme whose *name* shares nothing with the slug. No glob reaches it.
 - File on this feature's theme not in `docs[]` → `DRIFT`: an unregistered sibling. It's outside the source-of-truth net, so it drifts silently (real case: an `-actionables.md` said 17 where the set said 16). Resolve by integrating it into the set or registering it with `role: legacy`.
 - **The other direction, gated by stage:** a `docs[]` entry whose `stage:` the set has reached but whose file is not on disk → `DRIFT`. A set at `status: implementing` with no doc 02 is claiming a stage it never wrote. An entry whose stage is *not* reached and whose file is absent is correct and silent — see §Stage gating.
 
@@ -132,7 +152,7 @@ For every `evidence.date` — and, in a set still on the legacy shape this file 
 - `evidence.date` older than the most recent change to what it measures → `CONTRADICTION` (re-run `cmd`).
 - `evidence.date` older than 7 days on a volatile metric (prod counts, dashboard state) → `DRIFT`: re-measure before approval. Check 1b re-runs the command; this one flags the ones you'd never think to re-run because nothing looks wrong.
 
-### 13. Doc 02 executability — [human] *stage-gated (needs 02)*
+### 13. Doc 02 executability — [script + human] *stage-gated (needs 02)*
 Parte A is the input to the builder. Scan it for:
 - unresolved paths — `(o el componente correspondiente)`, `path/to/`, `…/algo` → `DRIFT`
 - named-but-undefined symbols — a constant/toast/env var referenced without its file, exported name, and literal value → `DRIFT`
@@ -143,6 +163,10 @@ Parte A is the input to the builder. Scan it for:
 - a B.1 row whose assert subject is a service/util symbol but whose target file is a page-level test → `DRIFT` (layer mismatch — reaching it only through the UI collapses it into whichever row already exercises that click)
 - a new persisted store with no full schema + access-control mechanism written out, in this stack's terms → `DRIFT` (see `references/implementable.md` §Schema / migrations)
 - a step needing a dashboard/DNS/secret/judgment not labeled `[MANUAL]` / `[OWNER EXTERNO]` → `DRIFT`
+
+**[script]** — three of those eight are regex-able and come out as **candidates**: unresolved paths (`path/to/`, `…/algo`, `(o el componente correspondiente)`), vague enumeration (`etc.`, `y similares`, `análogo a lo anterior`) and a step naming a dashboard/DNS/secret with no `[MANUAL]` label. The enumeration sweeps only lines shaped like a step — narrative that ends in "etc." is not an instruction anybody executes — and skip fenced blocks, since an identifier in a snippet is not an instruction to go and get one. The path sweep does read fences: a `path/to/` inside a paste-ready snippet is the defect at its worst, because that is the text the builder copies.
+
+**[human]** — the other five, and the protocol's own enumeration says why. Symbols named but not defined, edits with no anchor, B.1 rows worded as parity or negation, a persisted store's schema, and *"a step that needs a dashboard/DNS/secret/**judgment**"* — the last names judgment outright, and the four before it each ask whether something ELSEWHERE supplies what the step assumes, which is what a line-oriented sweep is structurally unable to ask.
 
 Rationale in `references/implementable.md`. Each of these is a question the builder must stop and ask — which is the same as a round trip.
 

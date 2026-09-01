@@ -1,0 +1,23 @@
+# Check 3 as a candidate generator. Each contract holds several payloads and a
+# fence shows one of them, so a fence is diffed against the payload it resembles —
+# comparing against the entry's flattened field set would report every response
+# field as missing from every request fence.
+feature: contract-shape
+status: draft
+profile: ../_profile.fixture.yml
+defects: []
+acceptance: []
+contracts:
+  chat_request:
+    request_body: [conversation_id, prompt, locale]
+    response_ok: { chat_status: string, chat_href: string }
+  webhook_result:
+    request_body: [job_id, output_url]
+  partial_form:
+    request_body: [form_alpha, form_beta, form_gamma]
+  exact_echo:
+    request_body: [echo_alpha, echo_beta]
+  tolerant:
+    request_body: [tolerant_key, tolerant_other]
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

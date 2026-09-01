@@ -29,7 +29,7 @@ cp -R feature-spec ~/.claude/skills/
 To pin a version instead of tracking `main`:
 
 ```bash
-git clone --branch v1.6.0 --depth 1 git@github.com:CesarRivasP/feature-spec.git
+git clone --branch v1.7.0 --depth 1 git@github.com:CesarRivasP/feature-spec.git
 ```
 
 Restart the session so the skill is picked up. No MCP servers, no package to install: the skill itself is markdown and YAML.
@@ -109,7 +109,9 @@ python3 scripts/audit.py docs/features/<slug>/
 
 The protocol's checks are good; the problem was that **an agent runs the ones it remembers**. A rough version of this script, run against three sets that had each already passed a "clean" hand audit against the same protocol, found 12, 11 and 7 findings — broken anchors, a corrupted top-level key, orphan ids. None subtle.
 
-It runs every check a program can run and prints the rest under `REQUIRES A HUMAN PASS`, so a skipped check is visible rather than silent. It never executes `evidence.cmd`: a registry is a data file that travels between repos and agents, and running commands out of one because it says they are safe is what an auditor must not do.
+It runs every check a program can run and prints the rest under `REQUIRES A HUMAN PASS`, so a skipped check is visible rather than silent.
+
+Four of those checks — 3, 4, 8 and 13 — narrow the search before handing it over: the script prints a short list of **candidates** under the check they belong to. A candidate is not a finding and never appears in `## Findings`: it has no severity yet, and inventing one would make the verdict count things nobody has judged. Read the candidate list instead of re-reading the documents, and decide each one — the exception that legitimises it is usually a note the script cannot read. It never executes `evidence.cmd`: a registry is a data file that travels between repos and agents, and running commands out of one because it says they are safe is what an auditor must not do.
 
 ### Reading a set
 
@@ -238,7 +240,8 @@ If anything outside this repo reads `docs/features/`, check its patterns when yo
 
 | version | what it added |
 |---|---|
-| [**v1.6.0**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.6.0) | checks 2, 5, 8, 11 and 12 were tagged `[human]`, never mechanized, and never listed under `REQUIRES A HUMAN PASS` — so they were not run and not printed, which is the one failure the script exists to prevent. A test now derives the list from the protocol and fails when a tagged check is missing from it. Check 15 gained its two pure-comparison halves: a `_profile.yml` whose `repo:` names another checkout, or whose `app:` does not govern the directory holding the spec — the spec folder copied between projects, every `cmd` in it now belonging to a different repo and every one of them still running |
+| [**v1.7.0**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.7.0) | a `[human]` check made the LLM re-read three whole documents to answer a question a grep can narrow to ten lines. Checks 3, 4, 8 and 13 now emit **candidates** — a third kind of output, printed under their check in `REQUIRES A HUMAN PASS`, never in `## Findings`, because a candidate has no severity yet and inventing one makes the verdict count things nobody has judged. Each stops where judgment starts: check 3 diffs key sets but cannot read the note that legitimises an injected field, check 4 strips the exempt shape it can and leaves the one it cannot, check 13 takes three of its eight sub-bullets and leaves the five that ask what happens elsewhere. There are more rejects than expects in the suite, which is the point: a sweep that over-reports costs more tokens than the check saves. Check 9 gained the direction that did not exist — a file on the feature's theme that no `docs[]` entry names, outside the source-of-truth net and drifting in silence |
+| [v1.6.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.6.0) | checks 2, 5, 8, 11 and 12 were tagged `[human]`, never mechanized, and never listed under `REQUIRES A HUMAN PASS` — so they were not run and not printed, which is the one failure the script exists to prevent. A test now derives the list from the protocol and fails when a tagged check is missing from it. Check 15 gained its two pure-comparison halves: a `_profile.yml` whose `repo:` names another checkout, or whose `app:` does not govern the directory holding the spec — the spec folder copied between projects, every `cmd` in it now belonging to a different repo and every one of them still running |
 | [v1.5.1](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.5.1) | every enum field is read lowercased. `status: Shipped` used to rank as unknown — which ranks as `draft` — so a shipped set audited as a draft: G1 clean and four checks skipped, with a root cause still asserted. A gate that fails open is worse than no gate |
 | [v1.5.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.5.0) | shipping with a root cause still asserted is allowed **once, in writing, with an expiry date** — `defects[].accepted: { by, decided_on, until, because }`. Deciding to ship the trimmed scope and measure later is a real call; recording it in a log entry or an agent's memory is not, because neither can be checked against a date |
 | [v1.4.2](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.4.2) | the `_log.md` entry is **opened before the work and completed after**, not appended at the end — the round that most needs a record is the one that never reaches the end. A delegated agent wrote four documents and hit a session limit before writing its entry; from outside it had produced nothing |
