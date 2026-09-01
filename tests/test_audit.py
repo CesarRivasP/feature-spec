@@ -150,13 +150,48 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
     ("starter-profile",
      [],
      [("15", "basename of the git root"), ("15", "app subdir")]),
+
+    # §15 — the half foreign-profile cannot cover: a profile that MATCHES. `repo:` is
+    # this mini-repo's own basename, `app:` is the subdir really holding the spec.
+    # Both comparisons shipped in v1.6.0 with no case proving they can come out clean,
+    # and a check that only ever fires reads the same as one that always fires. The
+    # first reject is also what makes renaming this fixture directory loud: the name
+    # and the `repo:` value are coupled, and the day they disagree this fails.
+    ("nested-profile/apps/mobile",
+     [],
+     [("15", "but this checkout is"), ("15", "does not govern")]),
+
+    # §15 — `app:` against a spec that genuinely lives in a subdirectory. `apps/consumer`
+    # exists; it is simply not the one holding this spec. foreign-profile reports the
+    # same finding for a weaker reason — its spec sits at the repo root, so `parts` is
+    # empty and NO value of `app:` could have governed it. Here the comparison works.
+    ("sibling-app/apps/mobile",
+     [("15", "apps/consumer")],
+     [("15", "but this checkout is")]),
 ]
 
 
 def run(fixture: str) -> list[dict]:
-    d = FIXTURES / fixture
+    """Every fixture is a hermetic mini-repo.
+
+    `--repo-root` is the fixture's own directory, so every path check 20 resolves,
+    every file check 18 globs for and every basename check 15 compares against comes
+    from inside the fixture and from nothing else. Dropping the flag would point all
+    three at feature-spec itself, where `scripts/` and `references/` happen to exist
+    and `main` happens to be a branch — a fixture would then pass by borrowing the
+    host repo's contents, which is the one failure mode a test suite cannot detect.
+    A fixture that needs a path, a file or a branch to exist declares it and creates
+    it inside itself.
+
+    A name carrying a `/` splits the two roles apart: `nested-profile/apps/mobile`
+    audits that spec dir with `nested-profile/` as the repo root. That is the only
+    way to exercise a spec which does NOT sit at the root of its checkout — the
+    normal shape in a real project, and the one check 15's `app:` half is about.
+    """
+    root = FIXTURES / fixture.split("/", 1)[0]
+    spec = FIXTURES / fixture
     out = subprocess.run(
-        [sys.executable, str(AUDIT), str(d), "--repo-root", str(d), "--json"],
+        [sys.executable, str(AUDIT), str(spec), "--repo-root", str(root), "--json"],
         capture_output=True, text=True)
     if out.returncode not in (0, 1):
         raise AssertionError(f"{fixture}: audit.py crashed\n{out.stderr}")

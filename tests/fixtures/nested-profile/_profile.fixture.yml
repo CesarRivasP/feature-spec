@@ -1,0 +1,12 @@
+# The profile of the checkout it was actually written for: `repo:` is this mini-repo's
+# own basename and `app:` names the subdir that really does hold the spec. Check 15's
+# two string comparisons must stay silent here.
+#
+# This is the half `foreign-profile` cannot cover. A check that only ever fires is
+# indistinguishable from a check that always fires, and the `repo:` comparison shipped
+# in v1.6.0 with no fixture proving it can also pass.
+repo: nested-profile
+app: apps/mobile
+prose_language: es
+commands:
+  tests: npm test

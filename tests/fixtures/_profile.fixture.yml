@@ -11,8 +11,19 @@
 # `--repo-root <fixture dir>`, so the basename check 15 compares against is the
 # fixture's own name — a `repo:` here would have to be nineteen different values,
 # each coupled to a directory name, and each one silently wrong the day someone
-# renames a fixture. Absent keys are the honest state: this file exists to resolve,
-# and the fixtures that exercise check 15 with real values carry their own profile.
+# renames a fixture. Absent keys are the honest state: this file exists to resolve.
+#
+# Check 15's two string comparisons are covered by four fixtures that carry their own
+# profile, one per outcome, rather than by nineteen redundant passes here:
+#
+#   foreign-profile   `repo:` names another checkout        — CONTRADICTION
+#   sibling-app       `app:` names a real sibling subdir    — CONTRADICTION
+#   nested-profile    both match the checkout they describe — silent
+#   starter-profile   both still on `<angle brackets>`      — silent
+#
+# Only one of those couples a value to a directory name (nested-profile's `repo:`),
+# and tests/test_audit.py rejects the mismatch finding, so a rename fails loudly
+# instead of quietly weakening the case.
 prose_language: es
 commands:
   tests: npm test
