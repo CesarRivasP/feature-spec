@@ -2,7 +2,7 @@
 # Fase 9. Caught by re-reading headings by hand, not by the audit.
 feature: duplicate-phase
 status: implementing
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects: []
 docs:
   - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

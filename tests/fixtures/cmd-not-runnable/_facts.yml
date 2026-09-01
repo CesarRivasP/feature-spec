@@ -6,7 +6,7 @@
 # and a naive sweep flags every measured curl probe in the set.
 feature: cmd-not-runnable
 status: draft
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects: []
 limits:
   l1_prose_ref:

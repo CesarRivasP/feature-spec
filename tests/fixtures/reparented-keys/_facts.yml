@@ -3,7 +3,7 @@
 # 13. The YAML was valid, every datum survived, and the audit passed clean.
 feature: reparented-keys
 status: draft
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects:
   - { id: D1, role: symptom, claim: 'el filtro acepta el MIME compuesto', basis: decided }
   - { id: A1, outcome: discarded, because: 'clamping is enough', basis: decided }

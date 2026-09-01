@@ -7,7 +7,7 @@
 # l2 is a shell pipe, not an alternation, and must NOT be reported.
 feature: cmd-alternation
 status: draft
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects: []
 limits:
   l1_alternation:

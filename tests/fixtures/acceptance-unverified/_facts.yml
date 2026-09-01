@@ -12,7 +12,7 @@
 # not propagating it to the other.
 feature: acceptance-unverified
 status: shipped
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects: []
 acceptance:
   - { id: AC1, item: 'alguien se entera de que el cron dejó de correr', status: written }

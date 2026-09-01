@@ -4,7 +4,7 @@
 # one set at a time.
 feature: legacy-no-stage
 status: draft
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects: []
 docs:
   - { id: "01", file: 01-master-plan.md, role: master-plan }

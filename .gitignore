@@ -7,7 +7,9 @@ Thumbs.db
 .idea/
 *.swp
 
-# a filled profile belongs to a repo, never to this one
+# a filled profile belongs to a repo, never to this one. Test fixtures need one
+# that survives a clone, so they use `_profile.fixture.yml` — see
+# tests/fixtures/_profile.fixture.yml for why the name differs.
 _profile.yml
 
 # derived: the HTML view is regenerated, never authored
