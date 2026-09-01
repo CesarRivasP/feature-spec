@@ -14,7 +14,7 @@
 #   R5 none      - the original behaviour, unchanged.
 feature: accepted-risk
 status: shipped
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 acceptance:
   - { id: AC1, item: 'el cron borra todo lo que supera el tope', status: approved,
       verified_on: 2026-08-30 }

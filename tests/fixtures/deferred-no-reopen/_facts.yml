@@ -3,7 +3,7 @@
 # must NOT be reported.
 feature: deferred-no-reopen
 status: draft
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects: []
 changes:
   - { id: C1, file: src/a.ts, kind: deferred, change: 'la tabla durable de corridas' }

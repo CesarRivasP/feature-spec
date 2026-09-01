@@ -4,7 +4,7 @@
 # (§2.2), and a local mirror id is never the answer.
 feature: orphan-and-crossset
 status: draft
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects:
   - { id: D1, role: symptom, claim: 'el filtro acepta application/pdf/x', basis: decided }
   - { id: D2, role: cosmetic, claim: 'el toast queda 300 ms de mas', basis: decided }

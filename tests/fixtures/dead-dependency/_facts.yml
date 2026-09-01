@@ -3,7 +3,7 @@
 # risk is a valid answer, and is itself an outcome. F6 depends on something alive.
 feature: dead-dependency
 status: draft
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects:
   - { id: F2, role: symptom, basis: decided, status: open, depends_on: [F3],
       claim: 'el filtro acepta application/pdf/x' }

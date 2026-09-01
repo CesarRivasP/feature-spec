@@ -6,7 +6,7 @@
 # and not in a field, so no tool could follow the arrow.
 feature: undeclared-depends
 status: draft
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects:
   - { id: F2, role: symptom, basis: decided, status: open,
       claim: 'el filtro acepta application/pdf/x',

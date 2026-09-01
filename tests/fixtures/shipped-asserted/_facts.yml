@@ -6,7 +6,7 @@
 # A3 was discarded on a premise (D3) that has since died.
 feature: shipped-asserted
 status: shipped
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects:
   - { id: D1, role: root_cause, claim: 'el cron deja de correr sin avisar',
       basis: asserted, falsified_by: 'una corrida registrada en las ultimas 3h',

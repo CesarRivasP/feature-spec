@@ -6,7 +6,7 @@
 # p1 describes the config. p2 pastes what the provider actually answered.
 feature: provider-behavior
 status: draft
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects: []
 limits:
   p1_described:

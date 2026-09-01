@@ -1,0 +1,18 @@
+# One resolvable profile for every fixture that is not about profiles.
+#
+# `_profile.yml` is gitignored on purpose — a filled profile belongs to a repo and
+# never to this one — so a fixture using that name exists only on the machine that
+# wrote it. Nineteen of them declared `profile: _profile.yml`, and on any fresh
+# clone all nineteen reported `does not resolve`: a CONTRADICTION nobody could act
+# on, in the suite of the tool whose whole job is catching a declared path that
+# is not there.
+#
+# `repo:` and `app:` are deliberately absent. The harness runs each fixture with
+# `--repo-root <fixture dir>`, so the basename check 15 compares against is the
+# fixture's own name — a `repo:` here would have to be nineteen different values,
+# each coupled to a directory name, and each one silently wrong the day someone
+# renames a fixture. Absent keys are the honest state: this file exists to resolve,
+# and the fixtures that exercise check 15 with real values carry their own profile.
+prose_language: es
+commands:
+  tests: npm test

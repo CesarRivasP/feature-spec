@@ -4,7 +4,7 @@
 # `issues: []` stayed empty in three sets long after the issues existed.
 feature: tracking-drift
 status: shipped
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects: []
 acceptance:
   - { id: AC1, item: 'el borrado respeta el cap', status: approved, verified_on: 2026-08-30 }

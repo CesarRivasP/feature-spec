@@ -3,7 +3,7 @@
 # The sibling set carried eight bare `index.ts:18` with no path at all.
 feature: anchor-drift
 status: draft
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 changes:
   - { id: C1, file: src/chat.ts, kind: planned, change: 'anchor at src/chat.ts:341 — moved by a later fix' }
 docs:

@@ -3,7 +3,7 @@
 # decided against, so its absence is by design. Only C1 may be reported.
 feature: declared-file
 status: shipped
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 defects: []
 changes:
   - { id: C1, file: src/gone.ts, kind: planned, change: 'toca un archivo inexistente' }

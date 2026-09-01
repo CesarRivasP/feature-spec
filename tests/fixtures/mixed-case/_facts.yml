@@ -9,7 +9,7 @@
 # The prose also cites `Defects.M1` with a capital D, which must still resolve.
 feature: mixed-case
 status: Shipped
-profile: _profile.yml
+profile: ../_profile.fixture.yml
 acceptance:
   - { id: AC1, item: 'el borrado respeta el cap del proveedor', status: Approved,
       verified_on: 2026-08-30 }
