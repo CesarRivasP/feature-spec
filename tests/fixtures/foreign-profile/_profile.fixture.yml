@@ -1,0 +1,7 @@
+# The real case: a spec folder was copied from another project and the profile
+# travelled with it. Every `cmd` below still runs — against the wrong repo.
+repo: some-other-checkout
+app: apps/consumer
+prose_language: es
+commands:
+  tests: npm test

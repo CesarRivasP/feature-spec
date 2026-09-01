@@ -1,0 +1,7 @@
+feature: starter-profile
+status: draft
+profile: _profile.fixture.yml
+defects: []
+acceptance: []
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

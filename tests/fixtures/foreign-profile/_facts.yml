@@ -1,0 +1,9 @@
+# Check 15, the two halves that are pure string comparison: the profile names a
+# repo that is not this checkout, and an app subdir that does not hold this spec.
+feature: foreign-profile
+status: draft
+profile: _profile.fixture.yml
+defects: []
+acceptance: []
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

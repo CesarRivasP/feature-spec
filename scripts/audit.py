@@ -76,15 +76,19 @@ class Findings:
 # loading
 # --------------------------------------------------------------------------
 
-def repo_root_for(spec_dir: Path, override: str | None) -> Path:
+def repo_root_for(spec_dir: Path, override: str | None) -> tuple[Path, bool]:
+    """Returns the root and whether it is a REAL one. On the fallback the root is
+    the spec dir itself, which is a workable base for path resolution but says
+    nothing about the checkout's identity — check 15 must not read a basename off
+    it and call the profile foreign."""
     if override:
-        return Path(override).resolve()
+        return Path(override).resolve(), True
     try:
         out = subprocess.run(["git", "rev-parse", "--show-toplevel"],
                              cwd=spec_dir, capture_output=True, text=True, check=True)
-        return Path(out.stdout.strip())
+        return Path(out.stdout.strip()), True
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return spec_dir
+        return spec_dir, False
 
 
 def load_facts(path: Path) -> dict:
@@ -760,8 +764,64 @@ def check_doc_size(in_scope: list[dict], f: Findings) -> None:
                   "17 doc size")
 
 
+STARTER_PLACEHOLDER = re.compile(r"^<.*>$")
+
+
+def check_profile_identity(prof: str, spec_dir: Path, repo_root: Path,
+                           root_is_real: bool, f: Findings) -> None:
+    """Check 15, the two halves that are pure string comparison.
+
+    A profile carries the identity of the checkout it was written for, and a spec
+    folder copied between projects brings the profile along. Every `cmd` in the set
+    then belongs to a different repo — and every one of them still runs, which is
+    why this is a CONTRADICTION and not a note. Same defect class as copying a test
+    count out of a sibling spec, one level up.
+
+    An `<angle bracket>` value is an unfilled starter, not a mismatch; check 15's
+    last bullet is the one that cares about those, and it cares in the other
+    direction (a starter holding a CONCRETE value leaks one project into every
+    other)."""
+    path = next((b / prof for b in (repo_root, spec_dir) if (b / prof).is_file()), None)
+    if path is None or not root_is_real:
+        # No git root resolved, so `basename` has nothing to say about which
+        # checkout this is and a comparison would invent a finding.
+        return
+    try:
+        profile = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return          # the profile's shape is check 19's business, not this one
+    if not isinstance(profile, dict):
+        return
+
+    declared = str(profile.get("repo") or "").strip()
+    if declared and not STARTER_PLACEHOLDER.match(declared) \
+            and declared != repo_root.name:
+        f.add(CONTRADICTION, prof,
+              f"`repo: {declared}` but this checkout is `{repo_root.name}`",
+              "the profile came from another checkout — almost always a spec folder "
+              "copied between projects with the profile travelling along. Every `cmd` "
+              "in the set now belongs to a different repo and every one of them still "
+              "runs",
+              "15 profile coverage")
+
+    app = str(profile.get("app") or "").strip()
+    if not app or STARTER_PLACEHOLDER.match(app):
+        return
+    try:
+        parts = spec_dir.resolve().relative_to(repo_root.resolve()).parts
+    except ValueError:
+        return          # the spec is not under the repo root; check 20's territory
+    if not all(p in parts for p in Path(app).parts):
+        f.add(CONTRADICTION, prof,
+              f"`app: {app}` does not govern the directory holding this spec "
+              f"({'/'.join(parts) or '.'})",
+              "the `app_id` is another variant's, so every `how: device` claim in the "
+              "set was gathered against the wrong install",
+              "15 profile coverage")
+
+
 def check_profile_and_log(facts: dict, spec_dir: Path, repo_root: Path,
-                          f: Findings) -> None:
+                          root_is_real: bool, f: Findings) -> None:
     """Checks 15 and 16, the parts a program can settle without git plumbing."""
     prof = facts.get("profile")
     if not prof:
@@ -773,6 +833,8 @@ def check_profile_and_log(facts: dict, spec_dir: Path, repo_root: Path,
         f.add(CONTRADICTION, "_facts.yml", f"`profile: {prof}` does not resolve",
               "the set moved, or the profile came from another checkout",
               "15 profile coverage")
+    else:
+        check_profile_identity(str(prof), spec_dir, repo_root, root_is_real, f)
     if not (spec_dir / "_log.md").is_file():
         f.add(POLISH, "_log.md", "no handoff log",
               "fine for a set that never leaves this session; adding it later costs "
@@ -808,24 +870,52 @@ def check_log_stage(facts: dict, spec_dir: Path, f: Findings) -> None:
 # output
 # --------------------------------------------------------------------------
 
+# Every `[human]` and `[script + human]` check the script cannot settle, with the
+# doc that has to exist for the comparison to be possible at all. A check missing
+# from this list is not "passed" — it is skipped, silently, which is the single
+# failure this script exists to prevent. Adding a check here is not optional.
+#
+# gate: None → always listed. "02" / "02|03" → listed only once that doc is on
+# disk, because before it exists there is nothing to compare the registry against
+# and telling a human to compare is telling them to do impossible work.
 HUMAN_PASS = [
     ("1", "data-vs-registry wording", "every shared datum's exact wording in each doc "
-     "— normalization (quoting, escaped pipes) makes this a judgment call"),
+     "— normalization (quoting, escaped pipes) makes this a judgment call", None),
     ("1b", "re-run `evidence.cmd`", "deliberately NOT automated: this script does not "
      "execute commands out of a registry. Re-run them yourself and diff against "
-     "`evidence.value`"),
-    ("3", "contract shape", "JSON blocks in prose vs `contracts.*`, field for field"),
+     "`evidence.value`", None),
+    ("2", "singletons unique", "`dates.*`, revision tags, `tests_baseline`, version "
+     "numbers must read identically in every doc that mentions them — any variance "
+     "is a CONTRADICTION", None),
+    ("3", "contract shape", "JSON blocks in prose vs `contracts.*`, field for field",
+     None),
+    ("3.5", "`decisions.*` cited_in", "when a decision changes, walk its `cited_in:` "
+     "sections by hand — `sync` replaces values and a premise has no value to replace",
+     None),
     ("4", "cross-refs resolve", "mechanical sweeps over-report here; the protocol "
-     "lists two exempt shapes. Verify each hit by eye"),
-    ("6", "acceptance parity", "doc 02's Definition of Done vs `acceptance[]`"),
-    ("7", "scope parity", "`changes[]` vs each doc's affected-components table"),
+     "lists two exempt shapes. Verify each hit by eye", None),
+    ("5", "checklist coverage", "each doc 01 checklist item has a counterpart in doc "
+     "02 (implementation/test) and/or doc 03 (stakeholder)", "02|03"),
+    ("6", "acceptance parity", "doc 02's Definition of Done vs `acceptance[]`", "02"),
+    ("7", "scope parity", "`changes[]` vs each doc's affected-components table. "
+     "`related_docs[]` do NOT participate — one appearing in a \"what changes\" table "
+     "is itself a CONTRADICTION", None),
+    ("8", "prose-orphan contracts & endpoints", "```json / ```http fences and URL "
+     "shapes in prose with no `contracts.*` / `endpoints.*` home. The mechanical "
+     "audit is blind to contracts that live only in prose — this check is what "
+     "surfaces them", None),
+    ("11", "ambiguous counters", "an integer whose meaning depends on a predicate "
+     "(`attended`, `resolved`, `remaining`) needs a `note:` or a field name stating "
+     "it; two counters that differ with neither is DRIFT", None),
+    ("12", "staleness by age", "`evidence.date` (legacy `verified.date`) older than "
+     "the last commit touching what it measures, or older than 7 days on a volatile "
+     "metric. Check 1b re-runs the command; this one flags the ones you would never "
+     "think to re-run because nothing looks wrong", None),
     ("13", "doc 02 executability", "resolved paths, named symbols, paste-ready code, "
-     "`[MANUAL]` labels"),
+     "`[MANUAL]` labels", "02"),
     ("28", "`tracking.issues` / `pr` / `milestone` on GitHub", "deliberately NOT "
      "automated: an auditor that makes network calls is a different kind of tool. "
-     "`gh issue view` / `gh pr view` and check the state matches `status:`"),
-    ("3.5", "`decisions.*` cited_in", "when a decision changes, walk its `cited_in:` "
-     "sections by hand — `sync` replaces values and a premise has no value to replace"),
+     "`gh issue view` / `gh pr view` and check the state matches `status:`", None),
 ]
 
 
@@ -855,9 +945,11 @@ def report(f: Findings, facts: dict, in_scope, deferred, prose, as_json: bool) -
             print(f"    └ check {x['check']}")
         print()
 
+    have = {d["id"] for d in in_scope if d["exists"]}
+
     # Check 5, inverted: before docs 02/03 exist there is nothing to cover them
     # WITH, so the items are listed as the input `implement` has to satisfy.
-    if not any(d["id"] in ("02", "03") and d["exists"] for d in in_scope):
+    if not have & {"02", "03"}:
         items = []
         for doc, text in prose.items():
             items += re.findall(r"^\s*[-*]\s*\[[ x]\]\s*(.+)$", text, re.M)
@@ -881,7 +973,9 @@ def report(f: Findings, facts: dict, in_scope, deferred, prose, as_json: bool) -
         print()
 
     print("## Requires a human pass\n")
-    for num, name, why in HUMAN_PASS:
+    for num, name, why, gate in HUMAN_PASS:
+        if gate and not have & set(gate.split("|")):
+            continue
         print(f"  check {num:<3} {name} — {why}")
     print()
 
@@ -909,7 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
     if not facts_path.is_file():
         sys.exit(f"no _facts.yml in {spec_dir} — not a feature-spec set.")
     facts = load_facts(facts_path)
-    repo_root = repo_root_for(spec_dir, args.repo_root)
+    repo_root, root_is_real = repo_root_for(spec_dir, args.repo_root)
 
     rank, in_scope, deferred = resolve_stage(facts, spec_dir)
     prose = {d["file"]: d["path"].read_text(encoding="utf-8")
@@ -935,7 +1029,7 @@ def main(argv: list[str] | None = None) -> int:
     check_tracking(facts, repo_root, f)
     check_provider_behavior(facts, f)
     check_doc_size(in_scope, f)
-    check_profile_and_log(facts, spec_dir, repo_root, f)
+    check_profile_and_log(facts, spec_dir, repo_root, root_is_real, f)
     check_log_stage(facts, spec_dir, f)
 
     return report(f, facts, in_scope, deferred, prose, args.json)
