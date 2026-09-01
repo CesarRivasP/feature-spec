@@ -114,12 +114,16 @@ Doc 02 "Definition of Done" (or, if 02 is split, whichever half holds it) == `_f
 Compare **only** `changes[]` (components created/modified) against each doc's "componentes que cambian" table / affected-modules enumeration. Missing/extra member → `CONTRADICTION`.
 - `related_docs[]` (referenced-but-unmodified docs) do **NOT** participate in scope parity — they are context pointers, not scope. A `related_doc` appearing in a "what changes" table is itself a `CONTRADICTION` (miscategorized: it's referenced, not modified). This is the "`manual-user-creation.md` (a reference) sat next to `resend-webhook` (a real new function) in one list" bug.
 
-### 8. Prose-orphan contracts & endpoints — [human]
+### 8. Prose-orphan contracts & endpoints — [script + human]
 Scan every doc for interface material that should live in the registry but might not:
 - ` ```json ` (and ` ```http `) code-fences → each payload/response must map to a `contracts.*` entry.
 - URL / endpoint shapes in prose (absolute API paths, `/webhook/...`, provider-hosted function URLs, deep-link URIs) → each must map to an `endpoints.*` entry.
 
 Any fence or URL with no registry home → `DRIFT` (prose-orphan contract — promote to `contracts.*`/`endpoints.*` so it becomes auditable). The mechanical audit is blind to contracts that live only in prose; this check is what surfaces them instead of relying on a human catching it by eye.
+
+- **[script]** — the script emits **candidates**, not findings, under this check in `REQUIRES A HUMAN PASS`. It flags a ```json fence whose keys intersect no `contracts.*` entry and whose preceding lines cite no contract by id; a ```http fence whose request target matches no `endpoints.*`; and an API-shaped URL, provider-function host, bare `/webhook/…` path or non-http deep-link URI in prose with no `endpoints.*` home.
+- **[human]** — the verdict on each candidate. A fence can legitimately show a fragment, an error body, or a third party's payload this set only reads; a URL can be a provider's documented callback that belongs in nobody's registry. Deciding needs the paragraph around it.
+- **Four shapes are excluded by design, and a sweep that reports them is producing noise:** example hosts (`example.com`, `localhost`, `<placeholder>`), markdown link targets — a documentation link is written `[text](url)` while an endpoint this system calls is written bare or in backticks — fences in any other language, and URLs *inside* fenced blocks. The sweep is scoped to **prose**: a `curl` line in a ```bash fence is the command, not the interface.
 
 ### 9. Sibling-doc detection — [script + human]
 Glob `docs/features/*<slug>*` (and adjacent files on the same theme under other names). Every match must be listed in `_facts.yml docs[]`.

@@ -182,6 +182,37 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
 ]
 
 
+# (fixture, expect[(check, text)], reject[(check, text)]) — CANDIDATES, not findings.
+#
+# A candidate is a mechanical hit on a check whose verdict needs a document read, so
+# it carries no severity and never enters `## Findings`. For these four checks the
+# `reject` column is the one that matters: an over-reporting sweep costs the reader
+# more tokens than the check saves, which is the opposite of why it was mechanized.
+CANDIDATE_CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
+    # §8 — the check the protocol says the mechanical audit is blind to, and the one
+    # nobody runs by hand: catching it by eye means re-reading every document looking
+    # for something defined by NOT being in the registry.
+    ("prose-orphan",
+     [("8", "invoice_id"),                    # ```json fence, no contract keys
+      ("8", "/webhook/billing-callback"),     # ```http fence, no endpoints entry
+      ("8", "abcd.supabase.co"),              # provider-hosted function URL
+      ("8", "/api/v2/invoices"),              # bare API path in prose
+      ("8", "miapp://reset-password")],       # deep-link URI
+     [("8", "conversation_id"),               # keys ARE contracts.chat_request's
+      ("8", "error_code"),                    # keys drifted, but the prose above
+                                              #   cites the contract by id — whether
+                                              #   the fields still match is check 3
+      ("8", "/webhook/chat-result"),          # endpoints.external_get's own value
+      ("8", "example.com"),                   # a host that exists to be an example
+      ("8", "developer.mozilla.org"),         # a markdown link target: documentation
+      ("8", "github.com/CesarRivasP"),        # a page URL, no API path, no function
+      ("8", "ts_only_key"),                   # ```ts is not interface material
+      ("8", "ts-fence.workers.dev"),          #   nor is the URL inside it
+      ("8", "bash-fence.workers.dev")]),      # a curl line is the command, not the
+                                              #   interface — the sweep is over PROSE
+]
+
+
 def run(fixture: str) -> list[dict]:
     """Every fixture is a hermetic mini-repo.
 
@@ -209,9 +240,58 @@ def run(fixture: str) -> list[dict]:
     return json.loads(out.stdout)["findings"]
 
 
+def run_candidates(fixture: str) -> dict[str, list[dict]]:
+    root = FIXTURES / fixture.split("/", 1)[0]
+    spec = FIXTURES / fixture
+    out = subprocess.run(
+        [sys.executable, str(AUDIT), str(spec), "--repo-root", str(root), "--json"],
+        capture_output=True, text=True)
+    if out.returncode not in (0, 1):
+        raise AssertionError(f"{fixture}: audit.py crashed\n{out.stderr}")
+    return json.loads(out.stdout).get("candidates", {})
+
+
 def matches(findings: list[dict], check: str, text: str) -> bool:
     return any(check in f["check"] and (text in f["what"] or text in f["where"])
                for f in findings)
+
+
+def cand_matches(candidates: dict[str, list[dict]], check: str, text: str) -> bool:
+    return any(text in c["what"] or text in c["where"]
+               for c in candidates.get(check, []))
+
+
+def candidates_stay_out_of_findings() -> list[str]:
+    """The contract the whole design rests on, asserted across every fixture.
+
+    A candidate has no severity — the script does not know yet whether it is a
+    CONTRADICTION, a DRIFT or nothing at all. Putting one in `## Findings` means
+    inventing a severity, and then the verdict line counts something nobody has
+    judged. `N contradictions, M drift` has to mean what it says or the report is
+    worth less than no report.
+
+    The second half is the omission bug one level down: a candidate group whose
+    check is missing from `HUMAN_PASS` would be computed and then never printed
+    beside the check it belongs to. Every generator's key must be a listed check.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from audit import HUMAN_PASS  # noqa: E402
+
+    listed = {num for num, _, _, _ in HUMAN_PASS}
+    problems = []
+    for fixture, _, _ in CASES + CANDIDATE_CASES:
+        for check in run_candidates(fixture):
+            if check not in listed:
+                problems.append(
+                    f"{fixture}: candidates emitted under check {check}, which "
+                    "HUMAN_PASS does not list — they are computed and never printed")
+        for finding in run(fixture):
+            if finding["check"].split()[0] in ("3", "4", "8", "13"):
+                problems.append(
+                    f"{fixture}: check {finding['check']} produced a FINDING "
+                    f"({finding['where']}); these four generate candidates, and a "
+                    "candidate with an invented severity makes the verdict lie")
+    return problems
 
 
 def human_pass_is_complete() -> list[str]:
@@ -249,6 +329,29 @@ def main() -> int:
 
     total += 1
     failures += human_pass_is_complete()
+    total += 1
+    failures += candidates_stay_out_of_findings()
+
+    for fixture, expect, reject in CANDIDATE_CASES:
+        candidates = run_candidates(fixture)
+        for check, text in expect:
+            total += 1
+            if not cand_matches(candidates, check, text):
+                failures.append(
+                    f"{fixture}: check {check} did NOT offer {text!r} as a candidate")
+        for check, text in reject:
+            total += 1
+            if cand_matches(candidates, check, text):
+                failures.append(
+                    f"{fixture}: check {check} wrongly offered {text!r} as a "
+                    "candidate (known false positive — an over-reporting sweep "
+                    "costs more tokens than the check saves)")
+        if verbose:
+            print(f"--- {fixture} (candidates)")
+            for check, items in sorted(candidates.items()):
+                for c in items:
+                    print(f"      [{check}] {c['where']}: {c['what'][:80]}")
+
     for fixture, expect, reject in CASES:
         findings = run(fixture)
         for check, text in expect:
@@ -267,7 +370,7 @@ def main() -> int:
                 print(f"      [{f['check']}] {f['where']}: {f['what'][:80]}")
 
     print(f"\n{total - len(failures)}/{total} assertions passed "
-          f"across {len(CASES)} fixtures")
+          f"across {len(CASES) + len(CANDIDATE_CASES)} fixtures")
     for f in failures:
         print(f"  FAIL {f}")
     return 1 if failures else 0

@@ -1,0 +1,17 @@
+# Check 8 as a candidate generator. The registry declares one contract and one
+# endpoint; the doc carries five interface shapes with no home and eight that must
+# not be reported. The rejects matter more than the expects: this sweep costs the
+# reader tokens every time it is wrong.
+feature: prose-orphan
+status: draft
+profile: ../_profile.fixture.yml
+defects: []
+acceptance: []
+contracts:
+  chat_request:
+    request_body: [conversation_id, prompt, locale]
+    response_ok: { status: string, result_url: string }
+endpoints:
+  external_get: /webhook/chat-result
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

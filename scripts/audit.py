@@ -72,6 +72,42 @@ class Findings:
         return sum(1 for f in self.items if f["severity"] == sev)
 
 
+class Candidates:
+    """A candidate is NOT a finding, and the difference is the whole design.
+
+    A finding carries a severity because the script knows what it is: an anchor
+    either resolves or it does not. A candidate is a mechanical hit on a check whose
+    verdict needs a document read — a JSON fence whose keys do not match any
+    contract may be an orphan, may be a downstream-injected field the doc explains
+    in a note two paragraphs up, or may be nothing. The script cannot tell, and
+    inventing a severity so it fits in `## Findings` would make the verdict line
+    count things nobody has judged yet. A report whose count lies is worse than one
+    that reports less.
+
+    So candidates are emitted UNDER the check they belong to inside `## Requires a
+    human pass`, never in `## Findings`. The reader sees the check, the caveat the
+    protocol attaches to it — check 4's is literally "mechanical sweeps over-report
+    here: verify each hit by eye" — and the list that caveat governs, in one place
+    and in that order. A separate top-level section would split the warning from the
+    thing it warns about, and the whole point of the pattern is that the human reads
+    a short list instead of three whole documents.
+
+    The saving is real either way: the LLM verifies ~10 lines instead of re-reading
+    the set. It only survives if the list stays short, which is why every generator
+    below is tested against the false positive it must reject before the case it
+    must catch.
+    """
+
+    def __init__(self) -> None:
+        self.by_check: dict[str, list[dict]] = {}
+
+    def add(self, check: str, where: str, what: str) -> None:
+        self.by_check.setdefault(check, []).append({"where": where, "what": what})
+
+    def total(self) -> int:
+        return sum(len(v) for v in self.by_check.values())
+
+
 # --------------------------------------------------------------------------
 # loading
 # --------------------------------------------------------------------------
@@ -134,6 +170,66 @@ def resolve_stage(facts: dict, spec_dir: Path) -> tuple[int, list[dict], list[di
         else:
             deferred.append(item)
     return rank, in_scope, deferred
+
+
+# --------------------------------------------------------------------------
+# prose text helpers — shared by the candidate generators (checks 3, 4, 8, 13)
+# --------------------------------------------------------------------------
+
+FENCE_OPEN_RE = re.compile(r"^\s*```+\s*([A-Za-z0-9_+.-]*)\s*$")
+FENCE_CLOSE_RE = re.compile(r"^\s*```+\s*$")
+
+
+def iter_fences(text: str):
+    """-> (opening lineno, lowercased language, body). Line numbers are 1-based and
+    point at the fence marker, which is what a reader scrolls to."""
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        m = FENCE_OPEN_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        j = i + 1
+        while j < len(lines) and not FENCE_CLOSE_RE.match(lines[j]):
+            j += 1
+        yield i + 1, m.group(1).lower(), "\n".join(lines[i + 1:j])
+        i = j + 1
+
+
+def blank_fences(text: str) -> str:
+    """Fenced blocks replaced by empty lines, LINE COUNT PRESERVED so every hit
+    still reports the line a reader can jump to."""
+    out, inside = [], False
+    for line in text.splitlines():
+        if inside:
+            out.append("")
+            if FENCE_CLOSE_RE.match(line):
+                inside = False
+            continue
+        if FENCE_OPEN_RE.match(line):
+            inside = True
+            out.append("")
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+def blank_inline_code(text: str) -> str:
+    """Inline spans blanked, length preserved. This is the guard the protocol asks
+    for by name on check 4: a section number quoted AS TEXT — a defect being
+    described, an example — lives in backticks, and a sweep that reads it as a
+    navigation target reports the fix as the bug."""
+    return re.sub(r"`[^`\n]*`", lambda m: " " * len(m.group(0)), text)
+
+
+def blank_link_targets(text: str) -> str:
+    """`](...)` targets blanked. A documentation URL is written as a markdown link
+    with text; an endpoint the system actually calls is written bare or in
+    backticks. That is the cheapest discriminator there is between the two, and
+    without it every `[the fetch docs](https://developer.mozilla.org/.../API/...)`
+    becomes a check 8 candidate."""
+    return re.sub(r"\]\([^)\n]*\)", lambda m: " " * len(m.group(0)), text)
 
 
 # --------------------------------------------------------------------------
@@ -236,6 +332,175 @@ def check_sibling_docs(facts: dict, spec_dir: Path, repo_root: Path,
               "against the registry and `sync` never reaches it. Integrate it into "
               "the set, or register it with `role: legacy`",
               "9 disk -> docs[]")
+
+
+# Hosts that exist to be an example. A sweep that reports them teaches the reader
+# to skim the candidate list, which costs more than the check saves.
+EXAMPLE_HOST_RE = re.compile(
+    r"(?:^|//|@)(?:[\w-]+\.)*(?:example\.(?:com|org|net)|example|localhost"
+    r"|127\.0\.0\.1|0\.0\.0\.0|foo\.bar|tu-dominio|your-domain|<[^>]+>)\b", re.I)
+
+# Path shapes that read as an API surface rather than a page.
+API_PATH_RE = re.compile(r"/(?:api|webhook|webhooks|functions|rest|graphql|rpc"
+                         r"|v\d+)(?:[/?#]|$)", re.I)
+
+# Provider-hosted function hosts: the URL shape check 8 was written for.
+FUNCTION_HOST_RE = re.compile(
+    r"\.(?:supabase\.co|vercel\.app|workers\.dev|netlify\.app|run\.app|deno\.dev"
+    r"|cloudfunctions\.net|azurewebsites\.net|herokuapp\.com|fly\.dev|ngrok\.io)\b",
+    re.I)
+
+URL_RE = re.compile(
+    r"[a-z][a-z0-9+.-]*://[^\s`\"'<>()\[\],]+"           # any scheme, incl. deep links
+    r"|(?<![\w.~/-])/(?:api|webhook|webhooks|functions|rest|graphql|rpc|v\d+)"
+    r"[\w/{}:.~-]*", re.I)
+
+# `file://` is a local path and `chrome://` is a browser page; neither is an
+# interface this set owns.
+NON_ENDPOINT_SCHEMES = ("file", "chrome", "about", "data", "javascript")
+
+JSON_KEY_RE = re.compile(r'"([A-Za-z_][\w.-]*)"\s*:')
+HTTP_REQUEST_LINE_RE = re.compile(
+    r"^\s*(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)", re.M)
+
+
+def contract_field_names(node) -> set[str]:
+    """Every field NAME reachable under one `contracts.*` entry.
+
+    Both template shapes name fields differently: `request_body: [field_a, field_b]`
+    names them as list values, `response_ok: { field: type }` names them as keys. A
+    scalar sitting under a dict key is the field's TYPE, never its name — folding
+    those in would grow the name set until every fence matched something and the
+    check reported nothing."""
+    names: set[str] = set()
+    if isinstance(node, dict):
+        for key, val in node.items():
+            names.add(str(key))
+            if isinstance(val, (dict, list)):
+                names |= contract_field_names(val)
+    elif isinstance(node, list):
+        for val in node:
+            if isinstance(val, str):
+                names.add(val.strip())
+            elif isinstance(val, (dict, list)):
+                names |= contract_field_names(val)
+    return names
+
+
+def registry_container_entries(facts: dict, container: str) -> dict[str, object]:
+    node = facts.get(container)
+    if isinstance(node, dict):
+        return {str(k): v for k, v in node.items()}
+    if isinstance(node, list):
+        return {str(e["id"]): e for e in node
+                if isinstance(e, dict) and e.get("id")}
+    return {}
+
+
+def contract_keysets(facts: dict) -> dict[str, set[str]]:
+    return {name: contract_field_names(body)
+            for name, body in registry_container_entries(facts, "contracts").items()}
+
+
+def endpoint_strings(facts: dict) -> set[str]:
+    """Every string an `endpoints.*` entry offers to be recognised by: its key, and
+    every scalar under it. `endpoints: { external_get: /webhook/chat-result }` is
+    the template's own example, so the value is often the path itself."""
+    out: set[str] = set()
+    for name, body in registry_container_entries(facts, "endpoints").items():
+        out.add(name)
+        for _, sub in walk(body) if isinstance(body, (dict, list)) else []:
+            if isinstance(sub, str) and sub.strip():
+                out.add(sub.strip())
+        if isinstance(body, str) and body.strip():
+            out.add(body.strip())
+    return {v for v in out if len(v) >= 3}
+
+
+def check_prose_orphans(facts: dict, prose: dict[str, str], c: Candidates) -> None:
+    """Check 8, as a candidate generator.
+
+    The protocol says it plainly: "The mechanical audit is blind to contracts that
+    live only in prose; this check is what surfaces them instead of relying on a
+    human catching it by eye." It is also the check nobody runs, because catching it
+    by eye means re-reading every document looking for something that is defined by
+    NOT being in the registry — the one thing you cannot grep for directly.
+
+    So the script greps for the inverse and hands over the short list. Two sweeps:
+
+      fences  — every ```json / ```http block whose keys match no `contracts.*`
+                entry and whose surrounding lines cite no contract by id.
+      URLs    — every API-shaped URL, provider-function host, bare `/webhook/...`
+                path or non-http deep-link URI with no `endpoints.*` home.
+
+    Neither is a finding. A fence can legitimately show a fragment, an error body,
+    or a third party's payload this set only reads; a URL can be a provider's
+    documented callback that belongs in nobody's registry. Judging that needs the
+    paragraph around it, so the script narrows and the human decides.
+
+    Four false-positive classes are designed out, because a sweep that over-reports
+    costs the reader more tokens than the check saves: example hosts, markdown link
+    targets (a documentation link is written `[text](url)`; an endpoint this system
+    calls is written bare or in backticks), fences in any other language, and URLs
+    inside fenced blocks — the protocol scopes this sweep to PROSE, and a `curl`
+    line in a bash fence is the command, not the interface."""
+    keysets = contract_keysets(facts)
+    all_contract_names = set(keysets)
+    endpoints = endpoint_strings(facts)
+
+    for doc, text in prose.items():
+        lines = text.splitlines()
+
+        for lineno, lang, body in iter_fences(text):
+            if lang not in ("json", "http"):
+                continue
+            # A fence the prose attributes by id is homed whatever its keys say;
+            # whether the fields still MATCH is check 3's question, not this one.
+            context = "\n".join(lines[max(0, lineno - 9):lineno])
+            cited = {n for n in re.findall(r"contracts\.([A-Za-z0-9_]+)", context)}
+            if cited & all_contract_names or re.search(r"contracts\.\*", context):
+                continue
+
+            if lang == "http":
+                target = HTTP_REQUEST_LINE_RE.search(body)
+                url = target.group(1) if target else ""
+                if url and any(e in url or url in e for e in endpoints):
+                    continue
+                if re.search(r"endpoints\.[A-Za-z0-9_]+", context):
+                    continue
+                c.add("8", f"{doc}:{lineno}",
+                      "```http fence with no `endpoints.*` home"
+                      + (f" ({url})" if url else ""))
+                continue
+
+            keys = set(JSON_KEY_RE.findall(body))
+            if not keys:
+                continue        # a bare array or scalar names no fields to compare
+            if any(keys & names for names in keysets.values()):
+                continue
+            shown = ", ".join(sorted(keys)[:6])
+            c.add("8", f"{doc}:{lineno}",
+                  f"```json fence whose keys share nothing with any `contracts.*` "
+                  f"entry: {{{shown}}}")
+
+        swept = blank_link_targets(blank_fences(text))
+        for lineno, line in enumerate(swept.splitlines(), 1):
+            if re.search(r"endpoints\.[A-Za-z0-9_]+", line):
+                continue
+            for raw in URL_RE.findall(line):
+                url = raw.rstrip(".,;:!?)»\"'`")
+                scheme = url.split("://", 1)[0].lower() if "://" in url else ""
+                if scheme in NON_ENDPOINT_SCHEMES:
+                    continue
+                if EXAMPLE_HOST_RE.search(url):
+                    continue
+                if scheme in ("http", "https") and not (
+                        API_PATH_RE.search(url) or FUNCTION_HOST_RE.search(url)):
+                    continue        # a page or a documentation link, not an endpoint
+                if any(e in url or url in e for e in endpoints):
+                    continue
+                c.add("8", f"{doc}:{lineno}",
+                      f"URL/endpoint shape in prose with no `endpoints.*` home: {url}")
 
 
 def check_basis_gates(facts: dict, f: Findings) -> None:
@@ -967,10 +1232,11 @@ HUMAN_PASS = [
     ("7", "scope parity", "`changes[]` vs each doc's affected-components table. "
      "`related_docs[]` do NOT participate — one appearing in a \"what changes\" table "
      "is itself a CONTRADICTION", None),
-    ("8", "prose-orphan contracts & endpoints", "```json / ```http fences and URL "
-     "shapes in prose with no `contracts.*` / `endpoints.*` home. The mechanical "
-     "audit is blind to contracts that live only in prose — this check is what "
-     "surfaces them", None),
+    ("8", "prose-orphan contracts & endpoints", "the candidates below are ```json / "
+     "```http fences and URL shapes in prose with no `contracts.*` / `endpoints.*` "
+     "home. Each needs the paragraph around it: a fence can legitimately show a "
+     "fragment or a third party's payload this set only reads, and a URL can be a "
+     "provider's documented callback that belongs in nobody's registry", None),
     ("9", "sibling docs under other names", "the script globs `*<slug>*` and every "
      "`.md` in the spec dir; a file on this feature's theme whose NAME shares nothing "
      "with the slug is invisible to that and is the half left here", None),
@@ -1001,12 +1267,14 @@ HUMAN_PASS = [
 ]
 
 
-def report(f: Findings, facts: dict, in_scope, deferred, prose, as_json: bool) -> int:
+def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
+           prose, as_json: bool) -> int:
     order = {CONTRADICTION: 0, DRIFT: 1, POLISH: 2}
     f.items.sort(key=lambda x: (order[x["severity"]], x["check"], x["where"]))
 
     if as_json:
         print(json.dumps({"status": facts.get("status"), "findings": f.items,
+                          "candidates": cands.by_check,
                           "deferred_docs": [d["file"] for d in deferred]},
                          indent=2, ensure_ascii=False))
         return 1 if f.count(CONTRADICTION) else 0
@@ -1055,10 +1323,23 @@ def report(f: Findings, facts: dict, in_scope, deferred, prose, as_json: bool) -
         print()
 
     print("## Requires a human pass\n")
+    emitted = set()
     for num, name, why, gate in HUMAN_PASS:
         if gate and not have & set(gate.split("|")):
             continue
         print(f"  check {num:<3} {name} — {why}")
+        for cand in cands.by_check.get(num, ()):
+            emitted.add(num)
+            print(f"      · {cand['where']}: {cand['what']}")
+    # A candidate group whose check is gated off, or absent from HUMAN_PASS
+    # altogether, would otherwise be computed and silently dropped — the exact
+    # failure mode HUMAN_PASS exists to close, one level down.
+    for num, items in sorted(cands.by_check.items()):
+        if num in emitted or not items:
+            continue
+        print(f"  check {num:<3} candidates (check not listed above)")
+        for cand in items:
+            print(f"      · {cand['where']}: {cand['what']}")
     print()
 
     c, d, p = f.count(CONTRADICTION), f.count(DRIFT), f.count(POLISH)
@@ -1068,6 +1349,13 @@ def report(f: Findings, facts: dict, in_scope, deferred, prose, as_json: bool) -
         verdict += f" · stage {status}: {len(deferred)} doc(s) not due yet"
     if risks:
         verdict += f" · {len(risks)} accepted risk(s) with a due date"
+    if cands.total():
+        # Counted apart from the findings on purpose. A candidate has no severity
+        # yet, so folding it into the verdict would make the count assert something
+        # nobody has judged — but leaving it out entirely reads as "nothing to look
+        # at", which is the other half of the same lie.
+        verdict += (f" · {cands.total()} candidate(s) for the human pass, in "
+                    f"{len(cands.by_check)} check(s)")
     print(verdict)
     return 1 if c else 0
 
@@ -1094,7 +1382,7 @@ def main(argv: list[str] | None = None) -> int:
         for path in sorted(spec_dir.glob("[0-9][0-9]*.md")):
             prose[path.name] = path.read_text(encoding="utf-8")
 
-    f = Findings()
+    f, c = Findings(), Candidates()
     check_top_level_keys(facts, f)
     check_docs_on_disk(in_scope, deferred, f)
     check_sibling_docs(facts, spec_dir, repo_root, f)
@@ -1114,8 +1402,9 @@ def main(argv: list[str] | None = None) -> int:
     check_doc_size(in_scope, f)
     check_profile_and_log(facts, spec_dir, repo_root, root_is_real, f)
     check_log_stage(facts, spec_dir, f)
+    check_prose_orphans(facts, prose, c)
 
-    return report(f, facts, in_scope, deferred, prose, args.json)
+    return report(f, c, facts, in_scope, deferred, prose, args.json)
 
 
 if __name__ == "__main__":
