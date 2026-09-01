@@ -1,0 +1,13 @@
+# Check 4 against a split doc, which is where its worst case lives: an unqualified
+# `§X.Y` that resolves in the OTHER half reads as valid and sends the executor to
+# the wrong file. The rejects are the two shapes the protocol exempts by name plus
+# the two the sweep has to strip before comparing.
+feature: cross-refs
+status: draft
+profile: ../_profile.fixture.yml
+defects: []
+acceptance: []
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation.md, role: implementation, stage: draft }
+  - { id: "02b", file: 02b-tests.md, role: implementation, stage: draft }

@@ -1,0 +1,12 @@
+# Check 13, the three of its eight sub-bullets a regex can reach. The other five
+# stay human — the enumeration names "judgment" outright in the last one — so this
+# fixture only claims the three, and spends most of its lines on what the sweep
+# must stay quiet about.
+feature: doc02-exec
+status: draft
+profile: ../_profile.fixture.yml
+defects: []
+acceptance: []
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation.md, role: implementation, stage: draft }

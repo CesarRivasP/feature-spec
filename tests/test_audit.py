@@ -210,6 +210,70 @@ CANDIDATE_CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] 
       ("8", "ts-fence.workers.dev"),          #   nor is the URL inside it
       ("8", "bash-fence.workers.dev")]),      # a curl line is the command, not the
                                               #   interface — the sweep is over PROSE
+
+    # Checks 3 and 8 partition the same fences and neither reports the other's
+    # cases. This is the seam, asserted from check 3's side in the fixture that
+    # belongs to check 8: a fence ATTRIBUTED to a contract by id is check 3's even
+    # when it shares no field with it, and a fence attributed to nothing has no
+    # contract to be compared against and is check 8's alone.
+    ("prose-orphan",
+     [("3", "error_code")],
+     [("3", "invoice_id")]),
+
+    # §3 — the diff is arithmetic; the exception is not. A field the sender injects
+    # downstream is legitimate IF a doc note explains it, and the script cannot read
+    # the note. So the diff is a candidate and finding the note is the human's job.
+    ("contract-shape",
+     [("3", "trace_id"),                      # a field injected downstream
+      ("3", "delivered_url"),                 # renamed: how a contract breaks quietly
+      ("3", "form_gamma")],                   # a field that is simply missing
+     [("3", "echo_alpha"),                    # same fields, different order
+      ("3", "chat_status"),                   # diffed against response_ok, not the
+                                              #   request body — comparing against the
+                                              #   entry's flattened fields would report
+                                              #   every response as broken
+      ("3", "href"),                          # a nested key is not a field of this
+                                              #   block; the contract declares the
+                                              #   field, not its interior
+      ("3", "tolerant_key"),                  # comments, elipsis and a trailing comma:
+                                              #   it does not parse and still has a shape
+      ("3", "unrelated_alpha"),               # shares nothing — check 8's, not this one
+      ("3", "ts_shape_key")]),                # ```ts is not interface material
+
+    # §4 — the check whose protocol entry says outright that mechanical sweeps
+    # over-report, so every guard here exists to keep the list short enough to read.
+    # The split doc is where its worst case lives: a ref that resolves in the other
+    # half reads as valid and sends the executor to the wrong file.
+    ("cross-refs",
+     [("4", "docs[]` does not list"),          # `ver doc 04` with no 04 in docs[]
+      ("4", "§9.9"),                          # resolves nowhere
+      ("4", "§7.2 is unqualified"),           # resolves in the OTHER half of a split
+      ("4", "§2.9 is unqualified")],          # a prefix does not distribute across a
+                                              #   list: only the first ref is into `02`
+     [("4", "1.5"),                           # local and present
+      ("4", "7.6"),                           # qualified and present
+      ("4", "3.1"),                           # `§3.1 de 02` — the prefix after the ref
+      ("4", "3.6"),                           # exempt shape (a): quoted AS TEXT, a
+                                              #   defect being described, not a target
+      ("4", "5.5")]),                         # inside a fenced block
+
+    # §13 — three of eight sub-bullets. The other five stay human and the protocol's
+    # own enumeration says why: the last one names "judgment" outright.
+    ("doc02-exec",
+     [("13", "path/to/"),                     # unresolved path
+      ("13", "…/c"),                          # an elided path is the same defect
+      ("13", "componente correspondiente"),   # the parenthetical that defers the choice
+      ("13", "etc."),                         # a step that enumerates by etc.
+      ("13", "análogo a lo anterior"),
+      ("13", "secreto")],                     # reaches outside the checkout, unlabelled
+     [("13", "DNS"),                          # labelled `[MANUAL]` — the label IS the
+                                              #   answer, not the absence of the step
+      ("13", "similares"),                    # narrative, not a step: no list marker
+      ("13", "and so on"),                    # inside a code fence
+      ("13", "API key"),                      # an identifier in a snippet is not an
+                                              #   instruction to go and get one
+      ("13", "01-master-plan.md")]),          # scoped to doc 02, which is what
+                                              #   stage-gates this check
 ]
 
 

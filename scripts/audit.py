@@ -417,6 +417,290 @@ def endpoint_strings(facts: dict) -> set[str]:
     return {v for v in out if len(v) >= 3}
 
 
+def top_level_json_keys(body: str) -> set[str]:
+    """Keys at brace depth 1 of a fenced block.
+
+    `json.loads` is not usable here: spec fences carry `…`, trailing commas and `//`
+    notes, and a block that fails to parse is not a block with no fields. Brackets do
+    not count toward depth, so `[{...}]` still yields the object's own keys, and a
+    nested `{"data": {"id": 1}}` yields `data` alone — a contract that declares the
+    field but not its interior would otherwise report `id` as an extra field on every
+    payload that has one."""
+    keys: set[str] = set()
+    depth, i, n = 0, 0, len(body)
+    while i < n:
+        ch = body[i]
+        if ch == '"':
+            j = i + 1
+            while j < n and body[j] != '"':
+                j += 2 if body[j] == "\\" else 1
+            token = body[i + 1:j]
+            k = j + 1
+            while k < n and body[k] in " \t\r\n":
+                k += 1
+            if depth == 1 and k < n and body[k] == ":":
+                keys.add(token)
+            i = j + 1
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+        i += 1
+    return keys
+
+
+def contract_blocks(facts: dict) -> list[tuple[str, set[str]]]:
+    """-> [(`contracts.chat_request.request_body`, {field, ...}), ...].
+
+    A contract entry holds several payloads — request body, ok response, error
+    response — and a fence shows ONE of them. Comparing against the entry's flattened
+    field set would report every response field as missing from every request fence,
+    which is a wall of noise on a correct document. So each payload is indexed
+    separately and a fence is diffed against the one it actually resembles.
+
+    A dict whose values are all containers is a set of payloads; anything else is a
+    payload whose keys are field names. Both are the template's own shapes."""
+    out: list[tuple[str, set[str]]] = []
+
+    def visit(label: str, node) -> None:
+        if isinstance(node, dict) and node and all(
+                isinstance(v, (dict, list)) for v in node.values()):
+            for key, val in node.items():
+                visit(f"{label}.{key}", val)
+            return
+        fields = contract_field_names(node)
+        if fields:
+            out.append((label, fields))
+
+    for name, body in registry_container_entries(facts, "contracts").items():
+        visit(f"contracts.{name}", body)
+    return out
+
+
+# Check 13's three regex-able sub-bullets. The other five stay human, and the
+# enumeration names the reason: a step that needs "judgment" cannot be detected by
+# a pattern that looks for the word.
+UNRESOLVED_PATH_RE = re.compile(
+    r"\bpath/to/|\bruta/a/|(?<![\w/])\.\.\./[\w.-]|…/[\w.-]|"
+    r"\((?:o|or) el (?:componente|archivo|módulo|hook|servicio) correspondiente\)|"
+    r"\((?:or the )?(?:corresponding|appropriate) (?:component|file|module)\)", re.I)
+VAGUE_ENUM_RE = re.compile(
+    r"\betc\.|\bet ?cétera\b|\by similares\b|\by (?:los )?demás\b|"
+    r"\banálogo a lo anterior\b|\bídem para\b|\bidem para\b|\band so on\b|"
+    r"\bsimilar to the above\b", re.I)
+# A step that reaches outside the checkout. The label is what tells the builder to
+# stop rather than invent, and its absence is the finding.
+EXTERNAL_STEP_RE = re.compile(
+    r"\bdashboard\b|\bpanel de (?:control|administraci[oó]n)\b|\bDNS\b|"
+    r"\bsecreto\b|\bsecret\b|\bAPI key\b|\bclave de API\b|\bconsola de \w+\b|"
+    r"\bregistrar el dominio\b|\bcertificado (?:SSL|TLS)\b", re.I)
+EXTERNAL_LABEL_RE = re.compile(r"\[MANUAL\]|\[OWNER EXTERNO\]|\[EXTERNAL OWNER\]")
+# "in a step". A sentence of narrative that happens to end in "etc." is not an
+# instruction anybody executes, and reporting it is how a candidate list stops
+# being read.
+STEP_LINE_RE = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s|\|)")
+
+
+def check_doc02_executability(facts: dict, prose: dict[str, str],
+                              in_scope: list[dict], c: Candidates) -> None:
+    """Check 13, the three of its eight sub-bullets a regex can reach.
+
+    The other five stay entirely human and the protocol's own enumeration says why:
+    a symbol named but never defined, an edit with no anchor, a B.1 row worded as
+    parity or negation, a persisted store with no schema, and "a step that needs a
+    dashboard, DNS, a secret or **judgment**". The last one names judgment outright,
+    and the four before it are each a question about whether something ELSEWHERE
+    supplies what the step assumes — which is the thing a line-oriented sweep is
+    structurally unable to ask.
+
+    What is left is three shapes and their line numbers:
+
+      unresolved paths   `path/to/`, `…/algo`, `(o el componente correspondiente)`
+      vague enumeration  `etc.`, `y similares`, `análogo a lo anterior`
+      external step      dashboard / DNS / secret with no `[MANUAL]` label
+
+    Scoped to doc 02, which is what the check is about and what stage-gates it.
+
+    The path sweep reads fenced blocks too — a `path/to/` inside a paste-ready
+    snippet is the defect at its worst, since that is the text the builder copies.
+    The other two do not: `etc.` in a code comment is not a step, and a `secret`
+    identifier in a snippet is a variable name, not an instruction to go get one."""
+    for entry in in_scope:
+        if not entry["id"].startswith("02") or entry["file"] not in prose:
+            continue
+        doc = entry["file"]
+        text = prose[doc]
+        for lineno, line in enumerate(text.splitlines(), 1):
+            hit = UNRESOLVED_PATH_RE.search(line)
+            if hit:
+                c.add("13", f"{doc}:{lineno}",
+                      f"unresolved path: {hit.group(0).strip()!r}")
+        for lineno, line in enumerate(blank_fences(text).splitlines(), 1):
+            if not STEP_LINE_RE.match(line):
+                continue
+            hit = VAGUE_ENUM_RE.search(line)
+            if hit:
+                c.add("13", f"{doc}:{lineno}",
+                      f"a step that enumerates by {hit.group(0).strip()!r} — the "
+                      "builder has to guess the rest")
+            hit = EXTERNAL_STEP_RE.search(line)
+            if hit and not EXTERNAL_LABEL_RE.search(line):
+                c.add("13", f"{doc}:{lineno}",
+                      f"step reaches outside the checkout ({hit.group(0).strip()!r}) "
+                      "with no `[MANUAL]` / `[OWNER EXTERNO]` label")
+
+
+DOC_ID_SPAN_RE = re.compile(r"^0\d[a-z]?$")
+SECTION_REF_RE = re.compile(r"§\s*(\d+(?:\.\d+)*[a-z]?)")
+SECTION_HEADING_RE = re.compile(r"^#{1,6}\s*(?:§\s*)?(\d+(?:\.\d+)*[a-z]?)\b", re.M)
+DOC_MENTION_RE = re.compile(r"\b(?:doc|documento)\s+(0\d[a-z]?)\b", re.I)
+DOC_ID_TOKEN_RE = re.compile(r"(?<![\w.])(0\d[a-z]?)(?![\w.])")
+# `§3.5 de 02b` — legible to a reader, invisible to a naive sweep. The protocol
+# prefers the prefix first and says so; reading it here is what keeps the
+# preference from turning into a wall of false candidates.
+TRAILING_DOC_RE = re.compile(r"^\s*(?:de|of|en|in|del)\s+(0\d[a-z]?)\b", re.I)
+
+
+def blank_inline_code_for_refs(text: str) -> str:
+    """Inline spans blanked EXCEPT a bare doc id.
+
+    This is check 4's whole false-positive class (a): a section number quoted as
+    text — a defect being described (`` fixed the cross-ref `§3.6`→`§3.5` ``) or an
+    example — is not a navigation target, and a sweep that reads it as one reports
+    the fix as the bug. But the protocol's own notation writes a doc prefix in
+    backticks too (`` `02` §1.5 ``), so blanking every span would strip the prefix
+    and silently reread every boundary-crossing ref as local — which turns the worst
+    finding this check has (a ref that resolves in the WRONG file) into silence."""
+    def sub(m: re.Match) -> str:
+        body = m.group(0)[1:-1].strip()
+        return f" {body} " if DOC_ID_SPAN_RE.match(body) else " " * len(m.group(0))
+    return re.sub(r"`[^`\n]*`", sub, text)
+
+
+def section_numbers(text: str) -> set[str]:
+    return set(SECTION_HEADING_RE.findall(text))
+
+
+def check_cross_refs(facts: dict, prose: dict[str, str], in_scope: list[dict],
+                     c: Candidates) -> None:
+    """Check 4, as a candidate generator — and the one where the protocol's warning
+    is loudest: *"Mechanical sweeps over-report here: verify each hit by eye."*
+    Candidates, never findings, and every guard below exists to keep the list short
+    enough that anyone still reads it.
+
+    Two false-positive classes are named in the protocol. (a) — a section number
+    quoted as text — IS mechanizable and is stripped here along with fenced blocks.
+    (b) — a changelog clause that names a doc once and then enumerates what changed
+    inside it (`` `02` gained §0.3b, §1.1, §2.5 ``) — is **not**: it is narrative
+    about one document, not five navigation targets, and telling the two apart means
+    reading the sentence. So no attempt is made to filter it; a reader who sees the
+    clause dismisses the whole group in one glance, which is cheaper than a rule
+    that guesses wrong in both directions.
+
+    Prefix binding follows the protocol exactly: a prefix does NOT distribute across
+    a list, so a doc id binds only to the `§` it immediately precedes (or follows,
+    in the `§3.5 de 02b` shape). Every other ref on that line is local to its own
+    file — which is what makes the split-doc case detectable at all."""
+    by_id = {d["id"]: d for d in in_scope}
+    declared = {str(e.get("id")) for e in facts.get("docs") or []
+                if isinstance(e, dict) and e.get("id")}
+    sections = {d["id"]: section_numbers(prose[d["file"]])
+                for d in in_scope if d["file"] in prose}
+    file_to_id = {d["file"]: d["id"] for d in in_scope}
+
+    for doc, text in prose.items():
+        local_id = file_to_id.get(doc)
+        swept = blank_inline_code_for_refs(blank_fences(text))
+        for lineno, line in enumerate(swept.splitlines(), 1):
+            for target in set(DOC_MENTION_RE.findall(line)):
+                if target not in declared:
+                    c.add("4", f"{doc}:{lineno}",
+                          f"names doc `{target}`, which `_facts.yml docs[]` does "
+                          f"not list")
+
+            ids = [(m.start(), m.end(), m.group(1))
+                   for m in DOC_ID_TOKEN_RE.finditer(line)]
+            for m in SECTION_REF_RE.finditer(line):
+                num = m.group(1)
+                prefix = next((tok for start, end, tok in ids
+                               if end <= m.start()
+                               and not line[end:m.start()].strip()), None)
+                if prefix is None:
+                    after = TRAILING_DOC_RE.match(line[m.end():])
+                    prefix = after.group(1) if after else None
+                target = prefix or local_id
+                if target is None:
+                    continue
+                if target not in declared:
+                    c.add("4", f"{doc}:{lineno}",
+                          f"`{target}` §{num} — `docs[]` lists no doc `{target}`")
+                    continue
+                if target not in sections:
+                    continue        # the doc is declared but not on disk (check 9)
+                if num in sections[target]:
+                    continue
+                elsewhere = sorted(k for k, v in sections.items()
+                                   if k != target and num in v)
+                if elsewhere and prefix is None:
+                    # The shape the protocol calls worse than dangling: it reads as
+                    # valid and sends the executor to the wrong file.
+                    c.add("4", f"{doc}:{lineno}",
+                          f"§{num} is unqualified, so it reads as local to "
+                          f"`{target}`, where no such section exists — it resolves "
+                          f"in {', '.join('`%s`' % e for e in elsewhere)} instead")
+                else:
+                    c.add("4", f"{doc}:{lineno}",
+                          f"§{num} resolves to no heading in `{target}`"
+                          + (" (its own file)" if prefix is None else ""))
+
+
+def check_contract_shape(facts: dict, prose: dict[str, str], c: Candidates) -> None:
+    """Check 3, as a candidate generator.
+
+    Comparing a fence's key set against `contracts.*` is arithmetic. What is NOT
+    mechanizable is the documented exception: a field the sender injects downstream,
+    outside the client body, is legitimate **if a doc note explains it** — and the
+    script cannot read the note. So the diff is a candidate and the note is the
+    human's to find.
+
+    The partition with check 8 is exact and neither check reports the other's cases:
+    a fence sharing no field with any payload has no contract to be compared against
+    and belongs to check 8 (prose-orphan); a fence that shares fields but not all of
+    them belongs here; a fence that matches one payload exactly is silent in both. A
+    fence the prose cites by contract id is judged here even when it shares nothing —
+    it was ATTRIBUTED to that contract, which is a stronger claim than resembling it.
+    """
+    blocks = contract_blocks(facts)
+    if not blocks:
+        return
+    known = set(registry_container_entries(facts, "contracts"))
+    for doc, text in prose.items():
+        lines = text.splitlines()
+        for lineno, lang, body in iter_fences(text):
+            if lang != "json":
+                continue
+            keys = top_level_json_keys(body)
+            if not keys:
+                continue
+            context = "\n".join(lines[max(0, lineno - 9):lineno])
+            cited = set(re.findall(r"contracts\.([A-Za-z0-9_]+)", context)) & known
+            pool = ([b for b in blocks if b[0].split(".")[1] in cited]
+                    if cited else blocks)
+            label, fields = max(
+                pool, key=lambda b: (len(keys & b[1]), -len(keys ^ b[1])))
+            if not cited and not keys & fields:
+                continue        # nothing to compare against — check 8's territory
+            extra, missing = sorted(keys - fields), sorted(fields - keys)
+            if not extra and not missing:
+                continue
+            detail = ", ".join(
+                p for p in ("extra {%s}" % ", ".join(extra) if extra else "",
+                            "missing {%s}" % ", ".join(missing) if missing else "")
+                if p)
+            c.add("3", f"{doc}:{lineno}", f"```json vs `{label}`: {detail}")
+
+
 def check_prose_orphans(facts: dict, prose: dict[str, str], c: Candidates) -> None:
     """Check 8, as a candidate generator.
 
@@ -1219,13 +1503,18 @@ HUMAN_PASS = [
     ("2", "singletons unique", "`dates.*`, revision tags, `tests_baseline`, version "
      "numbers must read identically in every doc that mentions them — any variance "
      "is a CONTRADICTION", None),
-    ("3", "contract shape", "JSON blocks in prose vs `contracts.*`, field for field",
-     None),
+    ("3", "contract shape", "the candidates below are key-set diffs against "
+     "`contracts.*`, which is arithmetic. The exception is not: a field the sender "
+     "injects downstream is legitimate IF a doc note explains it, and the script "
+     "cannot read the note. Find it, or write the POLISH", None),
     ("3.5", "`decisions.*` cited_in", "when a decision changes, walk its `cited_in:` "
      "sections by hand — `sync` replaces values and a premise has no value to replace",
      None),
     ("4", "cross-refs resolve", "mechanical sweeps over-report here; the protocol "
-     "lists two exempt shapes. Verify each hit by eye", None),
+     "lists two exempt shapes and only the first — a section number quoted AS TEXT "
+     "— is stripped below. The second, a changelog clause naming a doc once and "
+     "then enumerating what changed inside it, cannot be. Verify each hit by eye",
+     None),
     ("5", "checklist coverage", "each doc 01 checklist item has a counterpart in doc "
      "02 (implementation/test) and/or doc 03 (stakeholder)", "02|03"),
     ("6", "acceptance parity", "doc 02's Definition of Done vs `acceptance[]`", "02"),
@@ -1247,8 +1536,11 @@ HUMAN_PASS = [
      "the last commit touching what it measures, or older than 7 days on a volatile "
      "metric. Check 1b re-runs the command; this one flags the ones you would never "
      "think to re-run because nothing looks wrong", None),
-    ("13", "doc 02 executability", "resolved paths, named symbols, paste-ready code, "
-     "`[MANUAL]` labels", "02"),
+    ("13", "doc 02 executability", "the candidates below are the three regex-able "
+     "sub-bullets. The other five are yours and none is mechanizable: a symbol named "
+     "but never defined, an edit with no anchor, a B.1 row worded as parity or "
+     "negation with no `Falla si:` mutation, a persisted store with no schema, and a "
+     "step that needs judgment", "02"),
     ("15", "profile coverage, the halves that are not string comparison",
      "`gap_sweep_layers:` empty while this stack has a shipped layer; "
      "`commands.tests_expect` not contained in `tests_baseline.evidence.value`; a "
@@ -1403,6 +1695,9 @@ def main(argv: list[str] | None = None) -> int:
     check_profile_and_log(facts, spec_dir, repo_root, root_is_real, f)
     check_log_stage(facts, spec_dir, f)
     check_prose_orphans(facts, prose, c)
+    check_contract_shape(facts, prose, c)
+    check_cross_refs(facts, prose, in_scope, c)
+    check_doc02_executability(facts, prose, in_scope, c)
 
     return report(f, c, facts, in_scope, deferred, prose, args.json)
 
