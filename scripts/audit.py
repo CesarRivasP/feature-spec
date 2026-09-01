@@ -33,7 +33,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from render import collect_claims, status_gate, walk, yaml
+    from render import accepted_state, collect_claims, status_gate, walk, yaml
 except ImportError as exc:  # pragma: no cover
     sys.exit(
         f"cannot import the shared registry core from render.py: {exc}\n"
@@ -521,7 +521,12 @@ def check_orphan_and_dangling_ids(facts: dict, prose: dict[str, str],
         # Cited by VALUE counts as cited. An orphan is an entry no doc mentions at
         # all — "measured, correct and dead". A `limits.cloudflare` whose 100 and 524
         # are quoted in prose is being read; nobody writes `limits.cloudflare` inline.
-        if any(v in body for v in entry_values(facts, container, name)):
+        # Case-insensitive: an entry whose text appears in prose with a different
+        # capitalisation IS being read. Whether it was copied verbatim is check 1's
+        # question and a human one; reporting it as an orphan says nobody reads it,
+        # which is a different and wrong claim.
+        low = body.lower()
+        if any(v.lower() in low for v in entry_values(facts, container, name)):
             continue
         f.add(DRIFT, f"{container}.{name}",
               "never cited in any prose doc, by id or by value",
@@ -639,23 +644,27 @@ def check_evidence_cmd_runnable(facts: dict, f: Findings) -> None:
                   "24 cmd runnable verbatim")
 
 
-def check_tracking(facts: dict, spec_dir: Path, f: Findings) -> None:
+def check_tracking(facts: dict, repo_root: Path, f: Findings) -> None:
     """§1.6. The skill's own rule is "cheap-to-verify state is never asserted", and
     `tracking.*` is the field that breaks it most often: `branch` said `main` while
     the real branch was the feature one, was corrected, and went wrong the other way
     after the merge. `issues: []` stayed empty in three sets after the issues existed.
 
-    Only `branch` is settled here. `issues`/`pr`/`milestone` live on GitHub, and an
-    auditor that makes network calls is a different kind of tool — they are listed
-    as a human pass instead."""
+    Only `branch` is settled here, and only when there IS a repo to settle it against:
+    a set read out of a vault has no checkout, and reporting "not a branch" for
+    "there is no repo here" is a different claim than the one the check makes.
+    `issues`/`pr`/`milestone` live on GitHub, and an auditor that makes network calls
+    is a different kind of tool — they are listed as a human pass instead."""
     tracking = facts.get("tracking")
     if not isinstance(tracking, dict):
         return
     branch = tracking.get("branch")
-    if branch:
+    in_repo = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=repo_root,
+                             capture_output=True, text=True).returncode == 0
+    if branch and in_repo:
         ok = subprocess.run(["git", "rev-parse", "--verify", "--quiet",
                              f"refs/heads/{branch}"],
-                            cwd=spec_dir, capture_output=True, text=True)
+                            cwd=repo_root, capture_output=True, text=True)
         if ok.returncode != 0:
             f.add(DRIFT, "tracking.branch",
                   f"`{branch}` is not a branch in this checkout",
@@ -694,6 +703,21 @@ def check_provider_behavior(facts: dict, f: Findings) -> None:
                   "reasoning about the first is how this claim got corrected twice in "
                   "opposite directions",
                   "29 provider behavior is observed")
+
+
+def live_accepted_risks(facts: dict) -> list[tuple[str, str, str]]:
+    """Deferrals with a deadline that has not arrived. Not findings — but not
+    silence either: the audit names them and their expiry, which is the whole
+    reason the field exists rather than a note in a log entry."""
+    out = []
+    for d in facts.get("defects") or []:
+        if not isinstance(d, dict):
+            continue
+        state, detail = accepted_state(d)
+        if state == "live":
+            because = str((d.get("accepted") or {}).get("because", "")).strip()
+            out.append((str(d.get("id", "?")), detail, because))
+    return out
 
 
 def check_placeholders(facts: dict, f: Findings) -> None:
@@ -838,6 +862,17 @@ def report(f: Findings, facts: dict, in_scope, deferred, prose, as_json: bool) -
                 print(f"  - {i.strip()}")
             print()
 
+    risks = live_accepted_risks(facts)
+    if risks:
+        print("## Accepted risks, with their expiry\n")
+        print("Recorded decisions to ship with a cause still asserted. Not findings "
+              "— until the date passes, and then G1 refuses again:\n")
+        for rid, detail, because in risks:
+            print(f"  defects.{rid} — {detail}")
+            if because:
+                print(f"      {because}")
+        print()
+
     print("## Requires a human pass\n")
     for num, name, why in HUMAN_PASS:
         print(f"  check {num:<3} {name} — {why}")
@@ -848,6 +883,8 @@ def report(f: Findings, facts: dict, in_scope, deferred, prose, as_json: bool) -
                else "clean — every mechanized check passed")
     if deferred:
         verdict += f" · stage {status}: {len(deferred)} doc(s) not due yet"
+    if risks:
+        verdict += f" · {len(risks)} accepted risk(s) with a due date"
     print(verdict)
     return 1 if c else 0
 
@@ -888,7 +925,7 @@ def main(argv: list[str] | None = None) -> int:
     check_phase_numbering(prose, f)
     check_evidence_cmd_runnable(facts, f)
     check_placeholders(facts, f)
-    check_tracking(facts, spec_dir, f)
+    check_tracking(facts, repo_root, f)
     check_provider_behavior(facts, f)
     check_doc_size(in_scope, f)
     check_profile_and_log(facts, spec_dir, repo_root, f)

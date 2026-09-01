@@ -180,6 +180,30 @@ defects: []
   #                           #   on purpose — closing it would be a lie — but
   #                           #   without this field it reads as pending work here.
   #   note_ownership: null    # why it is still open in THIS set
+  #
+  #   # SHIPPING WITH THIS STILL ASSERTED, ON PURPOSE. Gate G1 refuses `shipped`
+  #   # while a root_cause/contributing defect is `basis: asserted` — and that is
+  #   # right, but there is a legitimate case it had no room for: the team knows
+  #   # the cause is unproven, ships the trimmed scope anyway, and schedules the
+  #   # measurement. Without a field for it, that decision goes into a log entry
+  #   # or an agent's memory, and NEITHER is read by the audit, the next agent, or
+  #   # the view. From outside, "we looked and chose to wait" is indistinguishable
+  #   # from "nobody looked".
+  #   #
+  #   # This is a DEFERRAL WITH A DEADLINE, not an exemption. Same rule the
+  #   # registry already applies to `changes[]`: a postponement with no reopen
+  #   # condition is abandonment with better wording. All four fields required.
+  #   accepted:
+  #     by: <a person>        # never an agent. An agent cannot accept a risk on
+  #                           #   its own behalf; the audit rejects a model id here.
+  #     decided_on: YYYY-MM-DD
+  #     until: YYYY-MM-DD     # the date the measurement is due. It EXPIRES: past
+  #                           #   this, G1 refuses `shipped` again and names the
+  #                           #   date. That expiry is the whole point — it is
+  #                           #   what a memory or a log entry cannot do.
+  #     because: 'ships the trimmed scope; the >1000-object run needs production
+  #               volume that does not exist yet'
+  #   # (never name a date field `on:` — YAML 1.1 reads it as the boolean True)
   #   # once measured:
   #   #   basis: measured
   #   #   evidence: { how: log, cmd: "<commands.device_log>", date: YYYY-MM-DD,
