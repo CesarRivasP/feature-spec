@@ -101,6 +101,17 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
       ("1b/14", "R5")],           # no `accepted:` at all — original behaviour
      [("1b/14", "R1")]),          # recorded, not yet due
 
+    # Capitalized enums used to switch off the check that read each one. A gate
+    # that fails open is worse than no gate: `status: Shipped` ranked 0, so the
+    # set audited as a draft with a root cause still asserted.
+    ("mixed-case",
+     [("1b/14", "M1"),            # G1 through `Shipped` + `Root_Cause` + `Asserted`
+      ("14", "M1"),               # open in a shipped set
+      ("27", "M3"),               # cascade through `status: Dead`
+      ("23", "N1")],              # reopens_when demanded through `kind: Deferred`
+     [("21", "M1"),               # `Defects.M1` with a capital D still resolves
+      ("26", "AC1")]),            # `status: Approved` is a valid approval
+
     # §1.6 — cheap-to-verify state asserted anyway.
     ("tracking-drift",
      [("28", "a-branch-that-was-never-created"),

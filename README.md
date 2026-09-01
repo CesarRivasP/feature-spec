@@ -29,7 +29,7 @@ cp -R feature-spec ~/.claude/skills/
 To pin a version instead of tracking `main`:
 
 ```bash
-git clone --branch v1.5.0 --depth 1 git@github.com:CesarRivasP/feature-spec.git
+git clone --branch v1.5.1 --depth 1 git@github.com:CesarRivasP/feature-spec.git
 ```
 
 Restart the session so the skill is picked up. No MCP servers, no package to install: the skill itself is markdown and YAML.
@@ -238,7 +238,8 @@ If anything outside this repo reads `docs/features/`, check its patterns when yo
 
 | version | what it added |
 |---|---|
-| [**v1.5.0**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.5.0) | shipping with a root cause still asserted is allowed **once, in writing, with an expiry date** — `defects[].accepted: { by, decided_on, until, because }`. Deciding to ship the trimmed scope and measure later is a real call; recording it in a log entry or an agent's memory is not, because neither can be checked against a date |
+| [**v1.5.1**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.5.1) | every enum field is read lowercased. `status: Shipped` used to rank as unknown — which ranks as `draft` — so a shipped set audited as a draft: G1 clean and four checks skipped, with a root cause still asserted. A gate that fails open is worse than no gate |
+| [v1.5.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.5.0) | shipping with a root cause still asserted is allowed **once, in writing, with an expiry date** — `defects[].accepted: { by, decided_on, until, because }`. Deciding to ship the trimmed scope and measure later is a real call; recording it in a log entry or an agent's memory is not, because neither can be checked against a date |
 | [v1.4.2](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.4.2) | the `_log.md` entry is **opened before the work and completed after**, not appended at the end — the round that most needs a record is the one that never reaches the end. A delegated agent wrote four documents and hit a session limit before writing its entry; from outside it had produced nothing |
 | [v1.4.1](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.4.1) | the `view` says which documents are **not due yet** rather than staying silent — a stage-1 set rendered as "1 docs" is indistinguishable from a set someone abandoned halfway, and correct is not the same as silent |
 | [v1.4.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.4.0) | the set is written in **two stages** — `new` writes the registry and doc 01, `implement` writes docs 02 and 03 once the plan is confirmed. Those two are 71-83% of a set's prose and the only part rewritten whole when the plan moves, and a plan gets bounced two to four times before anyone commits to it. Plus `scripts/audit.py`: the protocol mechanized, because an agent runs the checks it *remembers* — twelve new checks, each shipped with the real failure that motivated it as a test |

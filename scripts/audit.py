@@ -33,7 +33,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from render import accepted_state, collect_claims, status_gate, walk, yaml
+    from render import (accepted_state, collect_claims, norm, status_gate,
+                        walk, yaml)
 except ImportError as exc:  # pragma: no cover
     sys.exit(
         f"cannot import the shared registry core from render.py: {exc}\n"
@@ -111,7 +112,7 @@ def template_keys() -> set[str]:
 
 def resolve_stage(facts: dict, spec_dir: Path) -> tuple[int, list[dict], list[dict]]:
     """-> (status rank, docs in scope, docs deferred to a later stage)."""
-    status = str(facts.get("status") or "draft").strip()
+    status = norm(facts.get("status")) or "draft"
     rank = STATUS_RANK.get(status, 0)
     in_scope, deferred = [], []
     for entry in facts.get("docs") or []:
@@ -119,7 +120,7 @@ def resolve_stage(facts: dict, spec_dir: Path) -> tuple[int, list[dict], list[di
             continue
         path = spec_dir / str(entry.get("file", ""))
         item = {"id": str(entry.get("id") or "?"), "file": str(entry.get("file", "")),
-                "stage": str(entry.get("stage") or "draft"), "path": path,
+                "stage": norm(entry.get("stage")) or "draft", "path": path,
                 "exists": path.is_file()}
         # In scope when its stage is reached, OR when the file exists anyway:
         # never skip a file that is on disk — that is the copy written against
@@ -177,7 +178,7 @@ def check_basis_gates(facts: dict, f: Findings) -> None:
         f.add(sev, "_facts.yml", w.rstrip("."), "see references/evidence.md",
               "1b/14 basis")
 
-    status = str(facts.get("status") or "").strip()
+    status = norm(facts.get("status"))
     by_id = {}
     for key in ("defects", "alternatives"):
         for e in facts.get(key) or []:
@@ -191,9 +192,9 @@ def check_basis_gates(facts: dict, f: Findings) -> None:
             eid = str(e.get("id", "?"))
             where = f"{key}.{eid}"
 
-            if str(e.get("basis")) == "asserted" and not e.get("falsified_by"):
+            if norm(e.get("basis")) == "asserted" and not e.get("falsified_by"):
                 pass  # already reported by status_gate
-            if (key == "defects" and str(e.get("basis")) == "asserted"
+            if (key == "defects" and norm(e.get("basis")) == "asserted"
                     and e.get("falsified_by") and not e.get("log_line")):
                 f.add(DRIFT, where,
                       "`falsified_by:` names an observation with no `log_line:`",
@@ -201,11 +202,11 @@ def check_basis_gates(facts: dict, f: Findings) -> None:
                       "it must be built — instrumentation is spec, not an afterthought",
                       "14 basis gates")
 
-            if (key == "alternatives" and e.get("outcome") == "discarded"
-                    and str(e.get("basis")) == "asserted"):
+            if (key == "alternatives" and norm(e.get("outcome")) == "discarded"
+                    and norm(e.get("basis")) == "asserted"):
                 for dep in e.get("depends_on") or []:
                     target = by_id.get(str(dep), (None, {}))[1]
-                    if str(target.get("status")) == "dead":
+                    if norm(target.get("status")) == "dead":
                         f.add(CONTRADICTION, where,
                               f"discarded on `{dep}`, whose status is now `dead`",
                               "the premise died, so the discard is void — `verify` "
@@ -213,7 +214,7 @@ def check_basis_gates(facts: dict, f: Findings) -> None:
                               "14 basis gates")
 
             # The cheap detector for the failure the four gates above still miss.
-            if (status == "shipped" and str(e.get("status")) == "open"
+            if (status == "shipped" and norm(e.get("status")) == "open"
                     and not e.get("owned_by") and not e.get("outcome")):
                 f.add(CONTRADICTION, where,
                       "still `open` in a set marked `shipped`, with no `owned_by:` "
@@ -241,8 +242,11 @@ def check_declared_dependencies(facts: dict, f: Findings) -> None:
             eid = str(e.get("id", "?"))
             declared = {str(x) for x in (e.get("depends_on") or [])}
             text = " ".join(str(e.get(fld, "")) for fld in TEXT_FIELDS)
+            known_lower = {k.lower(): k for k in known}
+            declared_lower = {d.lower() for d in declared}
             for other in re.findall(r"`([A-Za-z]\d+)`", text):
-                if other in known and other != eid and other not in declared:
+                if (other.lower() in known_lower and other.lower() != eid.lower()
+                        and other.lower() not in declared_lower):
                     f.add(DRIFT, f"{key}.{eid}",
                           f"names `{other}` in its prose but does not declare it in "
                           "`depends_on:`",
@@ -260,7 +264,7 @@ def check_changes_vocabulary(facts: dict, f: Findings) -> None:
         if not isinstance(e, dict):
             continue
         cid = str(e.get("id") or e.get("file") or f"[{idx}]")
-        kind = e.get("kind")
+        kind = norm(e.get("kind")) or None
         if kind is None:
             f.add(DRIFT, f"changes.{cid}", "no `kind:`",
                   "planned | deferred | moved_out | pending — an unclassified change "
@@ -270,7 +274,7 @@ def check_changes_vocabulary(facts: dict, f: Findings) -> None:
         # "the daily peak passes ~200 distinct users. Today: 5" is a condition.
         # "when traffic grows" is an opinion, and reopening on an opinion never
         # happens. Without the number the discussion is one view against another.
-        if str(kind) == "deferred" and e.get("reopens_when") \
+        if kind == "deferred" and e.get("reopens_when") \
                 and not re.search(r"\d", str(e["reopens_when"])):
             f.add(DRIFT, f"changes.{cid}",
                   "`reopens_when:` states no measured value",
@@ -278,7 +282,7 @@ def check_changes_vocabulary(facts: dict, f: Findings) -> None:
                   "a threshold with no measurement is an opinion, and nothing "
                   "reopens on an opinion",
                   "23 changes[] lifecycle")
-        for field in required.get(str(kind), ()):
+        for field in required.get(kind, ()):
             if not e.get(field):
                 f.add(DRIFT, f"changes.{cid}",
                       f"`kind: {kind}` with no `{field}:`",
@@ -296,7 +300,7 @@ def normalize_acceptance(facts: dict) -> list[dict]:
         if isinstance(e, dict):
             out.append({"id": str(e.get("id") or f"[{i}]"),
                         "item": str(e.get("item") or e.get("claim") or ""),
-                        "status": str(e.get("status") or ""),
+                        "status": norm(e.get("status")),
                         "verified_on": e.get("verified_on")})
         else:
             out.append({"id": f"[{i}]", "item": str(e), "status": "", "verified_on": None})
@@ -375,11 +379,11 @@ def check_dead_dependency_cascade(facts: dict, f: Findings) -> None:
             if isinstance(e, dict) and e.get("id"):
                 entries[str(e["id"])] = (key, e)
     for eid, (key, e) in entries.items():
-        if str(e.get("status")) != "open" or e.get("outcome"):
+        if norm(e.get("status")) != "open" or e.get("outcome"):
             continue
         for dep in e.get("depends_on") or []:
             target = entries.get(str(dep), (None, {}))[1]
-            if str(target.get("status")) == "dead":
+            if norm(target.get("status")) == "dead":
                 f.add(DRIFT, f"{key}.{eid}",
                       f"still `open` with no `outcome:`, but `{dep}` — which it "
                       "depends on — is now `dead`",
@@ -403,9 +407,9 @@ def check_file_existence(facts: dict, repo_root: Path, status_rank: int,
             raw = e.get("file") or e.get("path")
             if not raw:
                 continue
-            if str(e.get("where")) == "external":
+            if norm(e.get("where")) == "external":
                 continue
-            if key == "changes" and str(e.get("kind")) in ("deferred", "moved_out"):
+            if key == "changes" and norm(e.get("kind")) in ("deferred", "moved_out"):
                 continue  # decided not to build it — the file is absent by design
             if key == "changes" and status_rank < STATUS_RANK["implementing"]:
                 continue  # a file this set will create legitimately isn't there yet
@@ -510,13 +514,14 @@ def check_orphan_and_dangling_ids(facts: dict, prose: dict[str, str],
     not a dangling ref. A local mirror id is never the answer — that is how a `D4_ajeno`
     had to be renamed across four files when the owner changed."""
     ids = registry_ids(facts)
+    by_lower = {k.lower(): v for k, v in ids.items()}
     slug = str(facts.get("feature") or "")
     body = "\n".join(prose.values())
 
     for name, container in sorted(ids.items()):
         if container in ORPHAN_EXEMPT:
             continue  # a decision is cited by consequence, not by key (report §3.5)
-        if re.search(rf"(?<!\w){re.escape(name)}\b", body):
+        if re.search(rf"(?<!\w){re.escape(name)}\b", body, re.I):
             continue
         # Cited by VALUE counts as cited. An orphan is an entry no doc mentions at
         # all — "measured, correct and dead". A `limits.cloudflare` whose 100 and 524
@@ -545,13 +550,15 @@ def check_orphan_and_dangling_ids(facts: dict, prose: dict[str, str],
                    and slug not in q for q in quoted):
                 continue
             for container, name in re.findall(
-                    rf"\b({containers})\.([A-Za-z0-9_]+)", line):
-                if ids.get(name) == container:
+                    rf"\b({containers})\.([A-Za-z0-9_]+)", line, re.I):
+                container, name = norm(container), name
+                owner = by_lower.get(name.lower())
+                if owner == container:
                     continue
-                if name in ids:
+                if owner is not None:
                     f.add(CONTRADICTION, f"{doc}:{lineno}",
                           f"cites `{container}.{name}`, but `{name}` lives under "
-                          f"`{ids[name]}:` in the registry",
+                          f"`{owner}:` in the registry",
                           "an edit reparented it: the entry survived, its category "
                           "did not, and every check downstream reads it as the wrong "
                           "kind of thing",
@@ -614,10 +621,10 @@ def check_evidence_cmd_runnable(facts: dict, f: Findings) -> None:
     never be re-run. A `measured` that cannot be re-executed verbatim is the only kind
     of lie that propagates to all three docs with perfect fidelity."""
     for path, node in walk(facts):
-        if not (isinstance(node, dict) and str(node.get("basis")) == "measured"):
+        if not (isinstance(node, dict) and norm(node.get("basis")) == "measured"):
             continue
         ev = node.get("evidence") or {}
-        how = str(ev.get("how", "")).lower()
+        how = norm(ev.get("how"))
         cmd = str(ev.get("cmd", "") or "")
         if how not in EXECUTABLE_HOW or not cmd:
             continue  # `how: device|log|sentry` points at a UI or a procedure
@@ -671,7 +678,7 @@ def check_tracking(facts: dict, repo_root: Path, f: Findings) -> None:
                   "one command settles it (`git rev-parse --verify`), so asserting it "
                   "is the same defect as copying a test count",
                   "28 tracking vs reality")
-    status = str(facts.get("status") or "")
+    status = norm(facts.get("status"))
     if status in ("implementing", "shipped") and not (tracking.get("issues") or
                                                       tracking.get("pr")):
         f.add(DRIFT, "tracking",
@@ -688,10 +695,10 @@ def check_provider_behavior(facts: dict, f: Findings) -> None:
     because both times it reasoned about the provider's configuration instead of
     executing the flow."""
     for path, node in walk(facts):
-        if not (isinstance(node, dict) and str(node.get("basis")) == "measured"):
+        if not (isinstance(node, dict) and norm(node.get("basis")) == "measured"):
             continue
         ev = node.get("evidence") or {}
-        if str(ev.get("how", "")).lower() != "provider-behavior":
+        if norm(ev.get("how")) != "provider-behavior":
             continue
         value = str(ev.get("value") or "")
         if not re.search(r"\b[1-5]\d{2}\b", value):
@@ -722,7 +729,7 @@ def live_accepted_risks(facts: dict) -> list[tuple[str, str, str]]:
 
 def check_placeholders(facts: dict, f: Findings) -> None:
     """Check 10."""
-    if str(facts.get("status") or "draft") == "draft":
+    if norm(facts.get("status")) in ("", "draft"):
         return
     for key in ("owners", "dates", "schedule"):
         node = facts.get(key)
@@ -778,7 +785,7 @@ def check_log_stage(facts: dict, spec_dir: Path, f: Findings) -> None:
     log = spec_dir / "_log.md"
     if not log.is_file():
         return
-    status = str(facts.get("status") or "draft").strip()
+    status = norm(facts.get("status")) or "draft"
     if status == "draft":
         return
     stages = re.findall(r"^\*\*Stage:\*\*\s*(\S+)\s*(?:→|->)\s*(\S+)",

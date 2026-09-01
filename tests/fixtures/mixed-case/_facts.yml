@@ -1,0 +1,30 @@
+# Every enum field here is capitalized. Before norm(), each one silently switched
+# off the check that read it — and a gate that fails open is worse than no gate:
+#   status: Shipped   -> ranked 0, so the set audited as a DRAFT. G1 clean, checks
+#                        5/6/13/26 all skipped, with a root cause still asserted.
+#   basis: Asserted   -> G1 and G2 both blind
+#   role: Root_Cause  -> G1 blind even with a lowercase status
+#   kind: Deferred    -> reopens_when never demanded; the file read as missing
+#   status: Dead      -> the dead-dependency cascade never fired
+# The prose also cites `Defects.M1` with a capital D, which must still resolve.
+feature: mixed-case
+status: Shipped
+profile: _profile.yml
+acceptance:
+  - { id: AC1, item: 'el borrado respeta el cap del proveedor', status: Approved,
+      verified_on: 2026-08-30 }
+defects:
+  - { id: M1, role: Root_Cause, basis: Asserted, status: Open,
+      claim: 'el cron corta en mil objetos y lo que queda afuera no se borra',
+      falsified_by: 'una corrida con mas de mil objetos que los borre todos',
+      log_line: 'cleanup.run truncated=<bool>' }
+  - { id: M2, role: Contributing, basis: Decided, status: Dead,
+      claim: 'la cabecera habilita el sniffing del MIME' }
+  - { id: M3, role: Symptom, basis: Decided, status: Open, depends_on: [M2],
+      claim: 'el filtro acepta el tipo compuesto' }
+changes:
+  - { id: N1, file: src/cleanup.ts, kind: Deferred,
+      deferred_because: decisions.scope_trimmed,
+      change: 'paginar el listado del bucket' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: Draft }
