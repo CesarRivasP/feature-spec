@@ -1,0 +1,6 @@
+# The unfilled starter, copied straight out of profiles/_profile.yml.tpl. Check 15
+# cares about these in the OTHER direction — a starter holding a concrete value —
+# so the angle brackets must not read as a repo mismatch.
+repo: <basename of the git root>
+app: <app subdir>
+prose_language: es

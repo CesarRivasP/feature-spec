@@ -128,9 +128,9 @@ Any integer field whose meaning depends on a predicate (`attended`, `resolved`, 
 - Two counters that differ (`attended: 2` / `unblocked: 1`) with no note explaining why → `DRIFT`. Left alone, each doc paraphrases it differently and the set now claims two different facts.
 
 ### 12. Staleness by age — [human]
-For every `verified.date`, compare against today and against the last commit touching the measured surface.
-- `verified.date` older than the most recent change to what it measures → `CONTRADICTION` (re-run `cmd`).
-- `verified.date` older than 7 days on a volatile metric (prod counts, dashboard state) → `DRIFT`: re-measure before approval. Check 1b re-runs the command; this one flags the ones you'd never think to re-run because nothing looks wrong.
+For every `evidence.date` — and, in a set still on the legacy shape this file accepts above, every `verified.date` — compare against today and against the last commit touching the measured surface.
+- `evidence.date` older than the most recent change to what it measures → `CONTRADICTION` (re-run `cmd`).
+- `evidence.date` older than 7 days on a volatile metric (prod counts, dashboard state) → `DRIFT`: re-measure before approval. Check 1b re-runs the command; this one flags the ones you'd never think to re-run because nothing looks wrong.
 
 ### 13. Doc 02 executability — [human] *stage-gated (needs 02)*
 Parte A is the input to the builder. Scan it for:
@@ -161,8 +161,8 @@ Contract in `references/evidence.md`. These are the checks a clean consistency p
 - A command string appearing in a doc that differs from the profile's, `{}` placeholders substituted → `CONTRADICTION`. Same rule as any other shared datum; the difference is that this one gets executed.
 - `commands.tests_expect` not contained in `tests_baseline.evidence.value` → `DRIFT`. The baseline was recorded from a run whose pass line doesn't match what this repo prints, so nobody re-ran it here.
 - A field on `references/intake.md`'s never-guess list holding a value the repo cannot corroborate, with no sign it was confirmed → `DRIFT`. It reads as settled and was assumed.
-- **`_profile.yml repo:` ≠ `basename $(git rev-parse --show-toplevel)` → `CONTRADICTION`.** The profile came from another checkout — almost always because a spec folder was copied between projects and the profile travelled with it. Every `cmd` in the set now belongs to a different repo and every one of them still runs. Same defect class as copying a test count out of a sibling spec, one level up.
-- **`_profile.yml app:` naming a subdirectory that is not the one holding this spec → `CONTRADICTION`.** The `app_id` is another variant's; `how: device` evidence was gathered against the wrong install.
+- **`_profile.yml repo:` ≠ `basename $(git rev-parse --show-toplevel)` → `CONTRADICTION`.** **[script]** — The profile came from another checkout — almost always because a spec folder was copied between projects and the profile travelled with it. Every `cmd` in the set now belongs to a different repo and every one of them still runs. Same defect class as copying a test count out of a sibling spec, one level up.
+- **`_profile.yml app:` naming a subdirectory that is not the one holding this spec → `CONTRADICTION`.** **[script]** — The `app_id` is another variant's; `how: device` evidence was gathered against the wrong install.
 - **`_facts.yml profile:` pointing at a different file than the upward walk resolves today → `DRIFT`.** A second profile appeared, or the set moved. Two profiles in one repo is the drift the single-source rule exists to prevent — reconcile before anything else, since every other check reads commands through it.
 - **A starter in the skill's own `profiles/` holding a concrete value where the template has `<angle brackets>`** — a real `app_id`, a real repo name, a machine-specific `deep_review_agent` — → `DRIFT`. Starters are copied, never filled; a filled one leaks one project's identity into every other project that uses this skill.
 

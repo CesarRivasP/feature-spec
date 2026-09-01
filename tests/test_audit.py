@@ -14,6 +14,7 @@ that actually happened in a real spec set, and each case below states both:
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -137,6 +138,18 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
     ("legacy-no-stage",
      [("9", "02-implementation-and-e2e.md is not on disk")],
      []),
+
+    # §15 — a spec folder copied between projects, profile travelling along. Both
+    # halves are pure string comparison and both were left to the human pass.
+    ("foreign-profile",
+     [("15", "some-other-checkout"),   # `repo:` names another checkout
+      ("15", "apps/consumer")],        # `app:` does not govern this spec's dir
+     []),
+
+    # The same check against an unfilled starter: angle brackets are not a value.
+    ("starter-profile",
+     [],
+     [("15", "basename of the git root"), ("15", "app subdir")]),
 ]
 
 
@@ -155,9 +168,31 @@ def matches(findings: list[dict], check: str, text: str) -> bool:
                for f in findings)
 
 
+def human_pass_is_complete() -> list[str]:
+    """The omission bug, made unrepeatable.
+
+    Checks 2, 5, 8, 11 and 12 were tagged `[human]` in the protocol, absent from the
+    script, and absent from `HUMAN_PASS` — so they were not run and not listed, i.e.
+    silently skipped, which is the one failure this script exists to prevent. A
+    check leaves `HUMAN_PASS` only by being mechanized and losing its `[human]` tag
+    in the protocol, and this test is what forces those two edits to happen together.
+    """
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from audit import HUMAN_PASS  # noqa: E402
+
+    protocol = (ROOT / "references" / "audit-protocol.md").read_text(encoding="utf-8")
+    tagged = set(re.findall(r"^### ([\w.]+)\..* — \[human\]", protocol, re.M))
+    listed = {num for num, _, _, _ in HUMAN_PASS}
+    return [f"protocol tags check {n} `[human]` but HUMAN_PASS does not list it "
+            "— it is neither run nor printed" for n in sorted(tagged - listed)]
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     failures, total = [], 0
+
+    total += 1
+    failures += human_pass_is_complete()
     for fixture, expect, reject in CASES:
         findings = run(fixture)
         for check, text in expect:
