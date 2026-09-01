@@ -100,6 +100,8 @@ python3 scripts/audit.py docs/features/<slug>/
 
 It runs every check a program can run and prints the rest under `REQUIRES A HUMAN PASS`, so a skipped check is visible instead of silent. This is not a convenience: the protocol's checks are good and **an agent runs the ones it remembers**, which in a long session is a few. A rough version of this script with ~10 checks mechanized, run against three sets that had each already passed a "clean" hand audit against the same protocol, found **12, 11 and 7 findings** — broken anchors, a corrupted top-level key, orphan ids. None subtle. A check that depends on recall fires least often exactly when the session is long enough to need it.
 
+Four of those checks — 3, 4, 8 and 13 — narrow the search before handing it over: the script prints a short list of **candidates** under the check they belong to. A candidate is not a finding and never appears in `## Findings`: it has no severity yet, and inventing one would make the verdict count things nobody has judged. Read the candidate list instead of re-reading the documents, and decide each one — the exception that legitimises it is usually a note the script cannot read.
+
 It deliberately never executes `evidence.cmd` (check 1b). A registry is a data file that travels between repos and agents; running commands out of one because it says they are safe is the thing an auditor must not do. Re-running evidence is a human step and the script lists it as one.
 
 Then do the judgment pass and emit:
