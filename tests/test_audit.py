@@ -139,6 +139,17 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("9", "02-implementation-and-e2e.md is not on disk")],
      []),
 
+    # §9, the direction that did not exist: disk -> docs[]. `check_docs_on_disk`
+    # asked whether each declared doc is present; nothing asked the inverse, so a
+    # file on the theme that no entry names sat outside the source-of-truth net.
+    # Both rejects are the classes a naive glob turns into noise.
+    ("sibling-doc/docs/features/sibling-doc",
+     [("9", "sibling-doc-actionables.md"),   # inside the spec dir, unregistered
+      ("9", "sibling-doc-decisions.md")],    # adjacent to it, matched by *<slug>*
+     [("9", "other-feature-notes.md"),       # same directory, another feature
+      ("9", "legacy-notes.md"),              # named by `related_docs[]`
+      ("9", "_log.md")]),                    # set machinery, never a docs[] member
+
     # §15 — a spec folder copied between projects, profile travelling along. Both
     # halves are pure string comparison and both were left to the human pass.
     ("foreign-profile",
@@ -211,15 +222,25 @@ def human_pass_is_complete() -> list[str]:
     silently skipped, which is the one failure this script exists to prevent. A
     check leaves `HUMAN_PASS` only by being mechanized and losing its `[human]` tag
     in the protocol, and this test is what forces those two edits to happen together.
+
+    The regex reads BOTH tags, and that is the whole point. It used to read `[human]`
+    alone, so retagging a check to `[script + human]` — the correct move the moment a
+    script starts generating its candidates — silently released it from this test and
+    let it drop out of `HUMAN_PASS` with nothing failing. That is the v1.6.0 bug
+    rebuilt out of the fix for it. `[script + human]` means the script narrows the
+    search and a person still has to look; it does not mean the check is done, so it
+    STAYS listed. Checks 9, 15 and 16 were already tagged that way and already
+    missing, which is what this widening surfaced.
     """
     sys.path.insert(0, str(ROOT / "scripts"))
     from audit import HUMAN_PASS  # noqa: E402
 
     protocol = (ROOT / "references" / "audit-protocol.md").read_text(encoding="utf-8")
-    tagged = set(re.findall(r"^### ([\w.]+)\..* — \[human\]", protocol, re.M))
+    tagged = set(re.findall(
+        r"^### ([\w.]+)\..* — \[(?:human|script \+ human)\]", protocol, re.M))
     listed = {num for num, _, _, _ in HUMAN_PASS}
-    return [f"protocol tags check {n} `[human]` but HUMAN_PASS does not list it "
-            "— it is neither run nor printed" for n in sorted(tagged - listed)]
+    return [f"protocol tags check {n} for a human pass but HUMAN_PASS does not list "
+            "it — it is neither run nor printed" for n in sorted(tagged - listed)]
 
 
 def main() -> int:

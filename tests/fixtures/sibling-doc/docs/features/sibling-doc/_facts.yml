@@ -1,0 +1,12 @@
+# Check 9's missing direction. The registry names doc 01 and a related doc; two
+# other files on this feature's theme sit on disk naming nothing and named by
+# nothing. Real case: a `-actionables.md` said 17 where the set said 16.
+feature: sibling-doc
+status: draft
+profile: ../_profile.fixture.yml
+defects: []
+acceptance: []
+related_docs:
+  - { file: docs/features/sibling-doc/legacy-notes.md }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

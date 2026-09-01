@@ -171,6 +171,73 @@ def check_docs_on_disk(in_scope: list[dict], deferred: list[dict], f: Findings) 
                   "9 docs[] -> disk")
 
 
+# Set machinery: never a `docs[]` member, and never a sibling either.
+SET_MACHINERY_SUFFIXES = (".yml", ".yaml", ".html", ".json")
+
+
+def registry_declared_paths(facts: dict, spec_dir: Path, repo_root: Path) -> set[Path]:
+    """Every path the registry names anywhere, resolved both ways. A file the
+    registry declares is inside the source-of-truth net whichever list holds it;
+    check 9 is about the ones NO list names."""
+    out = set()
+    for key in ("docs", "related_docs", "changes"):
+        for e in facts.get(key) or []:
+            if not isinstance(e, dict):
+                continue
+            raw = e.get("file") or e.get("path")
+            if not raw:
+                continue
+            for base in (spec_dir, repo_root):
+                out.add((base / str(raw)).resolve())
+    return out
+
+
+def check_sibling_docs(facts: dict, spec_dir: Path, repo_root: Path,
+                       f: Findings) -> None:
+    """Check 9, the direction that did not exist: disk -> `docs[]`.
+
+    `check_docs_on_disk` walks `docs[]` and asks whether each entry is on disk. The
+    inverse — a file on this feature's theme that no `docs[]` entry names — was left
+    to a human who has to think of globbing for it. Nobody does, because nothing in
+    the report suggests the file might be there.
+
+    An unregistered sibling is outside the source-of-truth net: `sync` does not
+    propagate into it, no check compares it against the registry, and it drifts in
+    silence. Real case: a `-actionables.md` said 17 where the set said 16.
+
+    Two globs, both from the protocol: every `.md` in the spec dir, and every
+    adjacent `*<slug>*.md` beside it. There is no judgment here — a file is named
+    in the registry or it is not."""
+    declared = registry_declared_paths(facts, spec_dir, repo_root)
+    slugs = {spec_dir.name}
+    feature = str(facts.get("feature") or "").strip()
+    if feature:
+        slugs.add(feature)
+
+    found: set[Path] = {p.resolve() for p in spec_dir.glob("*.md")}
+    for slug in slugs:
+        found |= {p.resolve() for p in spec_dir.parent.glob(f"*{slug}*")
+                  if p.is_file() and p.suffix == ".md"}
+
+    for path in sorted(found):
+        if path in declared:
+            continue
+        # `_facts.yml`, `_log.md`, `_profile.yml`: the set's own machinery, which is
+        # never a docs[] member. Underscore is the convention that marks them.
+        if path.name.startswith("_") or path.suffix in SET_MACHINERY_SUFFIXES:
+            continue
+        try:
+            where = str(path.relative_to(spec_dir))
+        except ValueError:
+            where = str(path.relative_to(spec_dir.parent))
+        f.add(DRIFT, where,
+              "on this feature's theme but named by no `_facts.yml docs[]` entry",
+              "an unregistered sibling drifts in silence — nothing compares it "
+              "against the registry and `sync` never reaches it. Integrate it into "
+              "the set, or register it with `role: legacy`",
+              "9 disk -> docs[]")
+
+
 def check_basis_gates(facts: dict, f: Findings) -> None:
     """Check 1b + check 14. The first half is render.py's status_gate (shared, so the
     two tools cannot disagree); the four gates and the shipped/open detector are here."""
@@ -904,6 +971,9 @@ HUMAN_PASS = [
      "shapes in prose with no `contracts.*` / `endpoints.*` home. The mechanical "
      "audit is blind to contracts that live only in prose — this check is what "
      "surfaces them", None),
+    ("9", "sibling docs under other names", "the script globs `*<slug>*` and every "
+     "`.md` in the spec dir; a file on this feature's theme whose NAME shares nothing "
+     "with the slug is invisible to that and is the half left here", None),
     ("11", "ambiguous counters", "an integer whose meaning depends on a predicate "
      "(`attended`, `resolved`, `remaining`) needs a `note:` or a field name stating "
      "it; two counters that differ with neither is DRIFT", None),
@@ -913,6 +983,18 @@ HUMAN_PASS = [
      "think to re-run because nothing looks wrong", None),
     ("13", "doc 02 executability", "resolved paths, named symbols, paste-ready code, "
      "`[MANUAL]` labels", "02"),
+    ("15", "profile coverage, the halves that are not string comparison",
+     "`gap_sweep_layers:` empty while this stack has a shipped layer; "
+     "`commands.tests_expect` not contained in `tests_baseline.evidence.value`; a "
+     "command pasted into a doc that differs from the profile's with `{}` "
+     "substituted; an `references/intake.md` never-guess field the repo cannot "
+     "corroborate; `profile:` pointing somewhere the upward walk does not resolve "
+     "today. The script settles `repo:` and `app:` and nothing else", None),
+    ("16", "handoff log integrity", "only once `_log.md` exists. The script settles "
+     "the `Stage:` line against `status:`; a person still checks that each file's "
+     "current `wc -l` + `git hash-object` match what the last entry naming it "
+     "recorded, that no finding is carried two rounds with no disposition, that a "
+     "`rejected` disposition cites output, and that round ids are monotonic", None),
     ("28", "`tracking.issues` / `pr` / `milestone` on GitHub", "deliberately NOT "
      "automated: an auditor that makes network calls is a different kind of tool. "
      "`gh issue view` / `gh pr view` and check the state matches `status:`", None),
@@ -1015,6 +1097,7 @@ def main(argv: list[str] | None = None) -> int:
     f = Findings()
     check_top_level_keys(facts, f)
     check_docs_on_disk(in_scope, deferred, f)
+    check_sibling_docs(facts, spec_dir, repo_root, f)
     check_basis_gates(facts, f)
     check_declared_dependencies(facts, f)
     check_changes_vocabulary(facts, f)

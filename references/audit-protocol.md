@@ -18,6 +18,13 @@ Each check below is marked with who runs it:
 - **[human]** — needs judgment (wording, normalization, whether a reader would *follow* a ref) and is listed in the script's output so it cannot be quietly skipped.
 - **[script + human]** — the script finds candidates, a person confirms them.
 
+A `[script + human]` check is **still listed under `REQUIRES A HUMAN PASS`**. Narrowing
+the search is not finishing it, and a candidate list nobody is told to read is a list
+nobody reads. `tests/test_audit.py` derives the required listing from *both* tags, so
+retagging a check here without giving it an entry in `HUMAN_PASS` fails the suite —
+which is the v1.6.0 omission bug (checks 2, 5, 8, 11 and 12 tagged, unmechanized and
+unlisted, so skipped in silence on every run) rebuilt out of its own fix.
+
 One check is deliberately **not** automated: **1b's re-run of `evidence.cmd`**. A registry is a data file that travels between repos and agents; a tool that executes commands out of it because it claims they are safe is a tool that can be handed a malicious registry. Re-running evidence is a human step and the script says so.
 
 ## Inputs
@@ -116,6 +123,8 @@ Any fence or URL with no registry home → `DRIFT` (prose-orphan contract — pr
 
 ### 9. Sibling-doc detection — [script + human]
 Glob `docs/features/*<slug>*` (and adjacent files on the same theme under other names). Every match must be listed in `_facts.yml docs[]`.
+- **[script]** — the two globs are mechanical and the script runs them: every `.md` in the spec dir, and every adjacent `*<slug>*.md` beside it. A match named by no `docs[]`, `related_docs[]` or `changes[]` entry is a finding, not a candidate — a file is in the registry or it is not, and there is no judgment in between. Set machinery (`_facts.yml`, `_log.md`, `_profile.yml`) is never a `docs[]` member and is exempt.
+- **[human]** — the residue: a file on this feature's theme whose *name* shares nothing with the slug. No glob reaches it.
 - File on this feature's theme not in `docs[]` → `DRIFT`: an unregistered sibling. It's outside the source-of-truth net, so it drifts silently (real case: an `-actionables.md` said 17 where the set said 16). Resolve by integrating it into the set or registering it with `role: legacy`.
 - **The other direction, gated by stage:** a `docs[]` entry whose `stage:` the set has reached but whose file is not on disk → `DRIFT`. A set at `status: implementing` with no doc 02 is claiming a stage it never wrote. An entry whose stage is *not* reached and whose file is absent is correct and silent — see §Stage gating.
 
