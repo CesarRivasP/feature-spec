@@ -1,0 +1,9 @@
+# Check 15, `app:` half, against a spec that genuinely lives in a subdirectory: the
+# declared app subdir exists and is a sibling of the one holding this spec.
+feature: sibling-app
+status: draft
+profile: _profile.fixture.yml
+defects: []
+acceptance: []
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

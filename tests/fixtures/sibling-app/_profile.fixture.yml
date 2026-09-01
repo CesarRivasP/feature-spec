@@ -1,0 +1,12 @@
+# `repo:` is right, so the folder was not copied between projects — the profile is
+# simply pointed at the wrong variant of this same app. `apps/consumer/` exists; it
+# just is not the directory holding this spec, which lives under `apps/mobile/`.
+#
+# `foreign-profile` reports the same `app:` finding for a weaker reason: its spec sits
+# at the repo root, so NO value of `app:` could have governed it. This fixture is the
+# one where the comparison has to do real work.
+repo: sibling-app
+app: apps/consumer
+prose_language: es
+commands:
+  tests: npm test

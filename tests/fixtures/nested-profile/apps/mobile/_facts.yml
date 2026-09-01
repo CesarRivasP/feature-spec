@@ -1,0 +1,9 @@
+# The ordinary shape of a real project: the profile sits at the repo root, the spec
+# sits several directories down, and `app:` is the path between them.
+feature: nested-profile
+status: draft
+profile: _profile.fixture.yml
+defects: []
+acceptance: []
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
