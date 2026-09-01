@@ -304,7 +304,7 @@ def collect_claims(facts: dict) -> list[dict]:
                     "node": node,
                 }
             )
-    claims.sort(key=lambda c: (BASIS_ORDER.get(c["basis"], 9), c["path"]))
+    claims.sort(key=lambda c: (BASIS_ORDER.get(norm(c["basis"]), 9), c["path"]))
     return claims
 
 
@@ -333,6 +333,21 @@ def collect_datums(facts: dict) -> dict[str, list[str]]:
                 continue
         datums.setdefault(value, []).append(path)
     return datums
+
+
+def norm(value) -> str:
+    """Every enum-valued field in the registry, read the same way: lowercased and
+    stripped.
+
+    These fields are compared against lowercase literals throughout — `shipped`,
+    `asserted`, `root_cause`, `deferred`. A registry that capitalizes one silently
+    disables the check that reads it, and a gate that fails open is worse than no
+    gate: `status: Shipped` passed G1 clean, with a root cause still asserted.
+
+    It applies to the prose-matching side too, for the same reason one level down:
+    an entry written `el cron borra…` and quoted as `El cron borra…` is being read,
+    and calling it an orphan makes a different and wrong claim."""
+    return str(value or "").strip().lower()
 
 
 AGENT_RE = re.compile(r"claude|gpt|gemini|llama|opus|sonnet|haiku|o[0-9]|agent|bot",
@@ -384,10 +399,10 @@ def accepted_state(entry: dict, today: datetime.date | None = None) -> tuple[str
 def status_gate(facts: dict, claims: list[dict]) -> list[str]:
     """Gate G1 (references/evidence.md): `shipped` while a cause is asserted."""
     warnings = []
-    if str(facts.get("status", "")).strip() == "shipped":
+    if norm(facts.get("status")) == "shipped":
         for d in facts.get("defects") or []:
-            if isinstance(d, dict) and d.get("role") in ("root_cause", "contributing") \
-                    and str(d.get("basis")) == "asserted" and d.get("status") != "dead":
+            if isinstance(d, dict) and norm(d.get("role")) in ("root_cause", "contributing") \
+                    and norm(d.get("basis")) == "asserted" and norm(d.get("status")) != "dead":
                 state, detail = accepted_state(d)
                 if state == "live":
                     continue  # a deferral with a deadline, recorded and not yet due
@@ -401,7 +416,7 @@ def status_gate(facts: dict, claims: list[dict]) -> list[str]:
                     f"({d.get('role')}) is still `basis: asserted`{suffix}."
                 )
     for c in claims:
-        if c["basis"] == "measured":
+        if norm(c["basis"]) == "measured":
             ev = c["evidence"]
             missing = [k for k in ("how", "cmd", "date", "value") if not ev.get(k)]
             if missing:
@@ -419,7 +434,7 @@ def status_gate(facts: dict, claims: list[dict]) -> list[str]:
                     f"`{c['path']}` evidence.cmd is scoped by denylist — "
                     "files added later silently enter the result set."
                 )
-        elif c["basis"] == "asserted" and not c["falsified_by"]:
+        elif norm(c["basis"]) == "asserted" and not c["falsified_by"]:
             warnings.append(f"`{c['path']}` is `asserted` with no `falsified_by:`.")
     return warnings
 
@@ -981,12 +996,12 @@ def deferred_docs(facts: dict, spec_dir: Path) -> list[dict]:
     disk. They are not missing — `implement` has not run yet — so the view says so
     rather than silently rendering a set that looks like it holds one document.
     Same contract as references/audit-protocol.md §Stage gating."""
-    rank = STATUS_RANK.get(str(facts.get("status") or "draft").strip(), 0)
+    rank = STATUS_RANK.get(norm(facts.get("status")) or "draft", 0)
     out = []
     for entry in facts.get("docs") or []:
         if not isinstance(entry, dict):
             continue
-        stage = str(entry.get("stage") or "draft")
+        stage = norm(entry.get("stage")) or "draft"
         path = spec_dir / str(entry.get("file", ""))
         if STATUS_RANK.get(stage, 0) > rank and not path.is_file():
             out.append({"id": str(entry.get("id") or "?"),

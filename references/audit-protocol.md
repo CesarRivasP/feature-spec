@@ -277,6 +277,14 @@ Real case: `branch` said `main` while the real branch was the feature one. It wa
 
 Real case: a claim about a file-type filter was corrected **twice, in opposite directions** — first understating the defence (*"only validated client-side"*), then overstating it (*"a tampered client cannot bypass it"*). Both times the error was reasoning about the provider's **configuration** instead of executing the flow. A configuration is what you asked for; behavior is what you get. `references/gap-sweep-web-baas.md` already warned about this class; the registry had no way to mark it.
 
+## Enum fields are read lowercased — always
+
+Every enum-valued field in the registry (`status`, `basis`, `role`, `kind`, `where`, `outcome`, `stage`, `evidence.how`, `acceptance[].status`) is compared against lowercase literals throughout this file. **Normalize before comparing, or the check fails open.**
+
+This is not cosmetic. `status: Shipped` ranked as unknown, which ranks as `draft` — so a shipped set audited as a draft: G1 clean, checks 5, 6, 13 and 26 all skipped, with a root cause still `basis: asserted`. `role: Root_Cause` blinded G1 on its own. `kind: Deferred` never had its `reopens_when:` demanded. **A gate that fails open is worse than no gate**, because its silence reads as a pass.
+
+The same rule applies one level down, to prose matching: an entry written `el cron borra…` and quoted in a doc as `El cron borra…` **is** being read. Reporting it as an orphan claims nobody reads it, which is a different and wrong claim. Whether it was copied verbatim is check 1's question, and a human one.
+
 ## Normalization before comparing
 Before flagging any string mismatch (checks 1, 2, 6, 7): strip surrounding YAML quoting, collapse runs of whitespace, normalize typographic quotes/dashes to ASCII, and **unescape markdown table syntax — `\|` is a literal `|`**. A registry gate `data?.length === 0 || !selectedId` appears in a doc's table as `data?.length === 0 \|\| !selectedId`; comparing raw reports it as absent from every doc and sends you hunting an orphan fact that was never orphaned. The audit's own tooling is a source of false positives — when a datum looks missing from a doc that obviously should cite it, check the escaping before writing the finding. A registry entry authored as `"Botón 'Reenviar…'"` and prose reading `Botón "Reenviar…"` is a **quoting artifact, not a finding** — the fix is to re-author that registry entry as a single-quoted YAML scalar, not to edit the prose. Report those separately as `POLISH: quoting`, never as `CONTRADICTION`.
 
