@@ -294,11 +294,12 @@ def collect_claims(facts: dict) -> list[dict]:
     claims = []
     for path, node in walk(facts):
         if isinstance(node, dict) and "basis" in node:
+            ev = node.get("evidence")
             claims.append(
                 {
                     "path": path,
                     "basis": str(node.get("basis")),
-                    "evidence": node.get("evidence") or {},
+                    "evidence": ev if isinstance(ev, dict) else {},
                     "falsified_by": node.get("falsified_by"),
                     "label": node.get("claim") or node.get("name") or node.get("file") or path,
                     "node": node,
@@ -630,6 +631,8 @@ def basis_chip(basis: str) -> str:
 def evidence_block(ev: dict, path: str) -> str:
     """Every field carries the id of its registry path, so a datum highlighted in
     prose can land on the exact `evidence.value` it was copied from."""
+    if not isinstance(ev, dict):
+        ev = {}
     if not ev:
         return ""
     rows = []
