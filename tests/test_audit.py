@@ -60,6 +60,23 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
       ("14", "A3")],              # discarded on a premise that is now dead
      []),
 
+    # check 14 / G3 — `log_line:` absent vs. explicitly null. The message offers
+    # "or `log_line: null` to say it must be built"; the guard was `not
+    # e.get("log_line")`, so a defect that wrote exactly that re-drifted every run.
+    # Real case: five cosmetic doc-set-hygiene defects with no possible emitter.
+    ("log-line-null",
+     [("14", "H1"),               # key absent — instrumentation never considered
+      ("14", "H3")],              # `log_line: '   '` — a key with nothing in it
+     [("14", "H2"),               # `log_line: null` — declared as must-be-built
+      ("14", "H4")]),             # names the emitter
+
+    # v1.7.1's family, one level over in audit.py: `evidence:` as a bare string
+    # reached `.get("how")` in two checks and crashed the whole audit. It must
+    # drift through the basis gate, not raise.
+    ("evidence-string",
+     [("1b/14", "evidence lacks")],
+     []),
+
     # §3.3 — a `measured` whose cmd can never be re-run.
     ("cmd-not-runnable",
      [("24", "l1_prose_ref"), ("24", "l2_placeholder")],

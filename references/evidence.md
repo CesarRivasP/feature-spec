@@ -133,7 +133,9 @@ never a plausible-looking command nobody has run.
 - **G2** `basis: asserted` with empty or absent `falsified_by:` → `DRIFT`.
 - **G3** `falsified_by:` naming an observation with no `log_line:` that produces
   it (and no existing emitter) → `DRIFT`: the instrumentation is part of the
-  spec, not something to bolt on when you get stuck.
+  spec, not something to bolt on when you get stuck. `log_line: null` is the
+  author declaring the emitter must be built — that clears the gate. An absent
+  key (nobody considered it) or a blank string does not.
 - **G4** `basis: measured` with `evidence.date` predating the last commit to what
   it measures → `CONTRADICTION` (re-measure).
 
