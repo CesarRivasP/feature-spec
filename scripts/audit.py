@@ -814,8 +814,16 @@ def check_basis_gates(facts: dict, f: Findings) -> None:
 
             if norm(e.get("basis")) == "asserted" and not e.get("falsified_by"):
                 pass  # already reported by status_gate
+            # Absence and explicit null are not the same declaration. `log_line:
+            # null` is the author saying "the emitter has to be built" — the exact
+            # out this message offers; the key being absent is the author never
+            # having thought about instrumentation. A blank string (`""` / `"  "`)
+            # is a key put down with nothing in it, and still drifts.
+            ll = e.get("log_line")
+            no_emitter = ("log_line" not in e
+                          or (isinstance(ll, str) and not ll.strip()))
             if (key == "defects" and norm(e.get("basis")) == "asserted"
-                    and e.get("falsified_by") and not e.get("log_line")):
+                    and e.get("falsified_by") and no_emitter):
                 f.add(DRIFT, where,
                       "`falsified_by:` names an observation with no `log_line:`",
                       "name the emitter that produces it, or `log_line: null` to say "
@@ -1243,7 +1251,8 @@ def check_evidence_cmd_runnable(facts: dict, f: Findings) -> None:
     for path, node in walk(facts):
         if not (isinstance(node, dict) and norm(node.get("basis")) == "measured"):
             continue
-        ev = node.get("evidence") or {}
+        ev = node.get("evidence")
+        ev = ev if isinstance(ev, dict) else {}  # a string here is drift, not a crash
         how = norm(ev.get("how"))
         cmd = str(ev.get("cmd", "") or "")
         if how not in EXECUTABLE_HOW or not cmd:
@@ -1317,7 +1326,8 @@ def check_provider_behavior(facts: dict, f: Findings) -> None:
     for path, node in walk(facts):
         if not (isinstance(node, dict) and norm(node.get("basis")) == "measured"):
             continue
-        ev = node.get("evidence") or {}
+        ev = node.get("evidence")
+        ev = ev if isinstance(ev, dict) else {}  # a string here is drift, not a crash
         if norm(ev.get("how")) != "provider-behavior":
             continue
         value = str(ev.get("value") or "")

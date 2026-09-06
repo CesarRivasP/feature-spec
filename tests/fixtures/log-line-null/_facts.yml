@@ -1,0 +1,32 @@
+# Real case (StarflyAnalytics/docs/features/analytics-mvp, round R10): restructuring
+# `defects[]` so every entry carried role/basis/evidence turned up five cosmetic
+# doc-set-hygiene defects. `role: cosmetic`, `basis: asserted`, and no emitter could
+# ever produce their falsifier — the observation that would kill each claim lives in
+# the doc set itself, not in a log. `log_line: null` was written per the script's own
+# message and the DRIFT did not clear: the guard was `not e.get("log_line")`, and
+# `None` is falsy, so the declared-pending case re-fired every run.
+#
+# The four rows check 14 must now tell apart:
+#   H1  key absent            -> DRIFT (nobody thought about instrumentation)
+#   H2  log_line: null        -> clean (declared: the emitter must be built)
+#   H3  log_line: '   '       -> DRIFT (a key put down with nothing in it)
+#   H4  log_line: '<emitter>' -> clean (named)
+feature: log-line-null
+status: draft
+profile: ../_profile.fixture.yml
+defects:
+  - { id: H1, role: cosmetic, basis: asserted, status: fixed,
+      claim: 'doc 03 numbers the acceptance table from 0, every other doc from 1',
+      falsified_by: 'doc 03 rendering with a 1-based table like the rest of the set' }
+  - { id: H2, role: cosmetic, basis: asserted, status: fixed, log_line: null,
+      claim: 'the master plan calls the feature analytics-mvp, doc 02 calls it mvp-analytics',
+      falsified_by: 'both docs naming it the same way on a fresh read' }
+  - { id: H3, role: cosmetic, basis: asserted, status: fixed, log_line: '   ',
+      claim: 'the §4 heading is duplicated in doc 02',
+      falsified_by: 'a single §4 heading in doc 02' }
+  - { id: H4, role: cosmetic, basis: asserted, status: fixed,
+      log_line: 'lint.md rule=heading-increment file=02 line=<n>',
+      claim: 'doc 02 skips from ## to #### with no ### between them',
+      falsified_by: 'the markdown linter reporting no heading-increment violation' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

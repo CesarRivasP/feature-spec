@@ -1,0 +1,16 @@
+# Same family as the v1.7.1 render fix, one level over in audit.py: `evidence:` as
+# a bare string ("44 policies over 25 tables") instead of the { how, cmd, date,
+# value } mapping. `node.get("evidence") or {}` only falls back on a falsy value,
+# so the string passed through to `check_evidence_cmd_runnable` and
+# `check_provider_behavior`, which both call `.get("how")` on it -> the whole
+# audit died with AttributeError. A malformed `evidence:` is exactly the drift the
+# basis gate exists to report; it must not crash the tool.
+feature: evidence-string
+status: draft
+profile: ../_profile.fixture.yml
+defects:
+  - { id: E1, role: symptom, basis: measured, status: open,
+      evidence: '44 policies over 25 tables',
+      claim: 'defects.E1 cuenta las policies a mano en vez de medirlas' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
