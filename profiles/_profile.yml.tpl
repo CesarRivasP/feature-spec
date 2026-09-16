@@ -37,6 +37,19 @@ commands:
   file_tracked: "git ls-files --error-unmatch {path}"
   file_ignored: "git check-ignore -v {path}"
 
+# --- what varies in this repo and must be recorded on every run ---
+# The axes a measurement taken HERE cannot control. Each name becomes a required
+# key under `evidence.conditions:` for any `basis: measured` with
+# `how: device|log|sentry` (audit check 31). Empty = nothing varies here, said out
+# loud rather than left silent.
+#
+# Real case, and the most expensive finding in references/evidence.md: four events
+# varied 2.3x in bitrate (3.47 / 6.76 / 8.01 / 8.20 Mbps) and NO number in either
+# of two related sets recorded which event it came from — not the parent's
+# threshold, not the base of the "2 tiles". The two were then compared, and the
+# comparison decided the scope.
+conditions_required: []    # e.g. [stream_bitrate_bps, resolution, build]
+
 # --- which gap-sweep layers apply on top of the base sweep ---
 # Each name resolves to references/gap-sweep-<name>.md. Empty = base sweep only.
 gap_sweep_layers: []       # e.g. [android-native] or [web-baas, mobile-tv]

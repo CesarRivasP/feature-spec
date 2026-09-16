@@ -71,6 +71,44 @@ dates:
 #            error was reasoning about the provider's config instead of executing
 #            the flow. A config is what you asked for; behavior is what you get.
 #
+# A MEASUREMENT IS A RUN, NOT A NUMBER. `value:` says what came back; it does not
+# say how many times you looked, what varied while you looked, or whether the run
+# happened at all. Full contract in references/evidence.md §A measurement is a run.
+#
+#   n: <int>        - runs behind this value. REQUIRED on how: device|log|sentry —
+#                     how many times a person repeated a procedure is not
+#                     recoverable from its output. `n: 1` is legitimate; a silent
+#                     `n: 1` is how one run becomes a constant in a second set.
+#   spread: '<range>' - the observed EXTREMES, verbatim: '0..308 fallas'. Required
+#                     once n > 1. An average with no range is the shape this stops.
+#   conditions: {}  - what you did NOT control and that varies. Which axes matter
+#                     is per REPO, so the required keys live in
+#                     `_profile.yml conditions_required:`. Real case: four events
+#                     varying 2.3x in bitrate (3.47/6.76/8.01/8.20 Mbps) and not one
+#                     number in either of two sets recorded which event it came from.
+#                     Two entries linked by depends_on whose conditions disagree on
+#                     a shared key is a CONTRADICTION: the comparison crossed a
+#                     variable nobody held fixed.
+#
+#   A RUN WITHOUT ITS PRECONDITION PRODUCES NO DATUM. The confound was marked
+#   BEFORE the run and the run happened anyway; it cost a retraction and a whole
+#   device cycle. Record the attempt and nothing else — `basis:` stays `asserted`,
+#   there is NO `value:`, and it is never reinterpreted afterwards:
+#     evidence: { how: device, date: YYYY-MM-DD,
+#                 outcome: aborted_no_conditions,
+#                 aborted_because: 'the only event available was 720p; the claim
+#                                   is about 1080p' }
+#
+#   ABSENCE OF SIGNAL IS NOT SIGNAL OF ABSENCE. A value recording that nothing was
+#   found declares itself, names the path that WOULD have emitted, and states the
+#   sampling. The check before "this does not happen in prod" is "does the path
+#   emit?", never "is there a signature?".
+#     evidence: { how: log, cmd: '<query>', date: YYYY-MM-DD,
+#                 value: '0 events matching player.error in 30d',
+#                 absence: true,
+#                 emits: 'usePlayerActions.js:399 onError -> Sentry',  # null = nothing
+#                 sample_rate: 0.2 }    # at 0.2, 4 of 5 occurrences never appear
+#
 # This is NOT only for numbers. Behavioral claims ("the framework focuses the
 # first item") and file/git-state claims ("not committed yet") are claims too.
 # They get basis: measured/how: device|git, or basis: asserted.
@@ -84,6 +122,14 @@ dates:
 #     basis: measured
 #     evidence: { how: shell, cmd: "<commands.tests>",
 #                 date: 2026-08-03, value: "280/280 passing (28 files)" }
+#
+# example of a run someone performed, with its bar and its conditions:
+#   degradation_threshold_tiles:
+#     basis: measured
+#     evidence: { how: device, cmd: "<the numbered procedure>", date: 2026-09-15,
+#                 value: 3, n: 5, spread: "0..308 fallas",
+#                 conditions: { stream_bitrate_bps: 8200000, resolution: 1920x1080,
+#                               build: production-release-1.4.3 } }
 
 # --- decisions taken about this feature ---
 # A decision is not a datum with a value to grep — it is a PREMISE that prose hangs

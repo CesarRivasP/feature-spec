@@ -1342,6 +1342,303 @@ def check_provider_behavior(facts: dict, f: Findings) -> None:
                   "29 provider behavior is observed")
 
 
+# --------------------------------------------------------------------------
+# a measurement is a run, not a number (checks 30-33)
+# --------------------------------------------------------------------------
+
+# The three `how` values that denote a run A PERSON PERFORMED. `shell` and `git` are
+# deliberately out: a command carries its own repeatability, and demanding a run count
+# on every `git ls-files` would bury the cases where the count is the whole question.
+VARIABLE_HOW = {"device", "log", "sentry"}
+ABSENCE_HOW = VARIABLE_HOW | {"provider-behavior"}
+
+# A value that reports nothing was found. The shapes seen in real registries, plus
+# the two the Spanish-language sets produce. `{"monitors":[]}` is check 26's real
+# case, read as data by a person and by nothing else.
+ABSENCE_RE = re.compile(
+    r"\b(?:0|no|zero|sin|ning[uú]n[ao]?)\s+"
+    r"(?:events?|results?|rows?|hits?|matches|entries|eventos|resultados|filas|"
+    r"coincidencias|registros)\b"
+    r"|\bnot found\b|\bno matches\b|\bempty\b"
+    r"|:\s*\[\s*\]\s*[}\]]|^\s*\[\s*\]\s*$", re.I)
+
+CROSS_SET_RE = re.compile(
+    r"([\w./-]*_facts\.yml)`?[\s`]*\b(%s)\.([A-Za-z0-9_]+)"
+    % "|".join(ID_CONTAINERS), re.I)
+
+
+def measured_runs(facts: dict):
+    """Every `basis: measured` node whose `how:` is a run someone performed.
+
+    An ABORTED run is not one of them. Its precondition could not be met, so it
+    produced no datum — asking it for a sample size or a set of conditions is asking
+    a run that did not happen how many times it happened. Check 32 is the one with
+    something to say about those, and it says the whole of it."""
+    for path, node in walk(facts):
+        if not (isinstance(node, dict) and norm(node.get("basis")) == "measured"):
+            continue
+        ev = node.get("evidence")
+        ev = ev if isinstance(ev, dict) else {}  # a string here is the basis gate's
+        if norm(ev.get("outcome")).startswith("aborted"):
+            continue
+        if norm(ev.get("how")) in VARIABLE_HOW:
+            yield path, node, ev
+
+
+def registry_entry(facts: dict, container: str, name: str):
+    node = facts.get(container)
+    if isinstance(node, dict):
+        return node.get(name)
+    if isinstance(node, list):
+        return next((e for e in node
+                     if isinstance(e, dict) and str(e.get("id")) == name), None)
+    return None
+
+
+def load_profile(facts: dict, spec_dir: Path, repo_root: Path) -> dict:
+    prof = facts.get("profile")
+    if not prof:
+        return {}
+    path = next((b / str(prof) for b in (repo_root, spec_dir)
+                 if (b / str(prof)).is_file()), None)
+    if path is None:
+        return {}
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return {}       # the profile's shape is check 19's business, not this one
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def check_sample_size(facts: dict, prose: dict[str, str], spec_dir: Path,
+                      repo_root: Path, f: Findings) -> None:
+    """Check 30. `value:` says what came back. Nothing in the four-field shape says
+    how many times you looked, and three retractions came out of that one hole:
+    `n=1` read as a constant. `limits.degradation_threshold_tiles` in a parent set
+    was one run with no bar, cited by a second set, with half a spec hanging off it.
+    """
+    runs = list(measured_runs(facts))
+    counted = [r for r in runs if r[2].get("n") is not None]
+
+    if runs and not counted:
+        # Same collapse as check 26: the field is newer than the set, and reporting
+        # fifteen identical misses buries the contradictions beside them. A set where
+        # SOME runs carry `n:` is the opposite case and is reported per entry.
+        f.add(DRIFT, "_facts.yml",
+              "no `evidence.n:` on " + (
+                  "the only measurement" if len(runs) == 1
+                  else f"any of the {len(runs)} measurements") +
+              " taken from a run (`how: device|log|sentry`)",
+              "how many times a person repeated a procedure is not recoverable from "
+              "its output — record it once per entry, `n: 1` included",
+              "30 sample size and spread")
+    else:
+        for path, node, ev in runs:
+            where = pretty_path(facts, path) or "_facts.yml"
+            if ev.get("n") is None:
+                f.add(DRIFT, where,
+                      "`basis: measured` from a run with no `evidence.n:`, in a set "
+                      "that records it elsewhere",
+                      "somebody adopted the field and skipped this run; write the "
+                      "count, `n: 1` included",
+                      "30 sample size and spread")
+                continue
+            try:
+                n = int(str(ev["n"]).strip())
+            except ValueError:
+                f.add(DRIFT, where,
+                      f"`evidence.n: {ev['n']!r}` is not a run count",
+                      "an integer — the number of times the procedure was performed",
+                      "30 sample size and spread")
+                continue
+            if ev.get("spread"):
+                continue
+            if n <= 1:
+                f.add(POLISH, where,
+                      "`n: 1` with no `spread:` — one run reported as a bare value",
+                      "legitimate as a measurement, unreadable as one: add `spread:` "
+                      "(even `'single run, range unknown'`) so the next set does not "
+                      "read it as a constant",
+                      "30 sample size and spread")
+            else:
+                f.add(DRIFT, where,
+                      f"`n: {n}` with no `spread:` — {n} runs reported as one number",
+                      "you observed a range and reported its midpoint; write the "
+                      "observed extremes, verbatim (`'0..308 fallas'`)",
+                      "30 sample size and spread")
+
+    own = (spec_dir / "_facts.yml").resolve()
+    for doc, text in prose.items():
+        for lineno, line in enumerate(text.splitlines(), 1):
+            for rel, container, name in CROSS_SET_RE.findall(line):
+                path = next((b / rel for b in (repo_root, spec_dir, spec_dir.parent)
+                             if (b / rel).is_file()), None)
+                if path is None or path.resolve() == own:
+                    continue
+                try:
+                    sibling = load_facts(path)
+                except (yaml.YAMLError, OSError):
+                    continue
+                entry = registry_entry(sibling, norm(container), name)
+                if not isinstance(entry, dict):
+                    continue
+                ev = entry.get("evidence")
+                ev = ev if isinstance(ev, dict) else {}
+                if str(ev.get("n") or "").strip() != "1" or ev.get("spread"):
+                    continue
+                f.add(DRIFT, f"{doc}:{lineno}",
+                      f"cites `{container}.{name}` from `{rel}`, which was measured "
+                      "once (`n: 1`) with no `spread:`",
+                      "this is where one run becomes a constant: the citing set sees "
+                      "a number, a path and an id, and not that the owner looked once "
+                      "— re-measure in the owning set, or carry the caveat here",
+                      "30 sample size and spread")
+
+
+def check_run_conditions(facts: dict, spec_dir: Path, repo_root: Path,
+                         f: Findings) -> None:
+    """Check 31. Four events varied 2.3x in bitrate (3.47 / 6.76 / 8.01 / 8.20 Mbps)
+    and no number in either of two related sets recorded which event produced it.
+    They were compared anyway, and the comparison decided the scope.
+
+    Which axes vary is a property of the repo, so the required keys come from
+    `_profile.yml conditions_required:` — the same split as the commands. The
+    depends_on half needs no profile and is never switchable off."""
+    required = load_profile(facts, spec_dir, repo_root).get("conditions_required")
+    required = [str(k) for k in required] if isinstance(required, list) else []
+
+    for path, node, ev in measured_runs(facts):
+        cond = ev.get("conditions")
+        cond = cond if isinstance(cond, dict) else {}
+        missing = [k for k in required
+                   if cond.get(k) is None or str(cond.get(k)).strip() == ""]
+        if missing:
+            f.add(DRIFT, pretty_path(facts, path) or "_facts.yml",
+                  "`evidence.conditions:` does not record "
+                  f"{', '.join(f'`{k}`' for k in missing)}",
+                  "the profile names these as varying in this repo, so the run did "
+                  "not control them and the value cannot be compared against another "
+                  "run without them",
+                  "31 conditions of the run")
+
+    by_id: dict[str, tuple[str, dict]] = {}
+    for path, node in walk(facts):
+        if isinstance(node, dict) and node.get("id"):
+            by_id.setdefault(str(node["id"]), (path, node))
+
+    for path, node in walk(facts):
+        if not (isinstance(node, dict) and node.get("depends_on")):
+            continue
+        ev = node.get("evidence")
+        mine = ev.get("conditions") if isinstance(ev, dict) else None
+        if not isinstance(mine, dict):
+            continue
+        for dep in node.get("depends_on") or []:
+            target = by_id.get(str(dep), (None, {}))[1]
+            tev = target.get("evidence") if isinstance(target, dict) else None
+            theirs = tev.get("conditions") if isinstance(tev, dict) else None
+            if not isinstance(theirs, dict):
+                continue
+            clash = [k for k in mine
+                     if k in theirs
+                     and str(mine[k]).strip() != str(theirs[k]).strip()]
+            if clash:
+                f.add(CONTRADICTION, pretty_path(facts, path) or "_facts.yml",
+                      f"rests on `{dep}`, measured under different "
+                      f"{', '.join(f'`{k}`' for k in clash)} "
+                      f"({', '.join(f'{k}: {mine[k]} vs {theirs[k]}' for k in clash)})",
+                      "the derived claim compares two runs across a variable nobody "
+                      "held fixed — re-measure both under one set of conditions, or "
+                      "state which one the conclusion is scoped to",
+                      "31 conditions of the run")
+
+
+def check_aborted_runs(facts: dict, f: Findings) -> None:
+    """Check 32. A confound was marked BEFORE a device run and the run happened
+    anyway; it cost a retraction and a full build/install/navigate cycle. The number
+    that came back was not a weak measurement — it was not a measurement, and the
+    damage was done when it got reinterpreted instead of discarded."""
+    for path, node in walk(facts):
+        if not isinstance(node, dict):
+            continue
+        ev = node.get("evidence")
+        ev = ev if isinstance(ev, dict) else {}
+        if not norm(ev.get("outcome")).startswith("aborted"):
+            continue
+        where = pretty_path(facts, path) or "_facts.yml"
+        if norm(node.get("basis")) == "measured":
+            f.add(CONTRADICTION, where,
+                  f"`basis: measured` on a run recorded as `{ev['outcome']}`",
+                  "an aborted run is not a measurement — `basis:` stays `asserted` "
+                  "and `falsified_by:` stays where it was",
+                  "32 aborted run produced no datum")
+        if ev.get("value") is not None and str(ev.get("value")).strip():
+            f.add(CONTRADICTION, where,
+                  f"a run recorded as `{ev['outcome']}` still carries a `value:`: "
+                  f"{str(ev['value']).strip()[:60]!r}",
+                  "the precondition was missing, so that number answers a different "
+                  "question — delete it. Qualifying it in prose puts the caveat in "
+                  "one document and the number in three",
+                  "32 aborted run produced no datum")
+        if not ev.get("aborted_because"):
+            f.add(DRIFT, where,
+                  f"`{ev['outcome']}` with no `aborted_because:`",
+                  "name the precondition that could not be met, in the terms of the "
+                  "claim — otherwise the next session re-runs it the same way",
+                  "32 aborted run produced no datum")
+
+
+def check_absence_of_signal(facts: dict, f: Findings) -> None:
+    """Check 33. Four player buckets reach Sentry through
+    `usePlayerActions.js:399 onError`. The failure under investigation raises no
+    error: it is invisible by construction, and an empty query over it says nothing.
+    The check before "this does not happen in production" is "does the path emit?",
+    never "is there a signature?"."""
+    for path, node in walk(facts):
+        if not (isinstance(node, dict) and norm(node.get("basis")) == "measured"):
+            continue
+        ev = node.get("evidence")
+        ev = ev if isinstance(ev, dict) else {}
+        if norm(ev.get("how")) not in ABSENCE_HOW:
+            continue        # a git/shell absence is deterministic — check 1b's
+        where = pretty_path(facts, path) or "_facts.yml"
+        declared = str(ev.get("absence") or "").strip().lower() in ("true", "yes", "1")
+
+        if not declared:
+            value = str(ev.get("value") or "")
+            if value and ABSENCE_RE.search(value):
+                f.add(DRIFT, where,
+                      f"`value` records an absence of signal — {value.strip()[:60]!r} "
+                      "— with no `absence:` declared",
+                      "an empty result is not evidence of non-occurrence until the "
+                      "path is known to emit: `absence: true`, `emits:` (the "
+                      "`file:line` that would have produced it) and `sample_rate:`",
+                      "33 absence of signal")
+            continue
+
+        if "emits" not in ev:
+            f.add(DRIFT, where,
+                  "`absence: true` with no `emits:`",
+                  "name the `file:line` that would have produced the signal — the "
+                  "question is \"does the path emit?\", and this entry never asked it",
+                  "33 absence of signal")
+        elif ev.get("emits") is None:
+            # An explicit null is a declaration, same as check 14's `log_line: null`
+            # — and here the declaration is the decisive finding, not the out.
+            f.add(DRIFT, where,
+                  "`absence: true` with `emits: null` — nothing emits this signal",
+                  "its absence is therefore not evidence of non-occurrence: drop to "
+                  "`basis: asserted`, or make the emitter a `changes[]` entry and "
+                  "measure after it ships",
+                  "33 absence of signal")
+        if "sample_rate" not in ev:
+            f.add(DRIFT, where,
+                  "`absence: true` with no `sample_rate:`",
+                  "at `0.2`, four of five occurrences never appear and an empty "
+                  "result is the expected output of a system that IS failing; "
+                  "`null` means unsampled and settles it",
+                  "33 absence of signal")
+
 def live_accepted_risks(facts: dict) -> list[tuple[str, str, str]]:
     """Deferrals with a deadline that has not arrived. Not findings — but not
     silence either: the audit names them and their expiry, which is the whole
@@ -1701,6 +1998,10 @@ def main(argv: list[str] | None = None) -> int:
     check_placeholders(facts, f)
     check_tracking(facts, repo_root, f)
     check_provider_behavior(facts, f)
+    check_sample_size(facts, prose, spec_dir, repo_root, f)
+    check_run_conditions(facts, spec_dir, repo_root, f)
+    check_aborted_runs(facts, f)
+    check_absence_of_signal(facts, f)
     check_doc_size(in_scope, f)
     check_profile_and_log(facts, spec_dir, repo_root, root_is_real, f)
     check_log_stage(facts, spec_dir, f)

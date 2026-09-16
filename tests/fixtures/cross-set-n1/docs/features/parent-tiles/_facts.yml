@@ -1,0 +1,19 @@
+# The OWNING set. `degradation_threshold_tiles` is the real case: one run, no bar,
+# and half of a second spec hanging off it. `tolerated_dropped_frames` is the same
+# kind of number measured properly, so the check has something to stay quiet about.
+feature: parent-tiles
+status: draft
+profile: _profile.fixture.yml
+limits:
+  degradation_threshold_tiles:
+    claim: 'el player degrada a partir de 2 tiles'
+    basis: measured
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15,
+                value: 2, n: 1 }
+  tolerated_dropped_frames:
+    claim: 'tolera hasta 308 frames caidos'
+    basis: measured
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15,
+                value: 308, n: 6, spread: '41..308 frames' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

@@ -26,6 +26,11 @@ commands:
   file_tracked: "git ls-files --error-unmatch {path}"
   file_ignored: "git check-ignore -v {path}"
 
+# --- what varies here and must be recorded on every run (audit check 31) ---
+# Required keys under `evidence.conditions:` for how: device|log|sentry.
+# Empty = nothing varies, said out loud. See references/evidence.md.
+conditions_required: [device_model, android_version, build_type]
+
 gap_sweep_layers: [android-native]
 
 deep_review_agent: null

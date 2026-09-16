@@ -1,0 +1,40 @@
+# Real case: the confound was marked BEFORE the run and the run happened anyway. It
+# cost a retraction and a full build/install/navigate cycle. A1 is that run written
+# down as if it had produced something; A3 is the 2026-09-15 abort, done correctly.
+feature: aborted-run
+status: draft
+profile: ../_profile.fixture.yml
+defects:
+  - id: A1
+    role: symptom
+    claim: '1 tile degrada igual que 2'
+    basis: measured
+    status: open
+    outcome: 'la corrida no produjo dato'
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15,
+                outcome: aborted_no_conditions,
+                value: '1 tile degrado igual',
+                aborted_because: 'el unico evento disponible era 720p; el claim es sobre 1080p' }
+  - id: A2
+    role: symptom
+    claim: 'el buffer se vacia antes del corte'
+    basis: asserted
+    falsified_by: 'una corrida a 1080p en la que el buffer no se vacie'
+    log_line: null
+    status: open
+    outcome: 'la corrida no produjo dato'
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15,
+                outcome: aborted_no_conditions }
+  - id: A3
+    role: symptom
+    claim: 'la comparacion 1-vs-2 tiles necesita 1080p'
+    basis: asserted
+    falsified_by: 'una corrida a 1080p con ambos valores medidos'
+    log_line: null
+    status: open
+    outcome: 'la corrida no produjo dato'
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15,
+                outcome: aborted_no_conditions,
+                aborted_because: 'el unico evento disponible era 720p' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

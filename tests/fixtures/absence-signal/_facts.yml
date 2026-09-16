@@ -1,0 +1,51 @@
+# Real case: the four player buckets reach Sentry through
+# src/hooks/usePlayerActions.js:399 onError. The failure under investigation raises no error —
+# it is invisible by construction — and the dashboard was read as proof it does not
+# happen. z3 is that case written down honestly, and it is still a finding.
+feature: absence-signal
+status: draft
+profile: ../_profile.fixture.yml
+limits:
+  z1_undeclared:
+    claim: 'no aparece ningun evento de player en 30 dias'
+    basis: measured
+    evidence: { how: log, cmd: "<consulta Sentry>", date: 2026-09-15,
+                n: 1, spread: 'una sola consulta',
+                value: '0 events matching player.error in 30d' }
+  z2_no_emitter:
+    claim: 'la falla no llega a Sentry'
+    basis: measured
+    evidence: { how: log, cmd: "<consulta Sentry>", date: 2026-09-15,
+                n: 1, spread: 'una sola consulta',
+                value: '0 events matching player.error in 30d',
+                absence: true, sample_rate: 0.2 }
+  z3_emits_null:
+    claim: 'ningun path emite esta falla'
+    basis: measured
+    evidence: { how: log, cmd: "<consulta Sentry>", date: 2026-09-15,
+                n: 1, spread: 'una sola consulta',
+                value: '0 events matching player.error in 30d',
+                absence: true, emits: null, sample_rate: 0.2 }
+  z4_no_sample_rate:
+    claim: 'el bucket 4 no registro fallas'
+    basis: measured
+    evidence: { how: log, cmd: "<consulta Sentry>", date: 2026-09-15,
+                n: 1, spread: 'una sola consulta',
+                value: '0 events matching player.error in 30d',
+                absence: true, emits: 'src/hooks/usePlayerActions.js:399 onError -> Sentry' }
+  z5_complete:
+    claim: 'el bucket 2 no registro fallas en 30 dias'
+    basis: measured
+    evidence: { how: log, cmd: "<consulta Sentry>", date: 2026-09-15,
+                n: 1, spread: 'una sola consulta',
+                value: '0 events matching player.error in 30d',
+                absence: true, emits: 'src/hooks/usePlayerActions.js:399 onError -> Sentry',
+                sample_rate: 0.2 }
+  z6_positive:
+    claim: 'el bucket 4 registro 312 fallas'
+    basis: measured
+    evidence: { how: log, cmd: "<consulta Sentry>", date: 2026-09-15,
+                n: 1, spread: 'una sola consulta',
+                value: 'PLAYER.error bucket=4 count=312' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

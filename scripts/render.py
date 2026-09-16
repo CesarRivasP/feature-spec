@@ -636,11 +636,23 @@ def evidence_block(ev: dict, path: str) -> str:
     if not ev:
         return ""
     rows = []
-    keys = [k for k in ("how", "cmd", "date", "value") if ev.get(k) is not None]
-    keys += [k for k in ev if k not in ("how", "cmd", "date", "value")]
+    # `n` and `spread` sit directly under `value` on purpose: a number with no bar
+    # beside it is the shape three retractions came out of, and the view is where a
+    # person reads it. `conditions` follows as its own line per axis — a dict printed
+    # as one Python repr is the least readable thing on the page.
+    ORDER = ("how", "cmd", "date", "value", "n", "spread", "conditions")
+    keys = [k for k in ORDER if ev.get(k) is not None]
+    keys += [k for k in ev if k not in ORDER]
     for key in keys:
+        if key == "conditions" and isinstance(ev[key], dict):
+            val = "  ·  ".join(f"{html.escape(str(k))}={html.escape(str(v), quote=False)}"
+                               for k, v in ev[key].items())
+            rows.append('<div class="ev-row"><span class="ev-k">conditions</span>'
+                        f'<span class="ev-v mono"{id_attr(f"{path}.evidence.conditions")}>'
+                        f'{val}</span></div>')
+            continue
         val = html.escape(str(ev[key]), quote=False)
-        cls = "mono" if key in ("cmd", "value") else ""
+        cls = "mono" if key in ("cmd", "value", "n", "spread") else ""
         eid = id_attr(f"{path}.evidence.{key}")
         rows.append(f'<div class="ev-row"><span class="ev-k">{html.escape(str(key))}</span>'
                     f'<span class="ev-v {cls}"{eid}>{val}</span></div>')

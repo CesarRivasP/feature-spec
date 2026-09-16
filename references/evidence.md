@@ -19,6 +19,11 @@ Someone observed it. Requires:
 line character-for-character — a paraphrased log line is an assertion wearing a
 measurement's clothes.
 
+Those four fields say what came back. They do not say how many runs are behind it,
+what varied while you were looking, or whether the run happened at all — see
+§A measurement is a run, not a number for `n:`, `spread:`, `conditions:`,
+`outcome: aborted_no_conditions` and `absence:`.
+
 ### `basis: asserted`
 We reasoned it. Requires `falsified_by:` — the concrete observation that would
 kill the claim. Not "if it turns out to be wrong". A log line, a command's
@@ -60,6 +65,147 @@ never a plausible-looking command nobody has run.
   show (native focus, cache contents, which component mounted).
 - **log** — the log line, quoted, with the filter that surfaced it
   (`commands.device_log`).
+
+## A measurement is a run, not a number
+
+`value:` records what came back. It does not record **how many times you looked**,
+**under what conditions**, or **whether the run happened at all** — and every one of
+those has produced a retraction.
+
+Three retractions came out of the same hole: `n=1` read as a constant. One run, one
+number, copied into three docs and then into a *second set*, where it arrived with no
+bar on it and nothing saying there had ever been only one.
+
+```yaml
+evidence:
+  how: device
+  cmd: "<commands.force_stop> …"     # the numbered procedure
+  date: 2026-09-15
+  value: 3                           # what came back on the run being reported
+  n: 5                               # runs behind it
+  spread: "0..308 fallas"            # the observed RANGE, never the average alone
+  conditions:                        # what you did not control and that varies
+    stream_bitrate_bps: 8200000
+    resolution: 1920x1080
+    build: production-release-1.4.3
+```
+
+### `n:` and `spread:` — the bar around the number
+
+`n: 1` is a legitimate measurement. **Silently** `n: 1` is not: one run reported as a
+bare value is indistinguishable from a settled constant, and that is exactly how it
+gets cited.
+
+- `n:` is required on every `basis: measured` whose `how:` is a **run someone
+  performed** — `device`, `log`, `sentry`. How many times a person repeated a
+  procedure is never inferable from its output, so nothing downstream can recover it.
+- `n: 1` with no `spread:` → the audit reports it (check 30). It is the lowest tier
+  on purpose: inside its own set the number is still traceable to the one run someone
+  did.
+- **Cited from another set with `n: 1` → `DRIFT`.** That is where it turns into a
+  constant. The citing set sees a number, a path and an id; it does not see that the
+  parent measured it once. *Real case:* `limits.degradation_threshold_tiles` in a
+  parent set — one run, no bar, and half a spec hanging off it.
+- `n:` above 1 with no `spread:` → `DRIFT`. You observed a range and reported its
+  midpoint. The range is the finding; the midpoint is a summary of it.
+- `spread:` is the observed **extremes**, written as they came out —
+  `"0..308 fallas"`, `"2 de 5 corridas no degradaron"`. An average with no range is
+  the shape this rule exists to stop.
+
+### `conditions:` — what you did not control
+
+The most expensive finding in this file. Four events varied **2.3× in bitrate** (3.47
+/ 6.76 / 8.01 / 8.20 Mbps) and **no number in either of the two sets recorded which
+event it came from** — not the parent's threshold, not the base of the "2 tiles". Two
+measurements taken under different conditions were compared as if they were the same
+measurement, and the comparison decided the scope.
+
+Which axes vary is a property of the **repo and its stack**, not of the feature, so it
+lives in `_profile.yml conditions_required:` alongside the commands — the same split as
+everywhere else: the profile says how this repo finds out, the registry says what came
+back.
+
+```yaml
+# _profile.yml
+conditions_required: [stream_bitrate_bps, resolution, build]
+```
+
+Every `device|log|sentry` measurement then carries those keys in
+`evidence.conditions:`, and check 31 refuses the ones that do not. An empty
+`conditions_required:` switches the check off — a repo where nothing varies says so,
+it does not stay silent.
+
+**Two entries linked by `depends_on:` whose `conditions:` disagree on a shared key is
+a `CONTRADICTION`, always, with no profile involved.** The derived claim rests on a
+comparison across a variable nobody held fixed.
+
+### A run without its precondition produces no datum
+
+The confound of one hypothesis was marked **before** the run, and the run happened
+anyway. It cost a retraction and a whole device cycle. The number that came back was
+not a weak measurement — it was not a measurement.
+
+An attempted run whose precondition could not be met records the attempt and
+**nothing else**:
+
+```yaml
+basis: asserted                      # unchanged. The run produced no evidence.
+falsified_by: '…'
+evidence:
+  how: device
+  date: 2026-09-15
+  outcome: aborted_no_conditions
+  aborted_because: 'the only event available was 720p; the claim is about 1080p'
+```
+
+- `basis:` stays `asserted`. An aborted run is not a measurement (check 32 →
+  `CONTRADICTION` if it is paired with `basis: measured`).
+- **There is no `value:`.** A value beside an aborted outcome is the reinterpretation
+  this rule exists to forbid — check 32 reports it as a `CONTRADICTION`.
+- `aborted_because:` names the precondition that was missing, in the terms of the
+  claim. Required.
+
+**It is not reinterpreted afterwards.** The temptation is to keep the number and
+qualify it in prose; the qualification lives in one document and the number lives in
+three. Record the abort, restore the precondition, run again.
+
+*The behaviour already happened correctly once* — on 2026-09-15 the 1-vs-2-tiles
+comparison was aborted because the only event available was 720p — **and it was
+written down nowhere**, which is why it is a field now and not a habit.
+
+### Absence of signal is not signal of absence
+
+The four player buckets reach Sentry through `usePlayerActions.js:399 onError`. The
+failure under investigation **raises no error**: it is invisible by construction, and
+an empty query over it says nothing at all.
+
+The check before concluding "this does not happen in production" is **"does the path
+emit?"** — never "is there a signature?". A `measured` value that records an absence
+declares it:
+
+```yaml
+evidence:
+  how: log
+  cmd: "<the query>"
+  date: 2026-09-15
+  value: '0 events matching player.error in 30d'
+  absence: true                 # this value is the ABSENCE of a signal
+  emits: 'usePlayerActions.js:399 onError -> Sentry'   # the path that WOULD produce it
+  sample_rate: 0.2              # what fraction reaches the destination. null = unsampled
+```
+
+- `absence: true` requires `emits:`. **`emits: null` — nothing emits this signal —
+  clears the key and is reported as a `DRIFT` anyway**, because an absence with no
+  emitter is not evidence of non-occurrence and must drop to `basis: asserted`. That
+  is the finding, not an annoyance: it is the case above.
+- `sample_rate:` is required alongside it. At `0.2`, four out of five occurrences were
+  never going to appear, and an empty result is the expected output of a system that
+  *is* failing.
+- A `measured` value shaped like an absence — `0 events`, `no results`, `[]`,
+  `{"monitors":[]}` — with no `absence:` declared is check 33's `DRIFT`. *Real case:*
+  `{"monitors":[]}` was read as data by a person and by nothing else; see check 26.
+
+Same rule from the other side in `references/gap-sweep.md` §Concluding from silence.
 
 ## Rules
 

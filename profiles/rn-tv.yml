@@ -26,6 +26,11 @@ commands:
   file_tracked: "git ls-files --error-unmatch {path}"
   file_ignored: "git check-ignore -v {path}"
 
+# --- what varies here and must be recorded on every run (audit check 31) ---
+# Required keys under `evidence.conditions:` for how: device|log|sentry.
+# Empty = nothing varies, said out loud. See references/evidence.md.
+conditions_required: [stream_bitrate_bps, resolution, build]
+
 gap_sweep_layers: [mobile-tv]
 
 deep_review_agent: null      # ask in intake set A; agent names are per-machine

@@ -1,0 +1,10 @@
+# The CITING set. It holds no measurement of its own — it reads two of the parent's,
+# which is the moment a single run stops looking like a single run.
+feature: child-rails
+status: draft
+profile: _profile.fixture.yml
+changes:
+  - { id: C1, file: docs/features/child-rails/01-master-plan.md, kind: planned,
+      change: 'documenta el umbral heredado' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
