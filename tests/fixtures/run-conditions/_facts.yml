@@ -1,0 +1,50 @@
+# Real case: four events varied 2.3x in bitrate (3.47 / 6.76 / 8.01 / 8.20 Mbps) and
+# no number in either of two related sets recorded which event produced it. D2 rests
+# on D1 and was measured on a different event — the comparison decided the scope.
+feature: run-conditions
+status: draft
+profile: _profile.fixture.yml
+defects:
+  - id: D1
+    role: contributing
+    claim: 'la degradacion arranca en 2 tiles'
+    basis: measured
+    status: open
+    outcome: 'medido, se mantiene abierto como riesgo aceptado'
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15,
+                value: 2, n: 3, spread: '2..4 tiles',
+                conditions: { stream_bitrate_bps: 3470000, resolution: 1920x1080,
+                              build: production-release-1.4.3 } }
+  - id: D2
+    role: contributing
+    claim: 'el mismo umbral vale para el rail inferior'
+    basis: measured
+    status: open
+    outcome: 'medido, se mantiene abierto como riesgo aceptado'
+    depends_on: [D1]
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15,
+                value: 3, n: 3, spread: '3..5 tiles',
+                conditions: { stream_bitrate_bps: 8200000, resolution: 1920x1080,
+                              build: production-release-1.4.3 } }
+  - id: D3
+    role: symptom
+    claim: 'el buffer se vacia en 4 s'
+    basis: measured
+    status: open
+    outcome: 'medido, se mantiene abierto como riesgo aceptado'
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15,
+                value: '4 s', n: 2, spread: '3..5 s',
+                conditions: { resolution: 1920x1080 } }
+  - id: D4
+    role: symptom
+    claim: 'el rail superior degrada con el mismo umbral'
+    basis: measured
+    status: open
+    outcome: 'medido, se mantiene abierto como riesgo aceptado'
+    depends_on: [D1]
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15,
+                value: 2, n: 4, spread: '2..3 tiles',
+                conditions: { stream_bitrate_bps: 3470000, resolution: 1920x1080,
+                              build: production-release-1.4.3 } }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

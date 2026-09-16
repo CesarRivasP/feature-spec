@@ -63,6 +63,21 @@ Real case, and the most valuable moment of the session that produced this file: 
 
 **This is the gate between stage 1 and stage 2** (`SKILL.md` §Modes). It is asked while the set is still a registry and a doc 01, which is when cutting it in half costs a registry edit. Asked after `implement` has run, the same answer costs the phases that were written around the entry.
 
+### Concluding from silence — "it doesn't happen in production"
+
+The step that closes a front on the strength of an empty dashboard, an empty query, or a log nobody has seen the failure in. It is the cheapest conclusion in the sweep and the one with no floor under it.
+
+**The check is "does the path emit?", not "is there a signature?".** In that order, and the second question is meaningless until the first has an answer.
+
+- **Which line emits the signal you searched for?** Name it, `file:line`. The four player buckets reach Sentry through `usePlayerActions.js:399 onError` — a real emitter, for a real class of failure. The failure being investigated **raises no error**: it is invisible by construction, and no query over that destination could ever have found it. An absent signature was read as an absent failure.
+- **Is the failure on that path at all?** A guard that returns early, a promise nobody rejects, a state that resolves to "idle" instead of throwing — each is a failure that reaches no emitter. If the answer is no, the emitter is the `changes[]` entry, and the conclusion has to wait for it.
+- **What is the sampling rate?** `sampleRate: 0.2` means four of five occurrences were never going to appear. An empty result is the *expected* output of a system that is failing, at that rate, at low volume. State the number; if it is not 1.0, say what volume would have had to occur for a single event to be likely.
+- **What is the retention window?** A 30-day dashboard is silent about a failure that last happened on day 31, and silent in exactly the same way.
+
+Any of these unanswered and the finding is the conclusion itself: the spec is about to close a front on an absence nobody established could have been a presence.
+
+Recording it: an `evidence.value` that reports nothing found declares `absence: true`, names `emits:` (the path that *would* have produced it — `null` when nothing does, which settles the question in the other direction), and states `sample_rate:`. `references/evidence.md` §Absence of signal is not signal of absence, mechanized as audit check 33.
+
 ### Deleting / relaxing a check
 - What was the check protecting against? Is that threat now handled elsewhere, or accepted? Say which.
 

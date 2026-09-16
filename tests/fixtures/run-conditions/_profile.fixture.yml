@@ -1,0 +1,7 @@
+# The axes that vary in THIS repo. Check 31 reads its required keys from here and
+# from nowhere else: which variables a run cannot control is a property of the repo
+# and its stack, not of the feature.
+prose_language: es
+commands:
+  tests: npm test
+conditions_required: [stream_bitrate_bps, resolution, build]

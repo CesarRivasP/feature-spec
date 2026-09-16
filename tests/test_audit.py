@@ -189,6 +189,56 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [],
      [("15", "but this checkout is"), ("15", "does not govern")]),
 
+    # §5 — three retractions, one hole: `n=1` read as a constant. `n:` is asked of
+    # the three `how`s that are a run A PERSON performed; `shell` is exempt because a
+    # command carries its own repeatability, and demanding it there would bury these.
+    ("sample-size",
+     [("30", "s1_bare_single"),          # n: 1 with no spread — the shape itself
+      ("30", "s2_multi_no_spread"),      # 5 runs reported as one number
+      ("30", "s3_missing_n")],           # the set records `n:` elsewhere and not here
+     [("30", "s4_measured_with_bar"),    # n + the observed extremes
+      ("30", "s5_shell")]),              # `how: shell` — not a run someone repeated
+
+    # §5, the collapse: `n:` is newer than the set, so three identical misses are one
+    # finding. Same rule as check 26 — reporting each of them buries the
+    # contradictions beside them, which is the wall stage gating exists to prevent.
+    ("sample-size-none",
+     [("30", "no `evidence.n:` on any of the 3 measurements")],
+     [("30", "c1_tiles"), ("30", "c2_buffer"), ("30", "c3_mount")]),
+
+    # §5, the tier the local case is not: a single run leaving its own set. The child
+    # cites the parent's `limits.degradation_threshold_tiles` — one run, no bar — and
+    # from here it reads as a constant. Real case, with half a spec hanging off it.
+    ("cross-set-n1/docs/features/child-rails",
+     [("30", "degradation_threshold_tiles")],
+     [("30", "tolerated_dropped_frames")]),   # n: 6 with its spread
+
+    # §6 — four events varying 2.3x in bitrate and no number recording which one.
+    # D3 omits two keys the profile requires; D2 rests on D1 and was measured on a
+    # different event, which is the comparison that decided the scope.
+    ("run-conditions",
+     [("31", "D3"),                      # `conditions:` missing required keys
+      ("31", "D2")],                     # depends_on D1 across a different bitrate
+     [("31", "D4")]),                    # depends_on D1 under the same conditions
+
+    # §7 — the confound was marked BEFORE the run and the run happened anyway. A1 is
+    # that run written down as if it produced something; A3 is the 2026-09-15 abort,
+    # done correctly — the behaviour that was right and was recorded nowhere.
+    ("aborted-run",
+     [("32", "A1"), ("32", "A2")],
+     [("32", "A3")]),
+
+    # §8 — absence of signal is not signal of absence. z3 is the real case stated
+    # honestly (nothing emits) and it is STILL a finding, which is the point: the
+    # explicit null is decisive, not an out. Same shape as check 14's `log_line`.
+    ("absence-signal",
+     [("33", "z1_undeclared"),           # absence-shaped value, never declared
+      ("33", "z2_no_emitter"),           # declared, but "does the path emit?" unasked
+      ("33", "z3_emits_null"),           # nothing emits — so it proves nothing
+      ("33", "z4_no_sample_rate")],      # at 0.2, an empty result is the expectation
+     [("33", "z5_complete"),
+      ("33", "z6_positive")]),           # a real signal is not an absence
+
     # §15 — `app:` against a spec that genuinely lives in a subdirectory. `apps/consumer`
     # exists; it is simply not the one holding this spec. foreign-profile reports the
     # same finding for a weaker reason — its spec sits at the repo root, so `parts` is

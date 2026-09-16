@@ -29,7 +29,7 @@ cp -R feature-spec ~/.claude/skills/
 To pin a version instead of tracking `main`:
 
 ```bash
-git clone --branch v1.7.2 --depth 1 git@github.com:CesarRivasP/feature-spec.git
+git clone --branch v1.8.0 --depth 1 git@github.com:CesarRivasP/feature-spec.git
 ```
 
 Restart the session so the skill is picked up. No MCP servers, no package to install: the skill itself is markdown and YAML.
@@ -144,6 +144,23 @@ defects:
 
 `measured` needs evidence — a command and its verbatim output. `asserted` needs a falsifier — the concrete observation that would kill the claim. `decided` is a choice, with no truth value to check.
 
+And `measured` is a **run**, not a number. Those four fields say what came back; they say nothing about how many times you looked, what varied while you were looking, or whether the run happened at all — and each of those has cost a retraction:
+
+```yaml
+limits:
+  degradation_threshold_tiles:
+    basis: measured
+    evidence: { how: device, cmd: "<the numbered procedure>", date: 2026-09-15,
+                value: 3, n: 5, spread: "0..308 fallas",
+                conditions: { stream_bitrate_bps: 8200000, resolution: 1920x1080,
+                              build: production-release-1.4.3 } }
+```
+
+- **`n:` and `spread:`** — a single run reported as a bare value is indistinguishable from a settled constant, and that is how it gets cited. `n: 1` is legitimate; a *silent* `n: 1` is three retractions. Cited from another set, it is a finding.
+- **`conditions:`** — what you did not control. Which axes vary is a property of the repo, so the required keys live in `_profile.yml conditions_required:`. Two entries linked by `depends_on:` whose conditions disagree is a contradiction: the comparison crossed a variable nobody held fixed.
+- **`outcome: aborted_no_conditions`** — a run whose precondition could not be met produces no datum. `basis:` stays `asserted`, there is no `value:`, and it is not reinterpreted afterwards.
+- **`absence:` + `emits:` + `sample_rate:`** — an empty query is not evidence of non-occurrence. The check before "this does not happen in production" is *does the path emit?*, never *is there a signature?*.
+
 This is not only for numbers. A behavioral claim ("the framework focuses the first item"), a file-state claim ("not committed yet"), and the reason an alternative was discarded are all claims, and all get a basis. Three of the four modes exist to keep them honest:
 
 - an `asserted` claim with no `falsified_by` is a **finding**;
@@ -240,7 +257,8 @@ If anything outside this repo reads `docs/features/`, check its patterns when yo
 
 | version | what it added |
 |---|---|
-| [**v1.7.2**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.7.2) | check 14's `log_line` gate offered an out its own guard rejected. The DRIFT message says "or `log_line: null` to say it must be built", but the guard was `not e.get("log_line")` and `None` is falsy — so a defect that wrote exactly `log_line: null`, the declaration the message asks for, re-drifted every run, silenceable only by inventing an emitter. The guard now separates *key absent* (nobody considered instrumentation → DRIFT) from *`log_line: null`* (declared as must-be-built → clean), while a blank string still drifts. Same falsy-fallback family as v1.7.1, and the two `node.get("evidence") or {}` sites left in `audit.py` — which crashed the whole audit on a string `evidence:` — were coerced the same way ([#13](https://github.com/CesarRivasP/feature-spec/issues/13)) |
+| [**v1.8.0**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.8.0) | a `measured` value said what came back and nothing about the run behind it. Four retractions, one shape — a run reported as a constant. `evidence:` gains **`n:`** and **`spread:`** (three retractions came out of `n=1` read as a settled number; the tier rises when it is cited from another set, which is where it stops looking like one run), **`conditions:`** for the axes the run did not control, with the required keys in `_profile.yml conditions_required:` — four events varied 2.3x in bitrate and no number in either of two related sets recorded which event produced it, and they were compared anyway — **`outcome: aborted_no_conditions`**, because a confound marked *before* a run and run anyway produces no datum and is never reinterpreted into a weak one, and **`absence:`/`emits:`/`sample_rate:`**, because the four player buckets reached Sentry through one `onError` the failure never raised: the check before "it doesn't happen in production" is *does the path emit?*, not *is there a signature?*. Checks 30-33, plus the gap sweep's §Concluding from silence |
+| [v1.7.2](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.7.2) | check 14's `log_line` gate offered an out its own guard rejected. The DRIFT message says "or `log_line: null` to say it must be built", but the guard was `not e.get("log_line")` and `None` is falsy — so a defect that wrote exactly `log_line: null`, the declaration the message asks for, re-drifted every run, silenceable only by inventing an emitter. The guard now separates *key absent* (nobody considered instrumentation → DRIFT) from *`log_line: null`* (declared as must-be-built → clean), while a blank string still drifts. Same falsy-fallback family as v1.7.1, and the two `node.get("evidence") or {}` sites left in `audit.py` — which crashed the whole audit on a string `evidence:` — were coerced the same way ([#13](https://github.com/CesarRivasP/feature-spec/issues/13)) |
 | [v1.7.1](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.7.1) | `evidence:` written as a string instead of the `{ how, cmd, date, value }` mapping crashed `audit`'s render with `AttributeError: 'str' object has no attribute 'get'`. `node.get("evidence") or {}` only falls back on a falsy value, so a non-empty string passed through to two call sites that call `.get()` on it. A malformed `evidence` is the exact drift the render gate exists to report — it now emits `measured but evidence lacks: how, cmd, date, value` instead of raising ([#12](https://github.com/CesarRivasP/feature-spec/issues/12)) |
 | [v1.7.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.7.0) | a `[human]` check made the LLM re-read three whole documents to answer a question a grep can narrow to ten lines. Checks 3, 4, 8 and 13 now emit **candidates** — a third kind of output, printed under their check in `REQUIRES A HUMAN PASS`, never in `## Findings`, because a candidate has no severity yet and inventing one makes the verdict count things nobody has judged. Each stops where judgment starts: check 3 diffs key sets but cannot read the note that legitimises an injected field, check 4 strips the exempt shape it can and leaves the one it cannot, check 13 takes three of its eight sub-bullets and leaves the five that ask what happens elsewhere. There are more rejects than expects in the suite, which is the point: a sweep that over-reports costs more tokens than the check saves. Check 9 gained the direction that did not exist — a file on the feature's theme that no `docs[]` entry names, outside the source-of-truth net and drifting in silence |
 | [v1.6.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.6.0) | checks 2, 5, 8, 11 and 12 were tagged `[human]`, never mechanized, and never listed under `REQUIRES A HUMAN PASS` — so they were not run and not printed, which is the one failure the script exists to prevent. A test now derives the list from the protocol and fails when a tagged check is missing from it. Check 15 gained its two pure-comparison halves: a `_profile.yml` whose `repo:` names another checkout, or whose `app:` does not govern the directory holding the spec — the spec folder copied between projects, every `cmd` in it now belonging to a different repo and every one of them still running |

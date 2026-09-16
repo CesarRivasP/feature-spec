@@ -1,0 +1,22 @@
+# The collapse case, same rule as check 26's: the field is newer than the set, so
+# three identical misses are one finding and not three. A set where SOME runs carry
+# `n:` is the opposite case and is reported per entry — that is sample-size/.
+feature: sample-size-none
+status: draft
+profile: ../_profile.fixture.yml
+limits:
+  c1_tiles:
+    claim: 'degradan 3 tiles'
+    basis: measured
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15, value: 3 }
+  c2_buffer:
+    claim: 'el buffer se vacia en 4 s'
+    basis: measured
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15, value: '4 s' }
+  c3_mount:
+    claim: 'la linea de montaje aparece en el arranque'
+    basis: measured
+    evidence: { how: log, cmd: "adb logcat -s TAG:D", date: 2026-09-15,
+                value: 'TAG.mount id=listA row=0' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

@@ -16,6 +16,7 @@ The set already carries structure that markdown cannot show:
 | in the files | invisible when read as markdown | what the view does |
 |---|---|---|
 | `basis:` on a registry entry | doc 01 §1 reads the same whether the root cause was **measured** or **guessed** | colored chip on every claim, with `evidence.cmd/date/value` or `falsified_by` attached |
+| `n:` / `spread:` / `conditions:` | a number with no bar beside it reads as a settled constant, and prose has nowhere to put the bar | `n` and `spread` render directly under `value`; `conditions` gets one `key=value` per axis, never a dict printed as one repr |
 | a number copied from the registry into prose | you cannot tell prose from registry by looking | the value is marked; click jumps to its key, click the key highlights every citation |
 | `changes[]` vs `related_docs[]` | two YAML lists that look alike | rendered side by side, labelled by whether they are scope |
 | `defects[] / alternatives[]` | a flat list with `depends_on` ids | a board by status, `depends_on` navigable |

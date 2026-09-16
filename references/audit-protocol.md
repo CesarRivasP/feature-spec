@@ -301,6 +301,47 @@ Real case: `branch` said `main` while the real branch was the feature one. It wa
 
 Real case: a claim about a file-type filter was corrected **twice, in opposite directions** — first understating the defence (*"only validated client-side"*), then overstating it (*"a tampered client cannot bypass it"*). Both times the error was reasoning about the provider's **configuration** instead of executing the flow. A configuration is what you asked for; behavior is what you get. `references/gap-sweep-web-baas.md` already warned about this class; the registry had no way to mark it.
 
+### 30. Sample size and spread — [script]
+Contract in `references/evidence.md` §A measurement is a run, not a number. `value:` says what came back; nothing in the four-field shape says **how many times you looked**.
+
+- **`basis: measured` with `how: device|log|sentry` and no `n:` → `DRIFT`.** Those three are a run a person performed, and how many times they repeated it is not recoverable from the output. `shell` and `git` are exempt: a command's output carries its own repeatability, and demanding `n:` on every `git ls-files` would bury the cases that matter.
+  - **A set where NO evidence carries `n:` collapses to one finding**, exactly as check 26 does for `acceptance[].status`. The field is newer than the set; reporting fifteen identical misses buries the contradictions beside them. A set where *some* measurements carry it and others do not is the opposite case and is reported per entry — somebody adopted the field and skipped runs.
+- **`n: 1` with no `spread:` → `POLISH`.** The lowest tier, on purpose: inside its own set the number is still traceable to the one run someone did. The taxonomy below has three names and this is the one that fits — it is a *warning*, and the tier above is reserved for the case where the single run leaves the set.
+- **`n:` above 1 with no `spread:` → `DRIFT`.** You observed a range and reported its midpoint. The range is the finding; an average with no bar is the shape this check exists to stop.
+- **A prose citation of ANOTHER set's entry whose `n:` is 1 → `DRIFT`.** Cross-set refs are qualified by the owning registry's path (check 21), so the script resolves that path, loads the sibling, and reads the entry's `n:`. This is the tier the local case is not: the citing set sees a number, a path and an id — it does not see that the parent measured it once, and from here the number reads as a constant.
+
+Real case, and the reason this is four rules and not one: **three retractions, one hole.** `n=1` read as a constant. `limits.degradation_threshold_tiles` in a parent set was a single run with no bar, cited by a second set, with half a spec hanging off it.
+
+### 31. Conditions of the run — [script]
+The most expensive finding in `references/evidence.md`, and the one nothing could have caught: four events varied **2.3× in bitrate** (3.47 / 6.76 / 8.01 / 8.20 Mbps) and **no number in either of two related sets recorded which event produced it** — not the parent's threshold, not the base of the "2 tiles". They were compared anyway, and the comparison decided the scope.
+
+Which axes vary is a property of the repo and its stack, not of the feature, so the required keys live in **`_profile.yml conditions_required:`** — the same split as the commands: the profile says how this repo finds out, the registry says what came back.
+
+- **`basis: measured`, `how: device|log|sentry`, and `evidence.conditions:` missing a key the profile requires → `DRIFT`**, naming the key. An empty `conditions_required:` switches the check off; that is a repo saying nothing varies here, out loud, rather than staying silent.
+- **Two entries linked by `depends_on:` whose `conditions:` disagree on a shared key → `CONTRADICTION`.** No profile involved and never switchable off: the derived claim rests on a comparison across a variable nobody held fixed. This is the real case above, stated mechanically.
+
+### 32. A run without its precondition produced no datum — [script]
+A confound was marked **before** a device run and the run happened anyway. It cost a retraction and a full build/install/navigate cycle. The number that came back was not a weak measurement — it was not a measurement, and the damage was done when it got reinterpreted afterwards instead of discarded.
+
+An attempted run whose precondition could not be met records `evidence.outcome: aborted_no_conditions` and nothing else.
+
+- **`evidence.outcome:` starting `aborted` with `basis: measured` → `CONTRADICTION`.** An aborted run is not a measurement. `basis:` stays `asserted` and `falsified_by:` stays where it was.
+- **An aborted `outcome:` alongside a `value:` → `CONTRADICTION`.** That value is the reinterpretation this check exists to forbid. The temptation is to keep the number and qualify it in prose; the qualification lives in one document and the number lives in three.
+- **An aborted `outcome:` with no `aborted_because:` → `DRIFT`.** Name the precondition that was missing, in the terms of the claim.
+
+The behaviour already happened correctly once — on 2026-09-15 a 1-vs-2-tiles comparison was aborted because the only event available was 720p — **and it was written down nowhere.** That is why it is a field and a check rather than a habit.
+
+### 33. Absence of signal is not signal of absence — [script]
+Four player buckets reach Sentry through `usePlayerActions.js:399 onError`. The failure under investigation **raises no error**: it is invisible by construction, and an empty query over it says nothing whatsoever. The check before concluding "this does not happen in production" is **"does the path emit?"**, never "is there a signature?".
+
+- **`basis: measured` whose `value` is shaped like an absence — `0 events`, `no results`, `[]`, `{"monitors":[]}` — with no `absence:` declared → `DRIFT`.** *Real case:* that exact `{"monitors":[]}` is check 26's, read as data by a person and by nothing else.
+- **`absence: true` with no `emits:` key → `DRIFT`.** The question was never asked.
+- **`absence: true` with `emits: null` → `DRIFT`,** and this one is the finding rather than the nuisance: nothing emits the signal, so its absence is not evidence of non-occurrence, and the entry must drop to `basis: asserted`. Same pattern as check 14's `log_line: null` — an explicit null is a declaration, and here the declaration is decisive.
+- **`absence: true` with no `sample_rate:` → `DRIFT`.** At `sample_rate: 0.2`, four of five occurrences were never going to appear and an empty result is the expected output of a system that *is* failing. `null` means unsampled and clears it.
+
+The same rule from the other side — before the spec is built rather than after the query is run — is `references/gap-sweep.md` §Concluding from silence.
+
+
 ## Enum fields are read lowercased — always
 
 Every enum-valued field in the registry (`status`, `basis`, `role`, `kind`, `where`, `outcome`, `stage`, `evidence.how`, `acceptance[].status`) is compared against lowercase literals throughout this file. **Normalize before comparing, or the check fails open.**

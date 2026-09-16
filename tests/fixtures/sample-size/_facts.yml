@@ -1,0 +1,34 @@
+# Real case: three retractions out of one hole — `n=1` read as a constant.
+# s1 is the shape that produced them: one run, one number, no bar.
+# s4 is the same measurement done right; s5 is why `how: shell` is exempt.
+feature: sample-size
+status: draft
+profile: ../_profile.fixture.yml
+limits:
+  s1_bare_single:
+    claim: 'degradan 3 tiles antes de que el player caiga'
+    basis: measured
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15,
+                value: 3, n: 1 }
+  s2_multi_no_spread:
+    claim: 'el buffer se vacia en 4 s'
+    basis: measured
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15,
+                value: '4 s', n: 5 }
+  s3_missing_n:
+    claim: 'la linea de montaje aparece en el arranque'
+    basis: measured
+    evidence: { how: log, cmd: "adb logcat -s TAG:D", date: 2026-09-15,
+                value: 'TAG.mount id=listA row=0' }
+  s4_measured_with_bar:
+    claim: 'entre 0 y 308 fallas por corrida'
+    basis: measured
+    evidence: { how: device, cmd: "<procedimiento numerado>", date: 2026-09-15,
+                value: 41, n: 5, spread: '0..308 fallas' }
+  s5_shell:
+    claim: '280 tests pasan'
+    basis: measured
+    evidence: { how: shell, cmd: "npm test", date: 2026-09-15,
+                value: '280/280 passing (28 files)' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
