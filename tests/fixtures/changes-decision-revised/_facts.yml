@@ -1,0 +1,31 @@
+# Check 34 — a changes[] entry depends_on a decision that was later revised in
+# place (`revised_on:`). C16 never got reviewed. C19 was reviewed, but before the
+# revision, so it is stale too. C17 was reviewed after the revision. C18 depends
+# on a decision nobody has touched since — must stay silent.
+feature: changes-decision-revised
+status: draft
+profile: ../_profile.fixture.yml
+defects: []
+decisions:
+  export_location:
+    date: 2026-09-01
+    basis: decided
+    what: 'el export se sirve desde functions/export-v2, no la carpeta legacy'
+    revised_on: 2026-09-10
+  kept_scope:
+    date: 2026-09-01
+    basis: decided
+    what: 'sin cambios de alcance'
+changes:
+  - { id: C16, file: functions/export-legacy/handler.ts, kind: planned,
+      change: 'ajustar el export', depends_on: [decisions.export_location] }
+  - { id: C17, file: functions/export-v2/handler.ts, kind: planned,
+      change: 'ajustar el export v2', depends_on: [decisions.export_location],
+      reviewed_on: 2026-09-12 }
+  - { id: C18, file: src/unrelated.ts, kind: planned,
+      change: 'sin relacion', depends_on: [decisions.kept_scope] }
+  - { id: C19, file: src/old.ts, kind: planned,
+      change: 'otra cosa', depends_on: [decisions.export_location],
+      reviewed_on: 2026-09-05 }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

@@ -1035,6 +1035,43 @@ def check_dead_dependency_cascade(facts: dict, f: Findings) -> None:
                 break
 
 
+def check_changes_decision_cascade(facts: dict, f: Findings) -> None:
+    """§2.2. A `changes[]` entry can rest on a `decisions.*` premise the same way a
+    `defects[]` entry rests on another id — but a decision has no `status: dead` to
+    cascade from, because the registry's own convention is to edit `what:` in place
+    rather than mint a new key. `revised_on:` is the signal that mutation happened;
+    a `changes[]` entry that named the decision in `depends_on:` and was never
+    `reviewed_on:` since is check 27's blind spot, one field over.
+
+    Real case: a changes[] entry kept pointing at a directory a later decision had
+    retired. Nothing in the registry connected the two, so it rode through
+    `implement` unchallenged."""
+    decisions = facts.get("decisions")
+    decisions = decisions if isinstance(decisions, dict) else {}
+    for idx, e in enumerate(facts.get("changes") or []):
+        if not isinstance(e, dict):
+            continue
+        cid = str(e.get("id") or e.get("file") or f"[{idx}]")
+        reviewed = e.get("reviewed_on")
+        for dep in e.get("depends_on") or []:
+            key = str(dep)
+            key = key.split(".", 1)[1] if key.startswith("decisions.") else key
+            dec = decisions.get(key)
+            if not isinstance(dec, dict):
+                continue
+            revised = dec.get("revised_on")
+            if not revised:
+                continue
+            if not reviewed or str(reviewed) < str(revised):
+                stale = ("no `reviewed_on:`" if not reviewed
+                         else f"`reviewed_on: {reviewed}`, before the revision")
+                f.add(DRIFT, f"changes.{cid}",
+                      f"depends on `decisions.{key}`, revised {revised}, with {stale}",
+                      "confirm `file:` and `kind:` still hold against the revised "
+                      f"decision, then set `reviewed_on: {revised}` or later",
+                      "34 changes[] dependency on a revised decision")
+
+
 def check_file_existence(facts: dict, repo_root: Path, status_rank: int,
                          f: Findings) -> None:
     """§1.3. Registry-declared paths must resolve. Two documented exceptions:
@@ -2021,6 +2058,7 @@ def main(argv: list[str] | None = None) -> int:
     check_changes_vocabulary(facts, f)
     check_acceptance_state(facts, rank, f)
     check_dead_dependency_cascade(facts, f)
+    check_changes_decision_cascade(facts, f)
     check_file_existence(facts, repo_root, rank, f)
     check_anchors(facts, prose, repo_root, f)
     check_orphan_and_dangling_ids(facts, prose, f)
