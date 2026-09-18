@@ -60,6 +60,37 @@ PROSE_CMD_STARTERS = re.compile(
     r"^\s*(ver|vease|véase|see|check|revisar|consultar|mismo|idem|igual)\b", re.I)
 
 
+def confined(base: Path, raw: str) -> Path | None:
+    """Join a registry-supplied path onto `base`, refusing anything that leaves it.
+
+    Same reasoning as never executing `evidence.cmd`: a registry is a data file that
+    travels between repos and agents, so every path in it is input, not instruction.
+    `Path("/repo") / "docs/../../outside/x.txt"` resolves outside the checkout exactly
+    as written, and the auditor then reports on a file the audit has no business
+    touching — a `profile:` aimed that way was read, parsed as YAML, and had its
+    `repo:` value printed verbatim in a finding. Returns None when the path escapes.
+    """
+    try:
+        base = base.resolve()
+        target = (base / raw).resolve()
+    except (OSError, ValueError):
+        return None
+    return target if target == base or base in target.parents else None
+
+
+def profile_path(prof: str, spec_dir: Path, repo_root: Path) -> Path | None:
+    """Where `profile:` is allowed to resolve, in the two shapes that are real.
+
+    `../_profile.yml` is the documented layout — one profile in `docs/features/`
+    governing every feature folder under it — so the spec dir's parent is a base in
+    its own right, not an escape. Anything above those two is."""
+    for base in (repo_root, spec_dir.parent):
+        target = confined(base, prof)
+        if target is not None and target.is_file():
+            return target
+    return None
+
+
 class Findings:
     def __init__(self) -> None:
         self.items: list[dict] = []
@@ -1041,7 +1072,15 @@ def check_file_existence(facts: dict, repo_root: Path, status_rank: int,
                 continue  # decided not to build it — the file is absent by design
             if key == "changes" and status_rank < STATUS_RANK["implementing"]:
                 continue  # a file this set will create legitimately isn't there yet
-            if (repo_root / str(raw)).exists():
+            target = confined(repo_root, str(raw))
+            if target is None:
+                f.add(DRIFT, f"{key}.{e.get('id', raw)}",
+                      f"declares `{raw}`, which resolves outside {repo_root.name}/",
+                      "a registry path is opened by whoever audits the set — keep it "
+                      "inside the checkout, or mark it `where: external`",
+                      "20 declared paths exist")
+                continue
+            if target.exists():
                 continue
             f.add(CONTRADICTION, f"{key}.{e.get('id', raw)}",
                   f"declares `{raw}`, which does not exist under {repo_root.name}/",
@@ -1066,8 +1105,17 @@ def check_anchors(facts: dict, prose: dict[str, str], repo_root: Path,
             continue
         for path_str, line_str in set(ANCHOR_RE.findall(text)):
             line = int(line_str)
-            target = repo_root / path_str
-            if "/" not in path_str:
+            if "/" in path_str:
+                target = confined(repo_root, path_str)
+                if target is None:
+                    f.add(DRIFT, src,
+                          f"anchor `{path_str}:{line}` resolves outside "
+                          f"{repo_root.name}/",
+                          "anchors resolve from the repo root and stay under it; a "
+                          "`../` here points the audit at a file outside the checkout",
+                          "18 anchors resolve")
+                    continue
+            else:
                 matches = list(repo_root.rglob(path_str))
                 if len(matches) != 1:
                     f.add(DRIFT, src,
@@ -1704,7 +1752,7 @@ def check_profile_identity(prof: str, spec_dir: Path, repo_root: Path,
     last bullet is the one that cares about those, and it cares in the other
     direction (a starter holding a CONCRETE value leaks one project into every
     other)."""
-    path = next((b / prof for b in (repo_root, spec_dir) if (b / prof).is_file()), None)
+    path = profile_path(prof, spec_dir, repo_root)
     if path is None or not root_is_real:
         # No git root resolved, so `basename` has nothing to say about which
         # checkout this is and a comparison would invent a finding.
@@ -1752,9 +1800,10 @@ def check_profile_and_log(facts: dict, spec_dir: Path, repo_root: Path,
               "every cmd in the set was then invented per feature, and check 1b has "
               "nothing to compare against",
               "15 profile coverage")
-    elif not (repo_root / str(prof)).is_file() and not (spec_dir / str(prof)).is_file():
+    elif profile_path(str(prof), spec_dir, repo_root) is None:
         f.add(CONTRADICTION, "_facts.yml", f"`profile: {prof}` does not resolve",
-              "the set moved, or the profile came from another checkout",
+              "the set moved, the profile came from another checkout, or the path "
+              "climbs out of the repo — a profile is read and parsed, so it stays in",
               "15 profile coverage")
     else:
         check_profile_identity(str(prof), spec_dir, repo_root, root_is_real, f)

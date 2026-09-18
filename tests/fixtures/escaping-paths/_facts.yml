@@ -1,0 +1,20 @@
+# A registry is a data file that travels between repos and agents, and every path in
+# it is input. Three sites joined one onto the repo root and opened whatever came
+# back: `Path(root) / "docs/../../outside/x.txt"` resolves outside the checkout
+# exactly as written. The anchor check reported a line count for it, check 20
+# reported its existence, and `profile:` was read, parsed as YAML and had its `repo:`
+# value printed verbatim in a finding — the auditor reading a file from outside the
+# tree it was pointed at, on the say-so of the file it is auditing.
+#
+# Every escaping path here names a file that REALLY EXISTS (scripts/audit.py, two
+# levels up). Refusing a path that is merely missing proves nothing; the fixture is
+# about the boundary, not about absence.
+feature: escaping-paths
+status: shipped
+profile: ../../scripts/audit.py
+defects: []
+changes:
+  - { id: C1, file: src/real.ts, kind: planned, change: 'el control: dentro del checkout' }
+  - { id: C2, file: ../../scripts/audit.py, kind: planned, change: 'trepa fuera del repo' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
