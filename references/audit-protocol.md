@@ -187,6 +187,7 @@ Contract in `references/evidence.md`. These are the checks a clean consistency p
 - A field on `references/intake.md`'s never-guess list holding a value the repo cannot corroborate, with no sign it was confirmed → `DRIFT`. It reads as settled and was assumed.
 - **`_profile.yml repo:` ≠ `basename $(git rev-parse --show-toplevel)` → `CONTRADICTION`.** **[script]** — The profile came from another checkout — almost always because a spec folder was copied between projects and the profile travelled with it. Every `cmd` in the set now belongs to a different repo and every one of them still runs. Same defect class as copying a test count out of a sibling spec, one level up.
 - **`_profile.yml app:` naming a subdirectory that is not the one holding this spec → `CONTRADICTION`.** **[script]** — The `app_id` is another variant's; `how: device` evidence was gathered against the wrong install.
+- **`_facts.yml profile:` resolving outside the repo root — or outside the directory holding the feature folders, which is where `../_profile.yml` legitimately lands — → `CONTRADICTION`, and the file is not read.** A profile is opened, parsed as YAML and quoted back in findings, so a `profile:` is the one registry path that discloses content rather than just existence.
 - **`_facts.yml profile:` pointing at a different file than the upward walk resolves today → `DRIFT`.** A second profile appeared, or the set moved. Two profiles in one repo is the drift the single-source rule exists to prevent — reconcile before anything else, since every other check reads commands through it.
 - **A starter in the skill's own `profiles/` holding a concrete value where the template has `<angle brackets>`** — a real `app_id`, a real repo name, a machine-specific `deep_review_agent` — → `DRIFT`. Starters are copied, never filled; a filled one leaks one project's identity into every other project that uses this skill.
 
@@ -210,6 +211,7 @@ Contract in `references/handoff.md`. Only applies once `_log.md` exists — a si
 Check 13 verifies an edit **has** an anchor. Nothing verified that the anchor **resolves**. Every `file:line` in `_facts.yml` and in prose: (a) the path resolves from the repo root, (b) the file exists, (c) the line is within range.
 - Bare filename with no path (`index.ts:18`, `config.toml:7`) → `DRIFT`. In a repo with 267 files named `index.mjs` it resolves to nothing.
 - File missing, or line past end of file → `CONTRADICTION`.
+- **An anchor that climbs out of the checkout (`docs/../../outside/x.ts:9`) → `DRIFT`, and nothing is opened.** A registry travels between repos and agents, so every path in it is input: joined onto the repo root, a `../` resolves outside exactly as written, and the audit then reports the line count of a file it was never pointed at. Confine before you open.
 - **`_log.md` is excluded and must stay excluded.** It is append-only history recording what was true then; its anchors are never corrected. A sweep that "fixes" them is rewriting the record.
 
 Real case: in one set, five anchors were stale — `chat.ts:341`→`:342`, `InputForm.tsx:120`→`:129`, `useFileUpload.ts:45`→`:67` — every one of them moved by the author's **own later edits inside the same session**. The sibling set carried eight bare anchors. This is the single most frequent finding in this file.
@@ -226,6 +228,8 @@ Three exceptions, all **declared in the registry, never inferred**:
 - `where: external` — the change is real but has no file here (a cron job, a dashboard setting). Real case: `file: "cron.job jobid 1 (comando SQL, no vive en el repo)"`.
 - `kind: deferred` / `kind: moved_out` — decided against, so the file is absent by design.
 - a `changes[]` file the set has not created yet, while `status:` is below `implementing`.
+
+A path that resolves **outside** the repo root is a fourth outcome and not one of the three exceptions: `DRIFT`, reported as escaping rather than as missing, and never stat'd. Whether such a file exists is not this audit's business — see check 18.
 
 ### 21. Registry ids ↔ prose — [script]
 Check 1 covers "datum in ≥2 docs but not in the registry". Both inverses were missing.

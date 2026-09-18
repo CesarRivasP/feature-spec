@@ -42,6 +42,22 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("20", "cron.job"),            # where: external — no file in this repo
       ("20", "cleanup_runs.sql")]),  # kind: deferred — absent by design
 
+    # The registry as INPUT, not instruction. Three sites joined a registry-supplied
+    # path onto the repo root and opened what came back, so `docs/../../outside/x`
+    # walked straight out of the checkout: check 18 reported the file's line count,
+    # check 20 reported its existence, and `profile:` was read, parsed as YAML and had
+    # its `repo:` value printed verbatim in a finding. Every escaping path in the
+    # fixture names a file that really exists two levels up — the assertion is about
+    # the boundary, not about absence.
+    ("escaping-paths",
+     [("18", "resolves outside"),
+      ("20", "resolves outside"),
+      ("15", "does not resolve")],
+     [("18", "src/real.ts"),          # the in-repo control is silent, as before
+      ("20", "src/real.ts"),
+      ("18", "past end of file"),     # the giveaway: nothing outside was opened
+      ("20", "does not exist under")]),  # refused for escaping, not for being absent
+
     # §1.4 — registry entries no doc mentions, and a qualified cross-set ref.
     ("orphan-and-crossset",
      [("21", "defects.D2")],
