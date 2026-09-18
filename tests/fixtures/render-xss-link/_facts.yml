@@ -1,0 +1,8 @@
+# Socket flagged unsafe Markdown URL handling in render.py: `_inline()` built
+# `<a href="\2">` directly from the captured URL, with quotes left unescaped
+# (`html.escape(text, quote=False)`) and no scheme check. A `javascript:` link
+# in ANY prose or registry text survived verbatim into the rendered page.
+feature: render-xss-link
+status: draft
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

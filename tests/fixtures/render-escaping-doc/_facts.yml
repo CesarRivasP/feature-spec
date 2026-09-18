@@ -1,0 +1,9 @@
+# Socket's second finding: `docs[].file` was joined onto `spec_dir` with no bound
+# and its content READ and embedded in the page — not just checked for existence,
+# like audit.py's check 20. `../../../scripts/render.py` names a file that really
+# exists three levels up, because refusing a path that is merely missing proves
+# nothing; the assertion is about the boundary.
+feature: render-escaping-doc
+status: draft
+docs:
+  - { id: "01", file: ../../../scripts/render.py, role: master-plan, stage: draft }

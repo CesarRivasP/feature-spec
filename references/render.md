@@ -67,6 +67,14 @@ the same facts, not a second opinion.
 6. **Orphan datums are shown, not hidden.** A registry value with zero citations
    across every doc is either missing from the docs or dead weight in the
    registry. The matrix marks the row and the Overview counts it.
+7. **The registry is input, not instruction.** Every rendered link/image goes
+   through a URL scheme allowlist (`http`, `https`, `mailto` — anything else
+   defuses to `#`), and every registry path the renderer opens (`docs[].file`)
+   is confined to `spec_dir` before it is read. A set travels between repos and
+   agents; a `javascript:` link in prose or a `docs[].file` climbing out with
+   `../` are both the renderer trusting content it was only asked to display.
+   A path that escapes is not read, and the skip is a visible Overview warning,
+   never silence.
 
 ## Gates surfaced on the Overview
 

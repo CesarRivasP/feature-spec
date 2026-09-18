@@ -33,8 +33,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from render import (accepted_state, collect_claims, norm, status_gate,
-                        walk, yaml)
+    from render import (accepted_state, collect_claims, confined, norm,
+                        status_gate, walk, yaml)
 except ImportError as exc:  # pragma: no cover
     sys.exit(
         f"cannot import the shared registry core from render.py: {exc}\n"
@@ -58,24 +58,6 @@ TEXT_FIELDS = ("claim", "note", "because", "name", "change", "reopens_when",
 ANCHOR_RE = re.compile(r"(?<![\w/.])([A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,6}):(\d+)\b")
 PROSE_CMD_STARTERS = re.compile(
     r"^\s*(ver|vease|véase|see|check|revisar|consultar|mismo|idem|igual)\b", re.I)
-
-
-def confined(base: Path, raw: str) -> Path | None:
-    """Join a registry-supplied path onto `base`, refusing anything that leaves it.
-
-    Same reasoning as never executing `evidence.cmd`: a registry is a data file that
-    travels between repos and agents, so every path in it is input, not instruction.
-    `Path("/repo") / "docs/../../outside/x.txt"` resolves outside the checkout exactly
-    as written, and the auditor then reports on a file the audit has no business
-    touching — a `profile:` aimed that way was read, parsed as YAML, and had its
-    `repo:` value printed verbatim in a finding. Returns None when the path escapes.
-    """
-    try:
-        base = base.resolve()
-        target = (base / raw).resolve()
-    except (OSError, ValueError):
-        return None
-    return target if target == base or base in target.parents else None
 
 
 def profile_path(prof: str, spec_dir: Path, repo_root: Path) -> Path | None:
