@@ -255,6 +255,13 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("33", "z5_complete"),
       ("33", "z6_positive")]),           # a real signal is not an absence
 
+    # §2.2 — a changes[] entry depends_on a decision revised in place. C16 was never
+    # reviewed since; C19 was reviewed, but before the revision — both stale. C17
+    # was reviewed after; C18 depends on a decision nobody has touched — silent.
+    ("changes-decision-revised",
+     [("34", "C16"), ("34", "C19")],
+     [("34", "C17"), ("34", "C18")]),
+
     # §15 — `app:` against a spec that genuinely lives in a subdirectory. `apps/consumer`
     # exists; it is simply not the one holding this spec. foreign-profile reports the
     # same finding for a weaker reason — its spec sits at the repo root, so `parts` is

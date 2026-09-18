@@ -154,6 +154,12 @@ decisions: {}           # e.g. { scope_trimmed: { date: YYYY-MM-DD, basis: decid
                         # justified with "for alerting we don't need it, the Crons
                         # monitor covers the absence". When the monitor was cancelled the
                         # table stayed deferred — but no longer for the written reason.
+                        #
+                        # revised_on: YYYY-MM-DD — set this when you edit `what:` on an
+                        # EXISTING key instead of minting a new one. A decision has no
+                        # `status: dead` to cascade from the way a defect does; this date
+                        # is the only signal that the premise moved. Pairs with `changes[]
+                        # depends_on:` below — audit check 34 reads it.
 
 # --- domain facts (fill with the real shared numbers/names) ---
 limits: {}              # e.g. { cloudflare: { timeout_s: 100, error: 524 } }
@@ -196,6 +202,20 @@ changes: []             # components CREATED or MODIFIED by this feature (bots, 
                         #   A `file:` under `kind: planned, where: repo` that does not exist on
                         #   disk is only a finding once `status:` reaches `implementing` — before
                         #   that, a file this set is going to create legitimately isn't there yet.
+                        #
+                        #   OPTIONAL, any `kind:` — an entry whose `file:`/`change:` rests on a
+                        #   `decisions.*` premise, not just a `deferred` one, may declare it:
+                        #     depends_on: [decisions.<key>]   # which premise this rests on
+                        #     reviewed_on: YYYY-MM-DD         # last time a human confirmed it
+                        #                                     #   still holds against that premise
+                        #   Real case: an entry kept pointing at a directory a later decision had
+                        #   retired. Nothing connected the two — the decision's `what:` was simply
+                        #   edited — so the stale entry rode through `implement` unchallenged.
+                        #   Audit check 34: `depends_on` names a decision carrying `revised_on:`
+                        #   newer than this entry's `reviewed_on:` (or missing it) → DRIFT.
+                        #   - { id: C16, file: functions/export/handler.ts, kind: planned,
+                        #       change: '...', depends_on: [decisions.export_location],
+                        #       reviewed_on: 2026-09-12 }
 related_docs: []        # docs/guides REFERENCED but NOT modified (e.g. manual-user-creation.md).
                         #   context pointers only — never scope-parity members.
                         #   A related_doc's STATE is a claim: "sin commitear" needs

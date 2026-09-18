@@ -345,6 +345,15 @@ Four player buckets reach Sentry through `usePlayerActions.js:399 onError`. The 
 
 The same rule from the other side — before the spec is built rather than after the query is run — is `references/gap-sweep.md` §Concluding from silence.
 
+### 34. `changes[]` dependency on a revised decision — [script]
+Check 27 cascades from a `defects[]`/`alternatives[]` entry's `depends_on` target going `status: dead`. A `changes[]` entry can rest on a premise the same way, but `decisions.*` has no `dead` state — the registry's own convention is to edit `what:` **in place** rather than mint a new key, so a `changes[]` entry pointing at a path that premise no longer supports has nothing to cascade from.
+
+`decisions.*` may carry `revised_on:` — set when `what:` is edited after the fact, instead of silently mutated. A `changes[]` entry may declare `depends_on: [decisions.<key>]` and `reviewed_on:`, the date a person last confirmed the entry still holds.
+
+- **A `changes[]` entry's `depends_on` names a `decisions.*` key carrying `revised_on:`, and the entry has no `reviewed_on:`, or one older than `revised_on:` → `DRIFT`.** The premise moved and nobody came back to check whether the entry still points where it should.
+
+*Real case:* a `changes[]` entry kept pointing at a directory a later decision had retired. Nothing in the registry connected the two — the decision's `what:` was simply edited — so the stale entry rode through `implement` unchallenged.
+
 
 ## Enum fields are read lowercased — always
 
