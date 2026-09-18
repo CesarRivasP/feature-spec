@@ -227,7 +227,7 @@ Contract and invariants: `references/render.md`.
 - `references/render.md` — the `view` mode: what the HTML render reads, the invariants it holds, and the gates it surfaces.
 - `scripts/render.py` — the renderer itself. Deterministic and standalone: no model writes the HTML, so the view cannot drift from the files it renders.
 - `scripts/audit.py` — the mechanized half of the audit protocol. Shares its registry walk and basis gates with `render.py` by importing them, so the two cannot drift: a check implemented twice is the defect this skill exists to prevent.
-- `tests/` — one fixture per mechanized check, each reproducing the real failure that motivated it, plus the false positives that must stay unreported. `python3 tests/test_audit.py`.
+- `tests/` — one fixture per mechanized check, each reproducing the real failure that motivated it, plus the false positives that must stay unreported. `python3 tests/test_audit.py`. `python3 tests/test_render.py` covers `render.py`'s own security boundary: a URL scheme allowlist on rendered links/images, and confinement on every registry path it reads content from.
 - `templates/` — `_facts.yml.tpl`, `_log.md.tpl`, and one `.tpl` per doc.
 - `profiles/` — `_profile.yml.tpl` (the contract) plus starter profiles per stack. Copy one into the repo as its `_profile.yml`; **never fill one in place** — a real `app_id` or agent name written into a starter leaks into every other project using this skill.
   - The starters and the `gap-sweep-<layer>.md` files are **independent and disposable**. A repo needs only the ones matching its stacks; delete the rest, nothing else references them. Adding one for a new stack is ~20 lines (profile) and ~40 (layer), and is the normal way this skill grows.

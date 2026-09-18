@@ -60,6 +60,25 @@ def _slug(text: str) -> str:
     return s.strip("-") or "s"
 
 
+_URL_SCHEME = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.-]*):")
+SAFE_URL_SCHEMES = {"http", "https", "mailto"}
+
+
+def _safe_url(url: str) -> str:
+    """A link/image target is prose, not code, but a browser does not know that.
+
+    `[text](javascript:...)` puts an attacker-chosen scheme into an emitted
+    `href`/`src` — the string travels from a registry or a doc into a page that is
+    opened in a browser, shared, or served over `--lan`, and every scheme a browser
+    treats as executable is a way to run something the moment that page is opened.
+    Anything with an explicit scheme not on the allowlist is defused to `#` rather
+    than dropped, so the link/image still renders instead of vanishing."""
+    m = _URL_SCHEME.match(url)
+    if m and m.group(1).lower() not in SAFE_URL_SCHEMES:
+        return "#"
+    return url
+
+
 def _inline(text: str) -> str:
     """Escape, then apply inline markdown. Code spans are protected first."""
     spans: list[str] = []
@@ -69,9 +88,13 @@ def _inline(text: str) -> str:
         return f"\x00{len(spans) - 1}\x00"
 
     text = re.sub(r"`([^`]+)`", stash, text)
-    text = html.escape(text, quote=False)
-    text = re.sub(r"!\[([^\]]*)\]\(([^)\s]+)\)", r'<img alt="\1" src="\2">', text)
-    text = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)", r'<a href="\2">\1</a>', text)
+    text = html.escape(text, quote=True)
+    text = re.sub(r"!\[([^\]]*)\]\(([^)\s]+)\)",
+                  lambda m: f'<img alt="{m.group(1)}" src="{_safe_url(m.group(2))}">',
+                  text)
+    text = re.sub(r"\[([^\]]+)\]\(([^)\s]+)\)",
+                  lambda m: f'<a href="{_safe_url(m.group(2))}">{m.group(1)}</a>',
+                  text)
     text = re.sub(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"(?<![\w*])\*(?=\S)([^*]+?)(?<=\S)\*(?![\w*])", r"<em>\1</em>", text)
     text = re.sub(r"(?<![\w_])_(?=\S)([^_]+?)(?<=\S)_(?![\w_])", r"<em>\1</em>", text)
@@ -349,6 +372,25 @@ def norm(value) -> str:
     an entry written `el cron borra…` and quoted as `El cron borra…` is being read,
     and calling it an orphan makes a different and wrong claim."""
     return str(value or "").strip().lower()
+
+
+def confined(base: Path, raw: str) -> Path | None:
+    """Join a registry-supplied path onto `base`, refusing anything that leaves it.
+
+    A registry travels between repos and agents, so every path in it is input, not
+    instruction — the same reasoning that already keeps `evidence.cmd` from ever
+    being executed. `docs[].file` is read and its content embedded in the rendered
+    page; `base / "../../outside/x"` resolves outside the checkout exactly as
+    written, and the view then discloses whatever that path pointed to. Shared with
+    `audit.py`'s checks 15, 18 and 20 so the boundary is enforced identically on
+    both paths that touch a registry path — one that reads it, one that only
+    checks it — rather than drifting between two copies."""
+    try:
+        base = base.resolve()
+        target = (base / raw).resolve()
+    except (OSError, ValueError):
+        return None
+    return target if target == base or base in target.parents else None
 
 
 AGENT_RE = re.compile(r"claude|gpt|gemini|llama|opus|sonnet|haiku|o[0-9]|agent|bot",
@@ -1017,8 +1059,8 @@ def deferred_docs(facts: dict, spec_dir: Path) -> list[dict]:
         if not isinstance(entry, dict):
             continue
         stage = norm(entry.get("stage")) or "draft"
-        path = spec_dir / str(entry.get("file", ""))
-        if STATUS_RANK.get(stage, 0) > rank and not path.is_file():
+        path = confined(spec_dir, str(entry.get("file", "")))
+        if STATUS_RANK.get(stage, 0) > rank and (path is None or not path.is_file()):
             out.append({"id": str(entry.get("id") or "?"),
                         "file": str(entry.get("file", "")), "stage": stage})
     return out
@@ -1231,10 +1273,16 @@ def build_page(spec_dir: Path) -> str:
 
     doc_entries = facts.get("docs") or []
     docs: list[dict] = []
+    escaped_docs: list[str] = []
     for entry in doc_entries:
         if not isinstance(entry, dict):
             continue
-        path = spec_dir / str(entry.get("file", ""))
+        raw = str(entry.get("file", ""))
+        path = confined(spec_dir, raw)
+        if path is None:
+            escaped_docs.append(f"`docs.{entry.get('id', raw)}` names `{raw}`, "
+                                 f"which resolves outside the spec dir — not read")
+            continue
         if path.is_file():
             docs.append({"id": str(entry.get("id") or path.stem[:2]),
                          "file": path.name, "role": str(entry.get("role", "")),
@@ -1245,7 +1293,7 @@ def build_page(spec_dir: Path) -> str:
                          "text": path.read_text(encoding="utf-8")})
 
     claims = collect_claims(facts)
-    warnings = status_gate(facts, claims)
+    warnings = status_gate(facts, claims) + escaped_docs
     datums = {v: p for v, p in collect_datums(facts).items()
               if not all(x.startswith(STOP_PATH_PREFIXES) for x in p)}
     rx = build_datum_regex(datums)
