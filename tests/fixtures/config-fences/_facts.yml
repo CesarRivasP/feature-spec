@@ -1,0 +1,25 @@
+# Check 8, and the three shapes that made doc 02's paste-ready nature look like a
+# wall of orphan contracts.
+#
+# Doc 02 is executable by design, so a set that creates a project ships
+# `package.json`, `tsconfig.json` and its i18n bundles as fences. Every one of them
+# is shaped exactly like a payload and none is an interface anybody calls.
+# Measured: 15 of 19 real candidates, and after the filename rule alone, 6 more —
+# a manifest the prose never names, and the second and later fences of one file
+# shown as key fragments.
+#
+# The control matters as much as the exemptions: a genuine prose-orphan payload
+# and a genuine orphan URL must still be reported, or the check has been switched
+# off rather than sharpened.
+feature: config-fences
+status: implementing
+profile: ../_profile.fixture.yml
+defects: []
+acceptance: []
+contracts:
+  known_job:
+    fields: [job_id, output_url]
+endpoints: { declared_hook: /webhook/known }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation.md, role: implementation, stage: reviewed }

@@ -373,8 +373,75 @@ URL_RE = re.compile(
 NON_ENDPOINT_SCHEMES = ("file", "chrome", "about", "data", "javascript")
 
 JSON_KEY_RE = re.compile(r'"([A-Za-z_][\w.-]*)"\s*:')
+# A fence the prose introduces BY FILENAME is that file's contents, not an
+# interface two sides must agree on. Doc 02 is paste-ready by design, so a set that
+# creates a project ships `package.json`, three `tsconfig*.json` and its i18n
+# bundles as fences — all of them shaped exactly like a payload and none of them
+# addressable by anybody.
+#
+# Measured: 15 of 19 real check-8 candidates were this — `**`package.json`**
+# (raiz):`, `**Archivo:** `mcp-server/tsconfig.json` (nuevo)`, `**Código —
+# `es.json`:**`, `` `assets/i18n/en.json`, misma clave: ``. The same ~4-in-5 noise
+# rate as check 13's bare `dashboard`, and the same fix: read what the sentence
+# above it says the block IS.
+JSON_FILE_INTRO_RE = re.compile(r"[\w./@-]+\.json\b")
+# Two shapes the filename rule cannot reach, both found by running it.
+#
+# A manifest the prose never names: `**Ancla:** archivo nuevo` / `**Código:**` and
+# then a package.json, identifiable only by what is IN it. These key sets belong to
+# well-known files and to nothing a spec set would ever call an interface.
+MANIFEST_SIGNATURE_KEYS = ({"compilerOptions"}, {"devDependencies"},
+                           {"peerDependencies"}, {"mcpServers"}, {"workspaces"},
+                           {"name", "version", "scripts"})
+# A continuation: the second and later fences of one file, shown as key fragments
+# (`"greeting": "Hola"`) under prose like `y en "labels":`. A fragment is
+# not a payload — nothing can be diffed against it field-for-field, which is the
+# only thing check 3 and check 8 do with a fence. The protocol already grants this
+# to the human ("a fence can legitimately show a fragment"); this makes it
+# mechanical, so the human never sees the four that come after the first.
+JSON_DOCUMENT_START_RE = re.compile(r"^\s*[{\[]")
 HTTP_REQUEST_LINE_RE = re.compile(
     r"^\s*(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)", re.M)
+
+
+# Keys that describe a contract instead of being fields OF it. They are the
+# registry's own vocabulary and can never appear in a payload, so folding them into
+# the field set makes a correct fence look wrong.
+#
+# Motivating case, and the reason this is a constant and not a judgment call: a
+# `{ fields: [a, b, c], note: "..." }` entry against a prose fence of exactly
+# `{a, b, c}` — a perfect match — was reported as `missing {fields, note}`. One
+# scalar `note:` sibling was enough, because the shape test below asks whether
+# EVERY value is a container. The skill tells authors to write `note:` siblings
+# everywhere, so the convention and the check were in direct contradiction.
+#
+# The name alone does not settle it, and a first attempt that assumed it did made
+# the check WORSE: a plain descriptive word can also be a real column of one
+# contract's payload and metadata beside another's `fields:`. Stripping by name
+# everywhere turned nine false positives into thirteen different ones, reported
+# as an extra field against documents that were right.
+#
+# What settles it is the LEVEL. Descriptive keys sit at the entry, as siblings of a
+# payload container; inside a payload every key is a field. So the strip happens at
+# the entry and nowhere below it — and only when the entry actually declares a
+# payload container, since a flat `{id, description}` entry IS the payload and has
+# no metadata level to strip.
+CONTRACT_META = {"note", "notes", "description", "desc", "example", "examples",
+                 "source", "owner", "owned_by", "cited_in", "auth", "basis",
+                 "evidence"}
+PAYLOAD_KEYS = {"fields", "columns", "request_body", "response_ok", "response_err",
+                "request", "response", "payload", "body", "schema", "rows"}
+
+
+def strip_contract_meta(node):
+    """Entry-level descriptive keys of one `contracts.*` entry. Never called below
+    the entry: one level down, the same word is a field name."""
+    if not isinstance(node, dict):
+        return node
+    if not {str(k).strip().lower() for k in node} & PAYLOAD_KEYS:
+        return node        # a flat payload: every key is a field
+    return {k: v for k, v in node.items()
+            if str(k).strip().lower() not in CONTRACT_META}
 
 
 def contract_field_names(node) -> set[str]:
@@ -384,7 +451,9 @@ def contract_field_names(node) -> set[str]:
     names them as list values, `response_ok: { field: type }` names them as keys. A
     scalar sitting under a dict key is the field's TYPE, never its name — folding
     those in would grow the name set until every fence matched something and the
-    check reported nothing."""
+    check reported nothing. Entry-level metadata is stripped by the caller, never
+    here: at this depth the node may already be a payload, where `description` is a
+    field and not a description."""
     names: set[str] = set()
     if isinstance(node, dict):
         for key, val in node.items():
@@ -411,7 +480,7 @@ def registry_container_entries(facts: dict, container: str) -> dict[str, object]
 
 
 def contract_keysets(facts: dict) -> dict[str, set[str]]:
-    return {name: contract_field_names(body)
+    return {name: contract_field_names(strip_contract_meta(body))
             for name, body in registry_container_entries(facts, "contracts").items()}
 
 
@@ -473,7 +542,13 @@ def contract_blocks(facts: dict) -> list[tuple[str, set[str]]]:
     separately and a fence is diffed against the one it actually resembles.
 
     A dict whose values are all containers is a set of payloads; anything else is a
-    payload whose keys are field names. Both are the template's own shapes."""
+    payload whose keys are field names. Both are the template's own shapes.
+
+    Descriptive keys are stripped BEFORE that test, not only from the field set. A
+    single `note:` next to `fields:` makes "every value is a container" false, so
+    the entry stops being read as a set of payloads and collapses into one — which
+    is how `{fields: [...], note: "..."}` came to be diffed as a payload with the
+    literal fields `fields` and `note`."""
     out: list[tuple[str, set[str]]] = []
 
     def visit(label: str, node) -> None:
@@ -487,7 +562,7 @@ def contract_blocks(facts: dict) -> list[tuple[str, set[str]]]:
             out.append((label, fields))
 
     for name, body in registry_container_entries(facts, "contracts").items():
-        visit(f"contracts.{name}", body)
+        visit(f"contracts.{name}", strip_contract_meta(body))
     return out
 
 
@@ -509,6 +584,18 @@ EXTERNAL_STEP_RE = re.compile(
     r"\bsecreto\b|\bsecret\b|\bAPI key\b|\bclave de API\b|\bconsola de \w+\b|"
     r"\bregistrar el dominio\b|\bcertificado (?:SSL|TLS)\b", re.I)
 EXTERNAL_LABEL_RE = re.compile(r"\[MANUAL\]|\[OWNER EXTERNO\]|\[EXTERNAL OWNER\]")
+# What separates "the Supabase dashboard" from "the Dashboard", which in most of
+# these apps is a screen the app itself renders. Measured over 25 real candidates:
+# 19 fired on the word `dashboard` and only 5 of the 25 named a provider — the rest
+# were in-app navigation ("Navegar a la semana siguiente en el Dashboard"), a
+# deliberately FAKE secret in a test ("Pegar un secret falso"), and blocking DNS
+# inside a network test. A keyword cannot tell a third party's console from a route
+# in this codebase; a provider name next to it can.
+EXTERNAL_PROVIDER_RE = re.compile(
+    r"\b(?:supabase|resend|anthropic|openai|vercel|cloudflare|sentry|stripe|github|"
+    r"gitlab|firebase|aws|amazon|azure|gcp|google|expo|netlify|heroku|twilio|auth0|"
+    r"clerk|posthog|datadog|mailgun|sendgrid|namecheap|godaddy|route ?53)\b|"
+    r"\bconsola de \w+|\bconsole\b|\bpanel de \w+|https?://", re.I)
 # "in a step". A sentence of narrative that happens to end in "etc." is not an
 # instruction anybody executes, and reporting it is how a candidate list stops
 # being read.
@@ -544,6 +631,7 @@ def check_doc02_executability(facts: dict, prose: dict[str, str],
             continue
         doc = entry["file"]
         text = prose[doc]
+        unqualified: list[tuple[int, str]] = []
         for lineno, line in enumerate(text.splitlines(), 1):
             hit = UNRESOLVED_PATH_RE.search(line)
             if hit:
@@ -559,13 +647,45 @@ def check_doc02_executability(facts: dict, prose: dict[str, str],
                       "builder has to guess the rest")
             hit = EXTERNAL_STEP_RE.search(line)
             if hit and not EXTERNAL_LABEL_RE.search(line):
-                c.add("13", f"{doc}:{lineno}",
-                      f"step reaches outside the checkout ({hit.group(0).strip()!r}) "
-                      "with no `[MANUAL]` / `[OWNER EXTERNO]` label")
+                if EXTERNAL_PROVIDER_RE.search(line):
+                    c.add("13", f"{doc}:{lineno}",
+                          f"step reaches outside the checkout "
+                          f"({hit.group(0).strip()!r}) with no `[MANUAL]` / "
+                          "`[OWNER EXTERNO]` label")
+                else:
+                    unqualified.append((lineno, hit.group(0).strip().lower()))
+
+        # Collapsed, not dropped. The word alone is too weak to name a line with —
+        # in this corpus it was wrong four times out of five — but staying silent
+        # about it would rebuild the failure `HUMAN_PASS` exists to close, one level
+        # down. So the count is stated and the reader decides whether to grep.
+        if unqualified:
+            words = ", ".join(sorted({w for _, w in unqualified}))
+            c.add("13", doc,
+                  f"{len(unqualified)} step(s) name {words} with no provider and no "
+                  "`[MANUAL]` label — listed as a count because the word alone does "
+                  "not distinguish a third party's console from a screen this app "
+                  f"renders (lines {', '.join(str(n) for n, _ in unqualified)})")
 
 
 DOC_ID_SPAN_RE = re.compile(r"^0\d[a-z]?$")
 SECTION_REF_RE = re.compile(r"§\s*(\d+(?:\.\d+)*[a-z]?)")
+# `§1–§5` is ONE span, not two navigation targets. A reader following it opens a
+# range; a sweep that reads it as two refs reports its far end as dangling.
+#
+# Real case: `> Las referencias a §1–§5 apuntan a `01`, las de §6–§8 a `01b`` — a
+# LEGEND declaring how to read the references in the rest of the document. It
+# produced four candidates and survived 48 review rounds untouched, which is as
+# close to a human verdict of "not a finding" as this corpus offers.
+SECTION_RANGE_RE = re.compile(
+    r"§\s*\d+(?:\.\d+)*[a-z]?\s*[–—−-]\s*§?\s*\d+(?:\.\d+)*[a-z]?")
+# Above this many refs on one line, the line is enumerating rather than pointing.
+# Same idiom, and the same reason, as checks 26 and 30: reporting fifteen hits from
+# one sentence buries every other finding in the set. Real case: a single changelog
+# row (`CHANGELOG.md:14`) produced 11 of that set's 21 candidates, and the protocol
+# already names its shape exempt — "a changelog clause that names the doc once and
+# then enumerates what changed inside it".
+REF_ENUMERATION_MIN = 3
 SECTION_HEADING_RE = re.compile(r"^#{1,6}\s*(?:§\s*)?(\d+(?:\.\d+)*[a-z]?)\b", re.M)
 DOC_MENTION_RE = re.compile(r"\b(?:doc|documento)\s+(0\d[a-z]?)\b", re.I)
 DOC_ID_TOKEN_RE = re.compile(r"(?<![\w.])(0\d[a-z]?)(?![\w.])")
@@ -634,7 +754,17 @@ def check_cross_refs(facts: dict, prose: dict[str, str], in_scope: list[dict],
 
             ids = [(m.start(), m.end(), m.group(1))
                    for m in DOC_ID_TOKEN_RE.finditer(line)]
+            # Everything but the first member of each `§N–§M` span: one range is
+            # one reference, and its far end is not a target anybody navigates to.
+            spanned: set[int] = set()
+            for rng in SECTION_RANGE_RE.finditer(line):
+                inner = [mm.start() for mm in
+                         SECTION_REF_RE.finditer(line, rng.start(), rng.end())]
+                spanned.update(inner[1:])
+            line_cands: list[str] = []
             for m in SECTION_REF_RE.finditer(line):
+                if m.start() in spanned:
+                    continue
                 num = m.group(1)
                 prefix = next((tok for start, end, tok in ids
                                if end <= m.start()
@@ -646,8 +776,8 @@ def check_cross_refs(facts: dict, prose: dict[str, str], in_scope: list[dict],
                 if target is None:
                     continue
                 if target not in declared:
-                    c.add("4", f"{doc}:{lineno}",
-                          f"`{target}` §{num} — `docs[]` lists no doc `{target}`")
+                    line_cands.append(
+                        f"`{target}` §{num} — `docs[]` lists no doc `{target}`")
                     continue
                 if target not in sections:
                     continue        # the doc is declared but not on disk (check 9)
@@ -658,14 +788,30 @@ def check_cross_refs(facts: dict, prose: dict[str, str], in_scope: list[dict],
                 if elsewhere and prefix is None:
                     # The shape the protocol calls worse than dangling: it reads as
                     # valid and sends the executor to the wrong file.
-                    c.add("4", f"{doc}:{lineno}",
-                          f"§{num} is unqualified, so it reads as local to "
-                          f"`{target}`, where no such section exists — it resolves "
-                          f"in {', '.join('`%s`' % e for e in elsewhere)} instead")
+                    line_cands.append(
+                        f"§{num} is unqualified, so it reads as local to "
+                        f"`{target}`, where no such section exists — it resolves "
+                        f"in {', '.join('`%s`' % e for e in elsewhere)} instead")
                 else:
-                    c.add("4", f"{doc}:{lineno}",
-                          f"§{num} resolves to no heading in `{target}`"
-                          + (" (its own file)" if prefix is None else ""))
+                    line_cands.append(
+                        f"§{num} resolves to no heading in `{target}`"
+                        + (" (its own file)" if prefix is None else ""))
+
+            # One line, one candidate, once it is enumerating rather than pointing.
+            # The refs are still named — the reader needs them to judge the clause —
+            # but they arrive as one item to dismiss instead of eleven to read.
+            if len(line_cands) >= REF_ENUMERATION_MIN:
+                refs = ", ".join(f"§{m.group(1)}"
+                                 for m in SECTION_REF_RE.finditer(line)
+                                 if m.start() not in spanned)
+                c.add("4", f"{doc}:{lineno}",
+                      f"{len(line_cands)} unresolved section refs on one line "
+                      f"({refs}) — collapsed: a line naming this many is enumerating "
+                      "what changed inside a document, not pointing at it. Dismiss "
+                      "the clause or read the individual refs in place")
+            else:
+                for what in line_cands:
+                    c.add("4", f"{doc}:{lineno}", what)
 
 
 def check_contract_shape(facts: dict, prose: dict[str, str], c: Candidates) -> None:
@@ -747,6 +893,7 @@ def check_prose_orphans(facts: dict, prose: dict[str, str], c: Candidates) -> No
 
     for doc, text in prose.items():
         lines = text.splitlines()
+        file_fences: list[tuple[int, str]] = []
 
         for lineno, lang, body in iter_fences(text):
             if lang not in ("json", "http"):
@@ -775,10 +922,36 @@ def check_prose_orphans(facts: dict, prose: dict[str, str], c: Candidates) -> No
                 continue        # a bare array or scalar names no fields to compare
             if any(keys & names for names in keysets.values()):
                 continue
+            # The sentence that introduces the block says what it is. Only the
+            # nearest lines count: a `.json` path mentioned a paragraph earlier is
+            # about something else, and widening the window is how an exemption
+            # starts swallowing the findings it was meant to sit beside.
+            intro_lines = [l for l in lines[max(0, lineno - 7):lineno - 1]
+                           if l.strip()][-4:]
+            named = JSON_FILE_INTRO_RE.search(" ".join(intro_lines))
+            if named:
+                file_fences.append((lineno, f"`{named.group(0)}`"))
+                continue
+            if any(sig <= keys for sig in MANIFEST_SIGNATURE_KEYS):
+                file_fences.append((lineno, "an unnamed manifest"))
+                continue
+            if not JSON_DOCUMENT_START_RE.match(body):
+                file_fences.append((lineno, "a key fragment"))
+                continue
             shown = ", ".join(sorted(keys)[:6])
             c.add("8", f"{doc}:{lineno}",
                   f"```json fence whose keys share nothing with any `contracts.*` "
                   f"entry: {{{shown}}}")
+
+        # Collapsed, not dropped — the same rule as check 13's unqualified steps.
+        # The signal here is stronger (a named file is not a guess), but a reader
+        # who disagrees has to be able to see that the exemption fired at all.
+        if file_fences:
+            why = ", ".join(sorted({r for _, r in file_fences}))
+            c.add("8", doc,
+                  f"{len(file_fences)} ```json fence(s) read as file content rather "
+                  f"than interface material — {why} — so not listed individually "
+                  f"(lines {', '.join(str(n) for n, _ in file_fences)})")
 
         swept = blank_link_targets(blank_fences(text))
         for lineno, line in enumerate(swept.splitlines(), 1):

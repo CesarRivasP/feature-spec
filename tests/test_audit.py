@@ -364,6 +364,68 @@ CANDIDATE_CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] 
                                               #   instruction to go and get one
       ("13", "01-master-plan.md")]),          # scoped to doc 02, which is what
                                               #   stage-gates this check
+
+    # §3 again, at the level where a descriptive key stops being descriptive. The
+    # first fix attempted this by NAME and made the check worse — nine false
+    # positives became thirteen different ones, reported as `extra {description}`
+    # against documents that were right. Metadata sits at the entry, beside a
+    # payload container; one level down the same word is a field.
+    ("contract-meta",
+     [("3", "missing {created_at}"),          # a real gap inside `columns`, still seen
+      ("3", "missing {label}")],              # a flat entry IS the payload: no strip
+     [("3", "missing {fields, note}"),        # the real case: a perfect match reported
+                                              #   as a difference, because one scalar
+                                              #   sibling collapsed the entry
+      ("3", "auth"),                          # two descriptive siblings, not one
+      ("3", "extra {label}"),                 # a real column, not metadata — this is
+                                              #   the regression the by-name fix caused
+      ("3", "flat_id")]),                     # present, and never stripped
+
+    # §4 — one line, one candidate, once the line is enumerating rather than
+    # pointing. A single changelog row produced 11 of one real set's 21 candidates,
+    # and a two-line legend produced 4 that survived 48 review rounds untouched.
+    ("ref-enumeration",
+     [("4", "§4.4 resolves to no heading in `02`"),   # two refs on a line stay two:
+      ("4", "§4.5 resolves to no heading in `02`"),   #   two is pointing, not listing
+      ("4", "5 unresolved section refs on one line")],
+     [("4", "§7.3 resolves"),                 # named inside the collapsed candidate,
+                                              #   never as an item of its own
+      ("4", "§3.6"),                          # exempt shape (a), quoted as text
+      ("4", "§5 is unqualified"),             # the far end of `§1–§5`: one span, and
+      ("4", "§8 resolves")]),                 #   its far end is nobody's destination
+
+    # §13 — the word `dashboard` cannot carry this sub-rule alone: in the real
+    # corpus it was wrong four times out of five, matching a screen the app itself
+    # renders. A provider name beside it can. Unqualified hits collapse to one count
+    # per document — the reader is still told, and can still grep.
+    ("external-step",
+     [("13", "02-implementation.md:7"),       # Supabase Dashboard — a third party's
+      ("13", "02-implementation.md:8"),       #   console; Resend's signing secret
+      ("13", "consola de Anthropic"),
+      ("13", "4 step(s) name")],              # the collapsed count, with its lines
+     [("13", "02-implementation.md:13"),      # `**Dashboard:** mostrar totales` — a
+                                              #   screen, reported only inside the count
+      ("13", "02-implementation.md:16"),      # blocking DNS inside a network test
+      ("13", "02-implementation.md:19"),      # `[MANUAL]` — the label IS the answer
+      ("13", "02-implementation.md:20")]),    # `[OWNER EXTERNO]`, same
+
+    # §8 — doc 02 is paste-ready by design, so a set that creates a project ships
+    # its `package.json`, its `tsconfig.json` and its i18n bundles as fences. Every
+    # one is shaped like a payload and none is an interface anybody calls: 15 of 19
+    # real candidates, then 6 more once the filename rule alone was measured. The
+    # controls carry as much weight as the exemptions — a check that stops
+    # reporting the real orphan has been switched off, not sharpened.
+    ("config-fences",
+     [("8", "amount_cents"),                  # a real prose-orphan payload, still seen
+      ("8", "billing-notify"),                # a real orphan URL, still seen
+      ("8", "read as file content")],         # the collapsed count, with its lines
+     [("8", "config-fences"),                 # `package.json`, named two lines up
+      ("8", "compilerOptions"),               # a manifest the prose never names:
+                                              #   only its own keys identify it
+      ("8", "Pendiente"),                     # a continuation fence: a key fragment
+      ("8", "levels"),                        #   is not a payload to diff against
+      ("8", "02-implementation.md:12")]),     # the first fence, by line: exempted
+                                              #   inside the count, never on its own
 ]
 
 
