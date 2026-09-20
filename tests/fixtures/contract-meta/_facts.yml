@@ -1,0 +1,30 @@
+# Check 3, the level at which a descriptive key stops being descriptive.
+#
+# The motivating case: `fields:` + a `note:` sibling, against a prose fence
+# holding exactly those fields — a perfect match, reported as `missing {fields,
+# note}` because one scalar sibling made "every value is a container" false and
+# collapsed the entry into a single payload.
+#
+# `order_row` and `flat_entry` are the false positives that a name-only fix
+# introduces: `label` is metadata beside `fields:` and a real column here, and
+# an entry with no payload container IS the payload, so nothing in it may be
+# stripped at all.
+feature: contract-meta
+status: draft
+profile: ../_profile.fixture.yml
+defects: []
+acceptance: []
+contracts:
+  queue_job:
+    fields: [job_type, payload, dedupe_key]
+    note: 'the caller never sets an owner id — the worker derives it server-side'
+  job_result_hook:
+    fields: [job_id, result_url]
+    auth: 'HMAC in the X-Signature header'
+    note: 'the far side sends this, not us'
+  order_row:
+    columns: { id: uuid, label: text, created_at: timestamptz }
+    note: 'the row as the store returns it'
+  flat_entry: { flat_id: uuid, label: text }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

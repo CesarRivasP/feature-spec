@@ -1,0 +1,18 @@
+# Check 13's external-step sub-rule, and the word that cannot carry it alone.
+#
+# Measured over 25 real candidates: 19 fired on `dashboard` and only 5 of the 25
+# named a provider. The rest were in-app navigation, a deliberately FAKE secret in
+# a test, and blocking DNS inside a network test — every one of them a step the
+# builder can carry out without leaving the checkout.
+#
+# So a qualified hit stays a candidate with its line, and the unqualified ones
+# collapse into one count per document. Collapsed, never dropped: the reader is
+# still told they exist and can grep.
+feature: external-step
+status: implementing
+profile: ../_profile.fixture.yml
+defects: []
+acceptance: []
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation.md, role: implementation, stage: reviewed }

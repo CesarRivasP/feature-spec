@@ -1,0 +1,15 @@
+# Check 4, the two shapes that made one line worth eleven candidates.
+#
+# A changelog row names a document once and then enumerates what changed inside
+# it; a legend declares which document a RANGE of sections belongs to. Neither is
+# a set of navigation targets, and the protocol already names the first exempt.
+# Measured: `CHANGELOG.md:14` in one real set produced 11 of its 21 candidates,
+# and a two-line legend in another produced 4 that survived 48 review rounds.
+feature: ref-enumeration
+status: draft
+profile: ../_profile.fixture.yml
+defects: []
+acceptance: []
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation.md, role: implementation, stage: draft }
