@@ -113,6 +113,14 @@ It runs every check a program can run and prints the rest under `REQUIRES A HUMA
 
 Four of those checks — 3, 4, 8 and 13 — narrow the search before handing it over: the script prints a short list of **candidates** under the check they belong to. A candidate is not a finding and never appears in `## Findings`: it has no severity yet, and inventing one would make the verdict count things nobody has judged. Read the candidate list instead of re-reading the documents, and decide each one — the exception that legitimises it is usually a note the script cannot read. It never executes `evidence.cmd`: a registry is a data file that travels between repos and agents, and running commands out of one because it says they are safe is what an auditor must not do.
 
+An optional follow-up step reorders that candidate list:
+
+```bash
+python3 scripts/triage.py docs/features/<slug>/
+```
+
+It asks one bounded question per candidate — is this the real thing, or one of the exempt shapes the protocol names in prose — and sorts them into `keep`, `uncertain` and `suppressed`, so the ones worth a document read come first; suppressed candidates are still printed, because a list nobody is told to read is the failure the human pass exists to close. It writes no finding and assigns no severity. Ranking needs the `typesafe-sdk` package and an API key, and having neither is a supported state rather than an error: the run prints the same candidates unranked, which is a complete answer, since `audit.py` computed them offline before anything was sent anywhere. `--check-setup` reports what is installed and what is missing.
+
 ### Reading a set
 
 ```bash
@@ -230,6 +238,7 @@ references/
 scripts/
   audit.py                            the mechanized checks; shares its registry core with render.py
   render.py                           the renderer: spec set -> one self-contained view.html
+  triage.py                           optional: ranks audit.py's candidates so the real ones read first
 tests/                                one fixture per check, each reproducing the failure it exists for
 templates/                            _facts.yml.tpl, _log.md.tpl + one .tpl per doc
 profiles/                             _profile.yml.tpl + starters per stack
