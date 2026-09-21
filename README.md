@@ -240,6 +240,7 @@ scripts/
   render.py                           the renderer: spec set -> one self-contained view.html
   triage.py                           optional: ranks audit.py's candidates so the real ones read first
 tests/                                one fixture per check, each reproducing the failure it exists for
+                                      test_audit.py · test_render.py · test_triage.py
 templates/                            _facts.yml.tpl, _log.md.tpl + one .tpl per doc
 profiles/                             _profile.yml.tpl + starters per stack
 ```
