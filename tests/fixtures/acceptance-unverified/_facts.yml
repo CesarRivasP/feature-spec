@@ -19,5 +19,7 @@ acceptance:
   - { id: AC2, item: 'la corrida deja rastro durable', status: executed, verified_on: 2026-08-30 }
   - { id: AC3, item: 'el borrado respeta el batch cap', status: approved, verified_on: 2026-08-30 }
   - { id: AC4, item: 'sin estado — la forma vieja, un string suelto', status: approved }
+  - { id: AC5, item: 'la grilla abre con cuatro tiles', status: verified,
+      verified_on: 2026-09-23 }   # not a state: matched no branch and passed shipped
 docs:
   - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
