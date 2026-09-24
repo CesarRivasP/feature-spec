@@ -1,0 +1,11 @@
+# B4, the citing side. This set reads two of the research set's limits and owns
+# neither. Real case: `sports-multiview-grid` cites limits of the research set
+# that measured them; when the research corrected one, nothing told the grid.
+feature: multiview-grid
+status: draft
+profile: _profile.fixture.yml
+changes:
+  - { id: C1, file: docs/features/multiview-grid/01-master-plan.md, kind: planned,
+      change: 'dimensiona la grilla sobre la memoria medida por el research' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

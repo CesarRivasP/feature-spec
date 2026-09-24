@@ -1,0 +1,28 @@
+# B2 — `status: retired` retires a criterion without deleting it.
+#
+# Real case: to ship a research set, AC6, AC12 and AC13 had to leave `acceptance[]`
+# because nothing could satisfy them any more. The only way out was deleting them
+# from the registry and rewriting their mentions in docs 01 and 02 by hand, so they
+# would not dangle. A retired criterion stays: it does not block `shipped`, its
+# citations still resolve, and nobody has to cite it at all.
+#
+#   AC1 approved, dated         — the control
+#   AC2 retired, complete       — silent in 26, its citation resolves in 21
+#   AC3 retired, no `because`   — a retirement nobody can revisit: DRIFT
+#   AC4 retired, never cited    — history, not an orphan
+feature: acceptance-retired
+status: shipped
+profile: ../_profile.fixture.yml
+defects: []
+acceptance:
+  - { id: AC1, item: 'la grilla abre con cuatro tiles', status: approved,
+      verified_on: 2026-09-23 }
+  - { id: AC2, item: 'el brazo de control corre contra la explicacion rival',
+      status: retired, retired_on: 2026-09-23,
+      retired_because: 'el A/B quedo resuelto intra-app por diseno (brazo frio)' }
+  - { id: AC3, item: 'decidir cual purga y que ve el usuario', status: retired,
+      retired_on: 2026-09-23 }
+  - { id: AC4, item: 'compilar la palanca del cambio C4', status: retired,
+      retired_on: 2026-09-21, retired_because: 'C4 salio de alcance' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

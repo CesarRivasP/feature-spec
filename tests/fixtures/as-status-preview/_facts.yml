@@ -1,0 +1,25 @@
+# B1 — audit a set AS IF it were already at a later stage, without touching it.
+#
+# Real case: a research set about to be flipped to `shipped` was audited on a copy
+# made outside the repo, to see what the flip would surface. 54 findings came back,
+# most of them anchors reported "missing" only because the copy lived elsewhere.
+# Auditing in place, with the status overridden in memory, keeps every anchor
+# resolvable and shows only what the flip itself would cost.
+#
+# At its real `status: reviewed` this set is clean of the shipped-only gates. Under
+# `--as-status shipped`, G1 (D1 still asserted) and check 26 (AC1 never verified)
+# must fire — and check 16's Stage-line comparison must NOT, because the transition
+# has not happened and the log cannot record it yet.
+feature: as-status-preview
+status: reviewed
+profile: ../_profile.fixture.yml
+defects:
+  - { id: D1, role: root_cause, basis: asserted, status: open,
+      claim: 'el decoder se queda sin buffers al montar el cuarto tile',
+      falsified_by: 'cuatro tiles montados 20 min sin cma_alloc_fail',
+      log_line: 'DIAG-RNV tile=<n> dropped=<n>',
+      outcome: 'queda abierta: la mide el set hermano' }
+acceptance:
+  - { id: AC1, item: 'cuatro tiles sostienen 20 minutos', status: written }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

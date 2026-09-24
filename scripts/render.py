@@ -439,14 +439,18 @@ def accepted_state(entry: dict, today: datetime.date | None = None) -> tuple[str
     return "live", f"accepted by {acc['by']} until {until}"
 
 
-def status_gate(facts: dict, claims: list[dict]) -> list[str]:
-    """Gate G1 (references/evidence.md): `shipped` while a cause is asserted."""
+def status_gate(facts: dict, claims: list[dict],
+                today: datetime.date | None = None) -> list[str]:
+    """Gate G1 (references/evidence.md): `shipped` while a cause is asserted.
+
+    `today` is injectable so `audit.py --today` can ask what the gate will say on a
+    given date — an `accepted.until:` is only meaningful against one."""
     warnings = []
     if norm(facts.get("status")) == "shipped":
         for d in facts.get("defects") or []:
             if isinstance(d, dict) and norm(d.get("role")) in ("root_cause", "contributing") \
                     and norm(d.get("basis")) == "asserted" and norm(d.get("status")) != "dead":
-                state, detail = accepted_state(d)
+                state, detail = accepted_state(d, today)
                 if state == "live":
                     continue  # a deferral with a deadline, recorded and not yet due
                 suffix = {
@@ -461,7 +465,12 @@ def status_gate(facts: dict, claims: list[dict]) -> list[str]:
     for c in claims:
         if norm(c["basis"]) == "measured":
             ev = c["evidence"]
-            missing = [k for k in ("how", "cmd", "date", "value") if not ev.get(k)]
+            # Derived evidence was not run: it is read off the entries it names, so
+            # it has no `how:` and no `cmd:` of its own. Whether those entries hold up
+            # is audit.py's check 35, not a missing field here.
+            required = (("date", "value") if ev.get("derived_from")
+                        else ("how", "cmd", "date", "value"))
+            missing = [k for k in required if not ev.get(k)]
             if missing:
                 warnings.append(
                     f"`{c['path']}` is `measured` but evidence lacks: {', '.join(missing)}."

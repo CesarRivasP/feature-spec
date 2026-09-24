@@ -1,0 +1,29 @@
+# B3, across sets. A derived entry carries no `n:` of its own — it inherits its
+# sources' bar. So when another set cites it, check 30's cross-set tier has to look
+# THROUGH it: a derivation resting on one single, spread-less run is exactly as
+# single-run as that run, and the citing set sees none of it.
+feature: parent-tiles
+status: draft
+profile: _profile.fixture.yml
+limits:
+  one_run:
+    claim: 'degrada a partir de 2 tiles'
+    basis: measured
+    evidence: { how: device, cmd: 'procedimiento numerado', date: 2026-09-15,
+                value: 2, n: 1 }
+  six_runs:
+    claim: 'tolera hasta 308 frames caidos'
+    basis: measured
+    evidence: { how: device, cmd: 'procedimiento numerado', date: 2026-09-15,
+                value: 308, n: 6, spread: '41..308 frames' }
+  weak_verdict:
+    claim: 'la grilla aguanta dos tiles'
+    basis: measured
+    evidence: { derived_from: [limits.one_run, limits.six_runs], date: 2026-09-16,
+                value: 'dos tiles' }
+  strong_verdict:
+    claim: 'la grilla tolera la caida de frames'
+    basis: measured
+    evidence: { derived_from: [limits.six_runs], date: 2026-09-16, value: 'si' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

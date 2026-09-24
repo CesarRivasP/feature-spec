@@ -130,6 +130,22 @@ dates:
 #                 value: 3, n: 5, spread: "0..308 fallas",
 #                 conditions: { stream_bitrate_bps: 8200000, resolution: 1920x1080,
 #                               build: production-release-1.4.3 } }
+#
+# example of a conclusion READ OFF measurements already here (check 35) — no how,
+# no cmd, and no n/spread: it inherits its sources' bar. `measured` only while every
+# source is measured and not retracted:
+#   cpu_is_the_ceiling:
+#     basis: measured
+#     evidence: { derived_from: [limits.frames_single_url, limits.frames_multi_url],
+#                 date: 2026-09-23, value: '32,1 vs 50,3 fps with the same levers' }
+#
+# An entry that turned out WRONG is never deleted and never silently edited
+# (check 36). Written BESIDE the original, which stays:
+#   retracted_on: YYYY-MM-DD           # no longer holds
+#   retracted_by: limits.<replacement> #   or retracted_because: '<why>'
+#   corrected_on: YYYY-MM-DD           # holds, amended
+#   corrected_by: limits.<evidence>    #   optional
+#   correction: '<what changed, one sentence a citing set can quote>'
 
 # --- decisions taken about this feature ---
 # A decision is not a datum with a value to grep — it is a PREMISE that prose hangs
@@ -317,6 +333,10 @@ acceptance: []          # Definition-of-Done items (shared across docs).
                         #     status: written  - the criterion exists. Nothing was run.
                         #     status: executed - it was run. Record when, and what happened.
                         #     status: approved - it was run AND it passed.
+                        #     status: retired  - no longer reachable or relevant. Does not
+                        #                        block `shipped`; kept, never deleted, so
+                        #                        its citations still resolve. Requires
+                        #                        retired_on: YYYY-MM-DD + retired_because:
                         #   - { id: AC1, item: 'el cron deja rastro de cada corrida',
                         #       status: approved, verified_on: YYYY-MM-DD,
                         #       evidence: 'la corrida de las 06:00 quedó registrada' }

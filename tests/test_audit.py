@@ -269,6 +269,81 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
     ("sibling-app/apps/mobile",
      [("15", "apps/consumer")],
      [("15", "but this checkout is")]),
+
+    # check 26 — `status: retired`. AC6, AC12 and AC13 of a research set had to be
+    # DELETED to let it ship, and their mentions rewritten by hand so they would not
+    # dangle. Retired stays in the registry: it does not block `shipped`, its
+    # citation still resolves, and nobody is required to cite it.
+    ("acceptance-retired",
+     [("26", "AC3")],                    # retired with no `retired_because:`
+     [("26", "AC2"),                     # retired, complete — does not block shipped
+      ("21", "AC2"),                     # its citation still resolves
+      ("21", "AC4"),                     # never cited: history, not an orphan
+      ("26", "AC1")]),                   # the approved control
+
+    # check 35 — six defects went `measured` by naming limits inside `cmd:` as prose,
+    # and the audit then demanded `n`/`spread` that already lived in those limits.
+    ("derived-evidence",
+     [("35", "D2"),                      # one source is `asserted`
+      ("35", "D3"),                      # its source was retracted
+      ("35", "D4"),                      # names an id the registry does not define
+      ("35", "D5"), ("35", "D6"),        # circular
+      ("35", "D8")],                     # corrected source, never acknowledged
+     [("35", "D1"),                      # two measured sources: valid
+      ("1b/14", "D1"),                   # and no `how`/`cmd` demanded of it
+      ("30", "D1"),                      # nor an `n:` — it inherits its sources'
+      ("35", "D7"),                      # corrected source, acknowledged
+      ("36", "defects.D3"),              # a derived_from is check 35's, not 36's
+      ("21", "purge_frees_nothing")]),   # retracted and uncited: history, not orphan
+
+    # check 30 through check 35: a derived entry is as single-run as its weakest
+    # source, and a set citing it sees none of that unless the check looks through.
+    ("cross-set-derived/docs/features/child-rails",
+     [("30", "weak_verdict")],           # rests on `one_run`: n: 1, no spread
+     [("30", "strong_verdict")]),        # rests on n: 6 with its spread
+
+    # check 36 — retractions, first class. The owning set: a retracted entry cited
+    # as if it held is DRIFT; said in the same paragraph, or cited by the entry that
+    # replaced it, it is not. The format half needs no citation at all.
+    ("corrections/docs/features/tiles-research",
+     [("36", "01-master-plan.md:4"),     # cites the retracted entry, says nothing
+      ("36", "defects.D1"),              # same, from inside the registry
+      ("36", "`retracted_on:` with no"),
+      ("36", "`corrected_on:` with no"),
+      ("36", "audio_is_born_late")],     # superseded by an id that does not exist
+     [("36", "01-master-plan.md:6"),     # "fue retractada"
+      ("36", "01-master-plan.md:8"),     # names the replacement
+      ("36", "defects.D2"),              # "retractada el 2026-09-21"
+      ("36", "@limits.purge_frees_proportionally"),  # the replacement itself
+      ("36", "01-master-plan.md:11")]),  # corrected, not retracted: a candidate
+
+    # check 36, the citing side, and the real case: `sports-multiview-grid` cites
+    # limits of the research set that owns them, and nothing told it when one moved.
+    ("corrections/docs/features/multiview-grid",
+     [("36", "01-master-plan.md:4")],    # the owner retracted it
+     [("36", "01-master-plan.md:6"),     # corrected: a candidate, not a finding
+      ("36", "01-master-plan.md:8"),     # the replacement
+      ("21", "purge_frees_nothing")]),   # qualified cross-set ref, not dangling
+]
+
+# (fixture, extra args, expect, reject) — cases that only exist under a flag.
+FLAG_CASES: list[tuple[str, list[str], list[tuple[str, str]],
+                       list[tuple[str, str]]]] = [
+    # --as-status. A research set about to go `shipped` was previewed on a copy made
+    # outside the repo, and 54 findings came back — most of them anchors "missing"
+    # only because the copy was elsewhere. In place, in memory, nothing moves.
+    ("as-status-preview", [],
+     [],
+     [("1b/14", "G1"), ("26", "AC1")]),  # at its real `reviewed`: neither fires
+    ("as-status-preview", ["--as-status", "shipped"],
+     [("1b/14", "G1"),                   # D1 still asserted
+      ("26", "AC1")],                    # never verified
+     [("16", "Stage")]),                 # the log cannot record a flip not yet made
+
+    # --today moves G1's clock: the day after `until:` the risk is a finding again.
+    ("accepted-risk-due", ["--today", "2026-10-24"],
+     [("1b/14", "R1"), ("1b/14", "R3")],
+     [("1b/14", "R2")]),
 ]
 
 
@@ -279,6 +354,17 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
 # `reject` column is the one that matters: an over-reporting sweep costs the reader
 # more tokens than the check saves, which is the opposite of why it was mechanized.
 CANDIDATE_CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
+    # check 36 — a CORRECTED entry is usually fixed in place, so a citation written
+    # after the fix is right as it stands. Measured on two real sets: 2 of 9 such
+    # citations were stale, 7 cited the corrected version. The script cannot tell
+    # which side a line was written on, so it hands them over.
+    ("corrections/docs/features/tiles-research",
+     [("36", "same_url_is_easy")],
+     [("36", "purge_frees_nothing")]),   # retracted: a finding, never a candidate
+    ("corrections/docs/features/multiview-grid",
+     [("36", "same_url_is_easy")],
+     [("36", "purge_frees_proportionally")]),
+
     # §8 — the check the protocol says the mechanical audit is blind to, and the one
     # nobody runs by hand: catching it by eye means re-reading every document looking
     # for something defined by NOT being in the registry.
@@ -429,7 +515,7 @@ CANDIDATE_CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] 
 ]
 
 
-def run(fixture: str) -> list[dict]:
+def run(fixture: str, extra: list[str] | None = None) -> list[dict]:
     """Every fixture is a hermetic mini-repo.
 
     `--repo-root` is the fixture's own directory, so every path check 20 resolves,
@@ -446,14 +532,19 @@ def run(fixture: str) -> list[dict]:
     way to exercise a spec which does NOT sit at the root of its checkout — the
     normal shape in a real project, and the one check 15's `app:` half is about.
     """
+    return run_json(fixture, extra)["findings"]
+
+
+def run_json(fixture: str, extra: list[str] | None = None) -> dict:
     root = FIXTURES / fixture.split("/", 1)[0]
     spec = FIXTURES / fixture
     out = subprocess.run(
-        [sys.executable, str(AUDIT), str(spec), "--repo-root", str(root), "--json"],
+        [sys.executable, str(AUDIT), str(spec), "--repo-root", str(root), "--json",
+         *(extra or [])],
         capture_output=True, text=True)
     if out.returncode not in (0, 1):
         raise AssertionError(f"{fixture}: audit.py crashed\n{out.stderr}")
-    return json.loads(out.stdout)["findings"]
+    return json.loads(out.stdout)
 
 
 def run_candidates(fixture: str) -> dict[str, list[dict]]:
@@ -468,6 +559,10 @@ def run_candidates(fixture: str) -> dict[str, list[dict]]:
 
 
 def matches(findings: list[dict], check: str, text: str) -> bool:
+    """`@where` matches the location exactly — for an id that also appears inside
+    another finding's message, where a substring match cannot tell the two apart."""
+    if text.startswith("@"):
+        return any(check in f["check"] and f["where"] == text[1:] for f in findings)
     return any(check in f["check"] and (text in f["what"] or text in f["where"])
                for f in findings)
 
@@ -539,9 +634,49 @@ def human_pass_is_complete() -> list[str]:
             "it — it is neither run nor printed" for n in sorted(tagged - listed)]
 
 
+def accepted_risks_come_due() -> list[str]:
+    """Four risks of one research set were accepted together and all expire on
+    2026-10-23. Printed like a risk due next year, they read as handled until G1
+    refuses all four on the same morning. The ones inside the window are counted
+    apart — and a risk expiring TODAY is still live, not yet a finding."""
+    data = run_json("accepted-risk-due", ["--today", "2026-10-12"])
+    left = {r["id"]: r["days_left"] for r in data.get("accepted_risks", [])}
+    problems = []
+    if left != {"R1": 11, "R2": 80, "R3": 0}:
+        problems.append(f"accepted-risk-due: days_left per risk is {left}, expected "
+                        "R1 11, R2 80, R3 0 — R3 expires today and is still live")
+    out = subprocess.run(
+        [sys.executable, str(AUDIT), str(FIXTURES / "accepted-risk-due"),
+         "--repo-root", str(FIXTURES / "accepted-risk-due"), "--today", "2026-10-12"],
+        capture_output=True, text=True).stdout
+    due = out.split("## Accepted risks due within", 1)[-1].split("##", 1)[0]
+    if "defects.R1" not in due or "defects.R3" not in due or "defects.R2" in due:
+        problems.append("accepted-risk-due: the coming-due section must list R1 and R3 "
+                        "and not R2")
+    if "2 due within 14 days" not in out:
+        problems.append("accepted-risk-due: the verdict line does not count the 2 "
+                        "risks coming due")
+    return problems
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     failures, total = [], 0
+
+    total += 1
+    failures += accepted_risks_come_due()
+    for fixture, extra, expect, reject in FLAG_CASES:
+        findings = run(fixture, extra)
+        for check, text in expect:
+            total += 1
+            if not matches(findings, check, text):
+                failures.append(f"{fixture} {' '.join(extra)}: check {check} did NOT "
+                                f"report {text!r}")
+        for check, text in reject:
+            total += 1
+            if matches(findings, check, text):
+                failures.append(f"{fixture} {' '.join(extra)}: check {check} wrongly "
+                                f"reported {text!r}")
 
     total += 1
     failures += human_pass_is_complete()
@@ -586,7 +721,8 @@ def main() -> int:
                 print(f"      [{f['check']}] {f['where']}: {f['what'][:80]}")
 
     print(f"\n{total - len(failures)}/{total} assertions passed "
-          f"across {len(CASES) + len(CANDIDATE_CASES)} fixtures")
+          f"across {len({c[0] for c in CASES + CANDIDATE_CASES + FLAG_CASES})} "
+          "fixtures")
     for f in failures:
         print(f"  FAIL {f}")
     return 1 if failures else 0

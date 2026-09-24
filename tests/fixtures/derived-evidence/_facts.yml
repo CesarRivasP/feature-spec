@@ -1,0 +1,86 @@
+# B3 — `evidence.derived_from:` a conclusion read off measurements already in the
+# registry, instead of a run of its own.
+#
+# Real case: six defects of one research set went `measured` by naming limits inside
+# `cmd:` as prose — `cmd: limits.a + limits.b` — and the audit then asked each for
+# `n:` and `spread:` that already lived in those limits. The authors copied them:
+# two copies of one bar, which is the drift this skill exists to stop.
+#
+#   D1 derived from two measured limits, no how/cmd/n — valid, silent everywhere
+#   D2 one source is `asserted`                       — CONTRADICTION
+#   D3 its source was retracted                       — CONTRADICTION
+#   D4 names an id the registry does not define       — CONTRADICTION
+#   D5 / D6 derived from each other                   — circular, CONTRADICTION
+#   D7 its source was corrected and it says so        — silent
+#   D8 its source was corrected and it does not say   — DRIFT
+feature: derived-evidence
+status: reviewed
+profile: ../_profile.fixture.yml
+limits:
+  frames_single_url:
+    claim: '32,1 fps por tile con la misma url x4'
+    basis: measured
+    evidence: { how: device, cmd: 'procedimiento numerado del arnes', date: 2026-09-23,
+                value: '32,1 fps', n: 2, spread: '31,8..32,4 fps',
+                conditions: { build: release } }
+  frames_multi_url:
+    claim: '50,3 fps por tile con cuatro eventos distintos'
+    basis: measured
+    evidence: { how: device, cmd: 'procedimiento numerado del arnes', date: 2026-09-23,
+                value: '50,3 fps', n: 3, spread: '50,1..50,4 fps',
+                conditions: { build: release } }
+  reference_is_30fps:
+    claim: 'la app de referencia sirve 30 fps'
+    basis: asserted
+    falsified_by: 'un stream de la app de referencia a 60 fps'
+  purge_frees_nothing:
+    claim: 'la purga no libera CMA'
+    basis: measured
+    evidence: { how: device, cmd: 'sonda de purga', date: 2026-09-21, value: '4 kB',
+                n: 1, spread: 'una sonda de 24 s', conditions: { build: release } }
+    retracted_on: 2026-09-21
+    retracted_by: limits.purge_frees_proportionally
+  purge_frees_proportionally:
+    claim: 'la purga libera en proporcion a lo lleno de la cache; reemplaza a purge_frees_nothing, retractada'
+    basis: measured
+    evidence: { how: device, cmd: 'sonda de purga, cache caliente', date: 2026-09-21,
+                value: '+13,8 MB', n: 1, spread: 'una sonda', conditions: { build: release } }
+  same_url_is_the_easy_arm:
+    claim: 'la misma url x4 es la version facil'
+    basis: measured
+    evidence: { how: shell, cmd: 'rg -n "const source = " screens/harness/index.js',
+                date: 2026-09-21, value: '138: const source = {uri: url};' }
+    corrected_on: 2026-09-23
+    corrected_by: limits.frames_multi_url
+    correction: 'el signo estaba al reves: la misma url es la version DIFICIL'
+defects:
+  - { id: D1, role: root_cause, basis: measured, status: closed,
+      claim: 'el cuello es la CPU por frame, no la memoria',
+      evidence: { derived_from: [limits.frames_single_url, limits.frames_multi_url],
+                  date: 2026-09-23, value: '32,1 contra 50,3 fps con las mismas palancas' } }
+  - { id: D2, role: contributing, basis: measured, status: closed,
+      claim: 'a 30 fps entra y a 60 no',
+      evidence: { derived_from: [limits.frames_multi_url, limits.reference_is_30fps],
+                  date: 2026-09-23, value: 'entra a 30, no a 60' } }
+  - { id: D3, role: contributing, basis: measured, status: closed,
+      claim: 'la cache de imagenes no ocupa CMA',
+      evidence: { derived_from: [limits.purge_frees_nothing], date: 2026-09-21,
+                  value: 'sin escalon' } }
+  - { id: D4, role: contributing, basis: measured, status: closed,
+      claim: 'el decoder no se recicla',
+      evidence: { derived_from: [limits.decoder_is_never_recycled], date: 2026-09-23,
+                  value: 'cuatro instancias vivas' } }
+  - { id: D5, role: symptom, basis: measured, status: closed, claim: 'se ve el salto',
+      evidence: { derived_from: [defects.D6], date: 2026-09-23, value: 'si' } }
+  - { id: D6, role: symptom, basis: measured, status: closed, claim: 'hay flush',
+      evidence: { derived_from: [defects.D5], date: 2026-09-23, value: 'si' } }
+  - { id: D7, role: symptom, basis: measured, status: closed,
+      claim: 'el arnes da cotas pesimistas, tras la correccion del signo',
+      evidence: { derived_from: [limits.same_url_is_the_easy_arm], date: 2026-09-23,
+                  value: 'cotas pesimistas' } }
+  - { id: D8, role: symptom, basis: measured, status: closed,
+      claim: 'el arnes da cotas optimistas',
+      evidence: { derived_from: [limits.same_url_is_the_easy_arm], date: 2026-09-23,
+                  value: 'cotas optimistas' } }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

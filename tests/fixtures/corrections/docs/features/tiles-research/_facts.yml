@@ -1,0 +1,58 @@
+# B4 — retractions and corrections, first class. The OWNING set.
+#
+# `retracted_on` / `retracted_by` and `corrected_on` / `corrected_by` / `correction`
+# were in use by hand and nothing read them: an entry could be retracted in its own
+# registry while every sentence resting on it went on quoting it as if it held.
+#
+#   purge_frees_nothing     retracted, replaced by purge_frees_proportionally
+#   same_url_is_easy        corrected, `correction:` says what changed
+#   bare_retraction         `retracted_on:` alone — nobody can tell what happened
+#   bare_correction         `corrected_on:` alone — same
+#   dangling_retraction     `retracted_by:` names an entry that does not exist
+feature: tiles-research
+status: reviewed
+profile: _profile.fixture.yml
+limits:
+  purge_frees_nothing:
+    claim: 'la purga no libera CMA'
+    basis: asserted
+    falsified_by: 'una purga con la cache caliente que libere memoria'
+    retracted_on: 2026-09-21
+    retracted_by: limits.purge_frees_proportionally
+  purge_frees_proportionally:
+    claim: 'la purga libera en proporcion a lo lleno; RETRACTA limits.purge_frees_nothing'
+    basis: asserted
+    falsified_by: 'una purga con la cache caliente que no libere nada'
+  same_url_is_easy:
+    claim: 'la misma url x4 es la version facil del problema'
+    basis: asserted
+    falsified_by: 'el brazo de cuatro urls distintas rindiendo peor que el de una'
+    corrected_on: 2026-09-23
+    correction: 'el signo estaba al reves: la misma url es la version DIFICIL'
+  bare_retraction:
+    claim: 'el decoder se recicla al desmontar'
+    basis: asserted
+    falsified_by: 'un dumpsys con la instancia viva tras desmontar'
+    retracted_on: 2026-09-20
+  bare_correction:
+    claim: 'el soak dura 30 min'
+    basis: asserted
+    falsified_by: 'un soak medido de otra duracion'
+    corrected_on: 2026-09-20
+  dangling_retraction:
+    claim: 'el audio nace con el tile'
+    basis: asserted
+    falsified_by: 'un tile montado sin pista de audio a los 20 s'
+    retracted_on: 2026-09-22
+    retracted_by: limits.audio_is_born_late
+defects:
+  - { id: D1, role: symptom, basis: asserted, status: open, log_line: null,
+      claim: 'la cache no pesa',
+      falsified_by: 'una purga que libere',
+      note: 'se apoya en limits.purge_frees_nothing' }
+  - { id: D2, role: symptom, basis: asserted, status: open, log_line: null,
+      claim: 'la cache pesa poco',
+      falsified_by: 'una purga que libere mucho',
+      note: 'antes se apoyaba en limits.purge_frees_nothing, retractada el 2026-09-21' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
