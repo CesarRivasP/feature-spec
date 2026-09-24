@@ -57,7 +57,13 @@ ORPHAN_EXEMPT = ("decisions",)
 EXECUTABLE_HOW = {"shell", "git", "sql", "psql", "bash", "curl", "rg"}
 TEXT_FIELDS = ("claim", "note", "because", "name", "change", "reopens_when",
                "note_ownership", "falsified_by", "what")
-ANCHOR_RE = re.compile(r"(?<![\w/.])([A-Za-z0-9_./-]+\.[A-Za-z0-9]{1,6}):(\d+)\b")
+# A path segment may be a route group — `app/(tabs)/index.tsx` in Expo Router and
+# Next.js — but only as a balanced `(name)` followed by `/`. A bare `(` is prose:
+# `(screens/VideoPlayer/Layout.js:171)` is a parenthesised anchor, and letting the
+# paren into the path reported 29 anchors missing across two real sets. `@` covers
+# scoped packages: without it `node_modules/@d11/pkg/X.java:75` was read from `d11/`.
+ANCHOR_RE = re.compile(
+    r"(?<![\w/.])((?:[A-Za-z0-9_./@-]|\([\w.-]+\)(?=/))+\.[A-Za-z0-9]{1,6}):(\d+)\b")
 PROSE_CMD_STARTERS = re.compile(
     r"^\s*(ver|vease|véase|see|check|revisar|consultar|mismo|idem|igual)\b", re.I)
 
