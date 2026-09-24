@@ -225,7 +225,7 @@ Contract and invariants: `references/render.md`.
 ## References
 - `references/doc-pattern.md` — the 3-doc pattern, section skeletons, naming, cross-ref rules.
 - `references/audit-protocol.md` — the exact mechanical checks + severity taxonomy + matrix format.
-- `references/gap-sweep.md` — the `review` mode checklist: does this spec add functional/security gaps? Stack layers alongside it: `gap-sweep-web-baas.md`, `gap-sweep-android-native.md`, `gap-sweep-mobile-tv.md`.
+- `references/gap-sweep.md` — the `review` mode checklist: does this spec add functional/security gaps? Stack layers alongside it: `gap-sweep-web-baas.md`, `gap-sweep-android-native.md`, `gap-sweep-mobile-tv.md`, `gap-sweep-payments-onprem.md`, `gap-sweep-web-3d-client.md`.
 - `references/intake.md` — the questions to ask before writing anything, batched, with what may never be guessed.
 - `references/handoff.md` — the append-only `_log.md`, for sets passed between agents: entry format, dispositions, and why the log beats the context window.
 - `references/evidence.md` — the `basis:` / `evidence:` contract, the `verify` mode, and the gates that keep an asserted root cause from shipping.

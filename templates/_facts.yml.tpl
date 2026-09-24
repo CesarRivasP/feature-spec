@@ -180,6 +180,25 @@ decisions: {}           # e.g. { scope_trimmed: { date: YYYY-MM-DD, basis: decid
 # --- domain facts (fill with the real shared numbers/names) ---
 limits: {}              # e.g. { cloudflare: { timeout_s: 100, error: 524 } }
 
+entorno: {}             # OPTIONAL. Facts about the environment this feature must run
+                        # INSIDE and does not control: OS versions of the target
+                        # machines, the third-party ERP's version, the state of an
+                        # account the client is still opening, the manual process
+                        # being replaced. Leave `{}` when the target is infrastructure
+                        # you own — then this belongs in the profile, not here.
+                        #
+                        #   These are claims about the world, so each entry declares
+                        #   `basis:` like anything else, and an entry sourced from what
+                        #   a client SAID in a meeting is `asserted`, never `measured` —
+                        #   `falsified_by:` names the command that would settle it.
+                        #   e.g. { so_estaciones: { valor: 'Windows 11', basis: asserted,
+                        #          falsified_by: '`winver` on each machine' } }
+                        #
+                        #   Kept separate from `limits:` on purpose: a limit is a number
+                        #   the feature must respect, an environment fact is a condition
+                        #   that can turn out false and invalidate a decision. When one
+                        #   does, it is `alternatives[] falsified_by` that fires.
+
 # Scope is TWO disjoint lists — do not mix them:
 changes: []             # components CREATED or MODIFIED by this feature (bots, edge functions, modules).
                         #   ONLY these participate in scope-parity (audit check 7).

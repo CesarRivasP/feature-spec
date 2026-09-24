@@ -17,6 +17,8 @@ For each entry in `changes[]`, classify it by kind (below) and answer that kind'
 | `web-baas` | `gap-sweep-web-baas.md` | webhook receivers, RLS, SQL migrations, edge functions |
 | `android-native` | `gap-sweep-android-native.md` | exported components, intents, permissions, background limits, R8, Room |
 | `mobile-tv` | `gap-sweep-mobile-tv.md` | D-pad focus, remote input, low-end device memory |
+| `payments-onprem` | `gap-sweep-payments-onprem.md` | payment middleware writing into a third-party ERP on a machine at the client's site |
+| `web-3d-client` | `gap-sweep-web-3d-client.md` | client-side WebGL / Three.js / react-three-fiber |
 
 No layer for this stack yet? Run the base sweep and say so in the output — a missing layer is a known blind spot, not a clean result. Writing one is ~40 lines and is the highest-leverage thing a new repo adds to this skill.
 

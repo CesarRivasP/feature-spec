@@ -232,6 +232,8 @@ references/
   gap-sweep-android-native.md         layer: manifest, intents, permissions, Doze, R8, Room
   gap-sweep-web-baas.md               layer: webhooks, RLS, edge functions
   gap-sweep-mobile-tv.md              layer: D-pad focus, low-end memory, playback lifecycle
+  gap-sweep-payments-onprem.md        layer: payment middleware over a third-party ERP, on-prem
+  gap-sweep-web-3d-client.md          layer: client-side WebGL / Three.js / react-three-fiber
   doc-pattern.md                      the 3-doc pattern, splitting, heading language
   implementable.md                    how to write doc 02 for a context-free executor
   render.md                           what the HTML view reads, its invariants, the gates it surfaces
