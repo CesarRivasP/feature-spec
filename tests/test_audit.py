@@ -30,6 +30,15 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("18", "chat.ts:341"), ("18", "bare anchor")],
      []),
 
+    # §1.1 — three anchor shapes from real sets: a route group, a scoped package,
+    # and an anchor in parentheses, which the fix for the first one broke.
+    ("anchor-shapes",
+     [("18", "app/(tabs)/index.tsx:99` is past end")],   # resolved THROUGH the group
+     [("18", "bare anchor"),                  # stopped at the paren: `index.tsx`
+      ("18", "d11/pkg/Mod.java:1` — file"),   # read from `d11/`, missing
+      ("18", "(src/real.ts"),                 # the prose paren swallowed
+      ("18", ":2` — file missing")]),
+
     # §1.2 — `alternatives:` deleted by hand, A1-A4 reparented under `defects:`.
     ("reparented-keys",
      [("21", "lives under `defects:`"),          # A1 survived, its category did not

@@ -1,0 +1,13 @@
+# Check 18, three anchor shapes found in real sets:
+#   `mobile/app/(tabs)/index.tsx:20` — an Expo Router route group. The regex stopped
+#     at the paren and reported a bare `index.tsx` anchor.
+#   `node_modules/@d11/react-native-fast-image/.../X.java:75` — a scoped package. With
+#     no `@` in the path class it was read from `d11/` and reported missing.
+#   `(screens/VideoPlayer/Layout.js:171)` — an anchor in parentheses. Letting `(`
+#     into the path class to fix the first case swallowed this paren and reported
+#     29 anchors missing across two real sets.
+feature: anchor-shapes
+status: draft
+profile: ../_profile.fixture.yml
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
