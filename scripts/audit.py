@@ -1115,6 +1115,10 @@ def check_changes_vocabulary(facts: dict, f: Findings) -> None:
                       "23 changes[] lifecycle")
 
 
+# `""` is a plain-string criterion, which reads as `written`.
+ACCEPTANCE_STATUSES = {"", "written", "executed", "approved", "retired"}
+
+
 def normalize_acceptance(facts: dict) -> list[dict]:
     """A plain string is still a valid criterion and reads as `status: written`,
     so sets written before the field existed keep auditing."""
@@ -1160,7 +1164,25 @@ def check_acceptance_state(facts: dict, status_rank: int, f: Findings) -> None:
                   "somebody gave up on",
                   "26 acceptance state")
     items = [e for e in items if e["status"] != "retired"]
-    if status_rank < STATUS_RANK["shipped"]:
+
+    # An unknown value used to match no branch below and pass `shipped` in silence —
+    # the fail-open gate the enum rule exists to stop. Real case: a shipped research
+    # set carried `status: verified` on four criteria; the word reads like
+    # `approved` and meant nothing to the audit. Not guessed into either: reported,
+    # at every stage, and as a CONTRADICTION once the set claims `shipped`, because
+    # then the contract cannot say whether the criterion was met.
+    shipped = status_rank >= STATUS_RANK["shipped"]
+    unknown = [e for e in items if e["status"] not in ACCEPTANCE_STATUSES]
+    for e in unknown:
+        f.add(CONTRADICTION if shipped else DRIFT, f"acceptance.{e['id']}",
+              f"`status: {e['status']}` is not a criterion state"
+              + (" — the set is `shipped` and this one reads as neither verified "
+                 "nor retired" if shipped else ""),
+              "use written | executed | approved | retired; if it ran and passed, "
+              "`approved` with `verified_on:`",
+              "26 acceptance state")
+    items = [e for e in items if e not in unknown]
+    if not shipped:
         return
     if not items:
         return
@@ -1192,7 +1214,8 @@ def check_acceptance_state(facts: dict, status_rank: int, f: Findings) -> None:
                   f" (status {e['status'] or 'absent'}){detail}",
                   "run it and record `status: executed|approved` with its date — or, "
                   "if a trimmed scope made it unreachable, rewrite it against the "
-                  "substitute mechanism or delete it and write down the accepted risk",
+                  "substitute mechanism or retire it (`status: retired` + "
+                  "`retired_on:` + `retired_because:`)",
                   "26 acceptance state")
         elif e["status"] == "executed":
             f.add(DRIFT, label,

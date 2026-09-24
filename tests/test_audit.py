@@ -127,7 +127,8 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
     ("acceptance-unverified",
      [("26", "AC1"),          # never verified
       ("26", "AC2"),          # executed, never approved
-      ("26", "AC4")],         # approved with no date
+      ("26", "AC4"),          # approved with no date
+      ("26", "`status: verified` is not")],  # unknown value: used to pass silently
      [("26", "AC3")]),        # approved, dated
 
     # §4.3 — the open question its dead dependency already answered.
