@@ -67,6 +67,27 @@ Checks **5**, **6** and **13** read docs 02/03 and are the ones this gating swit
 Every other check runs at every stage: they read the registry and doc 01, which exist
 from the first minute.
 
+### Previewing a stage before flipping it — `--as-status <stage>`
+
+`python3 scripts/audit.py docs/features/<slug>/ --as-status shipped` audits the set as if
+`status:` already read `shipped`: every gate that keys on the status (G1, checks 10, 14,
+20, 26, 28, and the stage scope above) runs at that rank. The override lives in memory
+and the file is not touched; the header says `audited AS`, so the output cannot be
+mistaken for the real state. Check 16's `Stage:` comparison is the one thing skipped —
+the transition has not happened, and reporting that the log does not record it would be
+a finding the preview itself manufactured.
+
+*Real case:* a research set about to be flipped to `shipped` was audited on a copy made
+outside the repo to see what the flip would cost. **54** findings came back, most of them
+anchors reported missing only because the copy lived elsewhere — noise that had to be
+told apart from the nine asserted defects, three open questions and twelve unverified
+criteria that were real. In place, every anchor still resolves and only the flip's own
+cost shows.
+
+`--today YYYY-MM-DD` does the same for the calendar: it is the date `accepted.until:` is
+measured against, so `--today` the day after an expiry shows the G1 refusal that is
+coming, before it comes.
+
 ## Checks
 
 ### 1. Data-vs-registry (highest priority) — [human]
@@ -117,7 +138,7 @@ Each master-plan (doc 01) checklist item has a counterpart in doc 02 (implementa
 - **When neither 02 nor 03 is in scope yet, this check does not go quiet — it inverts.** Emit every doc 01 checklist item under `pending downstream coverage`, as a list, not a finding. That list is the input `implement` must cover; without it the items are simply unread until someone rediscovers them, which is how a checklist item becomes a shipped gap. Not covering one later IS the `DRIFT`.
 
 ### 6. Acceptance parity — [human] *stage-gated (needs 02)*
-Doc 02 "Definition of Done" (or, if 02 is split, whichever half holds it) == `_facts.yml acceptance[]` item-for-item. Divergence → `CONTRADICTION`.
+Doc 02 "Definition of Done" (or, if 02 is split, whichever half holds it) == `_facts.yml acceptance[]` item-for-item, criteria with `status: retired` left out. Divergence → `CONTRADICTION`.
 - Before 02 exists, `acceptance[]` has no copy to diverge from and there is nothing to compare. It is still authored, still audited by every registry-level check, and still the contract — it is the *parity* that waits, not the criteria.
 
 ### 7. Scope parity — [human]
@@ -185,6 +206,11 @@ Contract in `references/evidence.md`. These are the checks a clean consistency p
 - `alternatives[]` entry with `outcome: discarded`, `basis: asserted`, and a `depends_on` id whose `status: dead` → `CONTRADICTION`. It was discarded on a premise that no longer holds; `verify` should have reopened it.
 - A `because:` / discard rationale that paraphrases another registry entry but omits `depends_on:` → `DRIFT`. The dependency exists whether or not it is written down; unwritten, the cascade cannot run.
 
+### 14b. Accepted risks coming due — [script]
+Part of check 14's G1. A live `accepted:` block is listed under *Accepted risks, with their expiry*; one whose `until:` falls within the next **14 days** is listed again, apart, under *Accepted risks due within 14 days*, and the verdict line counts them (`4 accepted risk(s) with a due date, 4 due within 14 days`). Still not a finding — a risk expiring today is still live — but the list someone has to act on this week is no longer the same list as the one due next year.
+
+*Real case:* four risks of one research set were accepted together and all expire on 2026-10-23. Printed identically to any other live deferral, they read as handled until the morning G1 refuses all four at once.
+
 ### 15. Profile coverage — [script + human]
 - No `_profile.yml` resolvable for this repo → `DRIFT`. Every `cmd` in the set was then invented per feature, and check 1b has nothing to compare against.
 - `_profile.yml gap_sweep_layers:` empty while the repo's stack has a shipped layer (`references/gap-sweep-*.md`) → `DRIFT`: `review` ran the base sweep only and its "clean" is scoped narrower than it reads.
@@ -241,6 +267,7 @@ A path that resolves **outside** the repo root is a fourth outcome and not one o
 Check 1 covers "datum in ≥2 docs but not in the registry". Both inverses were missing.
 
 - **Registry entry no prose doc mentions, by id or by value → `DRIFT`.** Measured, correct, and dead: nobody reads it because no doc names it. Real case: 4 in one set, **7** in a sibling that had never been through a mechanical audit. Citation *by value* counts — nobody writes `limits.cloudflare` inline, they write `100` and `524`.
+  - **Exempt: an entry kept as history** — `retracted_on:` (check 36) or an `acceptance[]` criterion with `status: retired` (check 26). They stay in the registry precisely so they are not re-derived and so old citations keep resolving; demanding that some doc still cite them would push authors back to deleting them.
 - **Prose citing an id the registry does not define → `DRIFT`.**
 - **Prose citing `container.id` where that id lives under a *different* container → `CONTRADICTION`.** This is check 19's failure seen from the other side, and it is the one that catches a reparenting after the fact: the entry survived, its category did not.
 - **Prose citing a container the registry does not have at all → `CONTRADICTION`.**
@@ -275,10 +302,12 @@ An entry whose `claim`/`note`/`because` names another registry id in prose but d
 Real case, and the twin of check 14's `alternatives[]` gate: `F2` (open) carried the note *"Lo NO MEDIDO —y lo que decide si esto importa— es qué se sirve después: **ver `F3`**"*. A later round measured `F3` and left it `dead` — a clean round, with evidence. **Nobody went back to `F2`.** Its open question already had an answer, its note still said "lo NO MEDIDO" about something measured hours earlier, and the set was marked `shipped` and passed the audit **clean**. `F2` named `F3` in prose and not in a field, so no tool could follow that arrow.
 
 ### 26. Acceptance state — [script]
-Every `acceptance[]` criterion carries `status: written | executed | approved`. A plain string is still valid and reads as `written`, so older sets keep auditing — but a set cannot reach `shipped` on strings alone.
+Every `acceptance[]` criterion carries `status: written | executed | approved | retired`. A plain string is still valid and reads as `written`, so older sets keep auditing — but a set cannot reach `shipped` on strings alone.
 - `status: shipped` with a criterion `written` or with no status → `CONTRADICTION`.
 - `shipped` with a criterion `executed` but not `approved` → `DRIFT`. Someone ran it; nobody signed it off.
 - `approved` with no `verified_on:` → `DRIFT`. An approval with no date cannot be checked for staleness.
+- **`retired` does not block `shipped`.** It is the way out for a criterion that stopped being reachable or relevant — a trimmed scope, a question answered by design — without deleting it. It needs `retired_on:` and `retired_because:`; missing either → `DRIFT`, **at every stage**, because a retirement is a decision and one with no date and no reason cannot be revisited. Citations of a retired criterion still resolve (check 21) and are not a finding: saying "AC6 was retired" is exactly what a doc should be able to do. Check 6's parity leaves retired criteria out of the Definition of Done.
+  *Real case:* to ship a research set, AC6, AC12 and AC13 had to leave `acceptance[]`. The only mechanism was deleting them from the registry and rewriting their mentions in docs 01 and 02 by hand, so check 21 would not report them dangling — history destroyed to satisfy a gate.
 - **A set where NO criterion carries a status collapses to one finding, not N.** It predates the field, and reporting each of fifteen identical misses buries the other contradictions in the same set — the wall this file's §Stage gating exists to prevent, one level down. A set where *some* criteria carry a status and others do not is the opposite case and is reported per criterion: somebody adopted the field and skipped items, and each skipped one is a specific criterion nobody verified.
 
 Two real cases, and the second is why this is a check and not a paragraph.
@@ -360,10 +389,42 @@ Check 27 cascades from a `defects[]`/`alternatives[]` entry's `depends_on` targe
 
 *Real case:* a `changes[]` entry kept pointing at a directory a later decision had retired. Nothing in the registry connected the two — the decision's `what:` was simply edited — so the stale entry rode through `implement` unchallenged.
 
+### 35. Derived evidence — [script]
+Contract in `references/evidence.md` §Derived evidence. `evidence: { derived_from: [limits.x, limits.y], date, value }` is a conclusion read off measurements already in the registry, not a run of its own. It needs no `how:` or `cmd:`, and it inherits its sources' `n:`, `spread:` and `conditions:` instead of repeating them — checks 30 and 31 skip it locally, and check 30's cross-set tier looks through it to the runs it rests on.
+
+It counts as `measured` only while every source does:
+- **A source that does not exist, or is not written `<container>.<id>` → `CONTRADICTION`.**
+- **A source that is `asserted`, `decided`, or has no `basis:` → `CONTRADICTION`.** The derived value claims a certainty its inputs do not have — the same severity as a `measured` whose `cmd` cannot be re-run (check 24).
+- **A source that is retracted (check 36) → `CONTRADICTION`.**
+- **A `derived_from` chain that leads back to itself → `CONTRADICTION`.** At least one link has to be a run somebody performed.
+- **A source that is corrected, and the entry does not mention the correction → `DRIFT`.**
+
+*Real case:* six defects of one research set went `measured` by naming the limits that answered them inside `cmd:`, as prose (`cmd: limits.a + limits.b`). Check 30 then asked each of them for the `n:` and `spread:` that already lived in those limits, and the authors copied them — two copies of one bar, and the second one never updated when the first was.
+
+### 36. Retractions and corrections — [script + human]
+Two shapes that were already in use by hand, and that nothing read:
+
+```yaml
+retracted_on: 2026-09-21          # the entry no longer holds. Kept, never deleted —
+retracted_by: limits.<replacement> #   a deleted entry gets re-derived. Or, with no
+                                   #   replacement: retracted_because: '<why>'
+corrected_on: 2026-09-23          # the entry holds, amended — usually in place
+corrected_by: limits.<evidence>   # optional: what forced the correction
+correction: '<what changed, one sentence a citing set can quote>'
+```
+
+- **Format.** `retracted_on:` with neither `retracted_by:` nor `retracted_because:` → `DRIFT`. `corrected_on:` with no `correction:` → `DRIFT`. A `retracted_by:` / `corrected_by:` naming an id this registry does not define → `DRIFT`.
+- **[script] A citation of a RETRACTED entry that does not mention it → `DRIFT`.** Read in this set's docs and registry (`container.id`), and in another set's entries cited the qualified way (`` `docs/features/<slug>/_facts.yml` container.id ``, loaded exactly as check 30 does). *Mentions* means the citing paragraph — a table row counts as its own paragraph — or the citing registry entry names the replacement or says the word (`retract…`, `correg…`, `supersed…`, `reemplaz…`). The retracted entry itself and the one that replaced it are exempt; `_log.md` is history and is not read; a `derived_from:` is check 35's.
+- **[human] A citation of a CORRECTED entry that does not mention it → candidate.** A corrected entry is usually fixed in place: a sentence written *after* the fix cites the right thing and has no reason to mention the history, and nothing in a markdown line says when it was written. Read each candidate against `correction:`.
+
+The citing set learns about the owner's correction the next time the **citing set** is audited — the audit does not sweep every other set in the repo for citations of the one being audited. That direction has no bound and no owner; this one runs whenever the citing set is touched, which is when its prose is about to be relied on.
+
+*Real case:* `sports-multiview-grid` cites limits of the research set that measured them. When the research corrected one — the sign of a comparison was backwards — nothing told the grid. The candidate/finding split is measured, not assumed: on the two real sets holding such citations, the two in the research set were notes written before the correction and framed exactly the way it inverted; the seven in the other set cited an entry rewritten and renamed in place, one of them in a paragraph that says outright that the first reading was wrong.
+
 
 ## Enum fields are read lowercased — always
 
-Every enum-valued field in the registry (`status`, `basis`, `role`, `kind`, `where`, `outcome`, `stage`, `evidence.how`, `acceptance[].status`) is compared against lowercase literals throughout this file. **Normalize before comparing, or the check fails open.**
+Every enum-valued field in the registry (`status`, `basis`, `role`, `kind`, `where`, `outcome`, `stage`, `evidence.how`, `acceptance[].status`, including `retired`) is compared against lowercase literals throughout this file. **Normalize before comparing, or the check fails open.**
 
 This is not cosmetic. `status: Shipped` ranked as unknown, which ranks as `draft` — so a shipped set audited as a draft: G1 clean, checks 5, 6, 13 and 26 all skipped, with a root cause still `basis: asserted`. `role: Root_Cause` blinded G1 on its own. `kind: Deferred` never had its `reopens_when:` demanded. **A gate that fails open is worse than no gate**, because its silence reads as a pass.
 

@@ -1,0 +1,34 @@
+# B5 — accepted risks coming due, listed apart from the rest.
+#
+# Real case: four risks of one research set were accepted together and all expire on
+# 2026-10-23. Listed the same way as a risk due next year, they read as "handled"
+# until the morning G1 refuses all four at once. Run with `--today 2026-10-12`:
+#   R1 until 2026-10-23 — 11 days left: listed as coming due
+#   R2 until 2026-12-31 — still listed as accepted, not as coming due
+#   R3 until 2026-10-12 — expires today: coming due, 0 days, not yet a finding
+feature: accepted-risk-due
+status: shipped
+profile: ../_profile.fixture.yml
+acceptance:
+  - { id: AC1, item: 'la grilla abre', status: approved, verified_on: 2026-09-23 }
+defects:
+  - { id: R1, role: contributing, basis: asserted, status: open,
+      claim: 'el low-latency del live no cambia el techo',
+      falsified_by: 'la app de referencia sin low-latency sosteniendo 4 tiles',
+      log_line: null, outcome: 'queda abierta como riesgo aceptado',
+      accepted: { by: 'Cesar Rivas', decided_on: 2026-09-23, until: 2026-10-23,
+                  because: 'medirla ya no cambia ninguna decision' } }
+  - { id: R2, role: contributing, basis: asserted, status: open,
+      claim: 'la libreria no aporta al techo',
+      falsified_by: 'un brazo fuera de react-native-video',
+      log_line: null, outcome: 'queda abierta como riesgo aceptado',
+      accepted: { by: 'Cesar Rivas', decided_on: 2026-09-23, until: 2026-12-31,
+                  because: 'el veredicto se alcanzo sin salir de la libreria' } }
+  - { id: R3, role: root_cause, basis: asserted, status: open,
+      claim: 'el costo va por frame',
+      falsified_by: 'la medicion pareada sobre un evento de 60 fps',
+      log_line: null, outcome: 'queda abierta como riesgo aceptado',
+      accepted: { by: 'Cesar Rivas', decided_on: 2026-09-23, until: 2026-10-12,
+                  because: 'no cambia la decision de producto' } }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

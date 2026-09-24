@@ -12,6 +12,7 @@ So: this script runs every check a program can run, and prints the ones it canno
 script FIRST, then the judgment pass over what it lists — in that order.
 
     python3 scripts/audit.py docs/features/<slug>/ [--repo-root DIR] [--json]
+                             [--as-status STAGE] [--today YYYY-MM-DD]
 
 It never executes `evidence.cmd` (protocol check 1b). A registry is a data file that
 travels between repos and agents; running commands out of it because it claims they
@@ -24,6 +25,7 @@ implemented twice is the exact defect this skill exists to prevent.
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -973,11 +975,12 @@ def check_prose_orphans(facts: dict, prose: dict[str, str], c: Candidates) -> No
                       f"URL/endpoint shape in prose with no `endpoints.*` home: {url}")
 
 
-def check_basis_gates(facts: dict, f: Findings) -> None:
+def check_basis_gates(facts: dict, f: Findings,
+                      today: datetime.date | None = None) -> None:
     """Check 1b + check 14. The first half is render.py's status_gate (shared, so the
     two tools cannot disagree); the four gates and the shipped/open detector are here."""
     claims = collect_claims(facts)
-    for w in status_gate(facts, claims):
+    for w in status_gate(facts, claims, today):
         sev = CONTRADICTION if w.startswith("G1:") else DRIFT
         w = re.sub(r"`([^`]+)`",
                    lambda m: "`%s`" % pretty_path(facts, m.group(1)), w, count=1)
@@ -1115,9 +1118,12 @@ def normalize_acceptance(facts: dict) -> list[dict]:
             out.append({"id": str(e.get("id") or f"[{i}]"),
                         "item": str(e.get("item") or e.get("claim") or ""),
                         "status": norm(e.get("status")),
-                        "verified_on": e.get("verified_on")})
+                        "verified_on": e.get("verified_on"),
+                        "retired_on": e.get("retired_on"),
+                        "retired_because": e.get("retired_because")})
         else:
-            out.append({"id": f"[{i}]", "item": str(e), "status": "", "verified_on": None})
+            out.append({"id": f"[{i}]", "item": str(e), "status": "", "verified_on": None,
+                        "retired_on": None, "retired_because": None})
     return out
 
 
@@ -1126,10 +1132,30 @@ def check_acceptance_state(facts: dict, status_rank: int, f: Findings) -> None:
     was marked `shipped` holding two criteria nothing could satisfy — one of them
     annotated "this is THE test of the set" — because the decision that killed them
     was recorded in the log and never propagated to the contract. The audit passed
-    clean: no check compared acceptance[] against reality. This is that check."""
+    clean: no check compared acceptance[] against reality. This is that check.
+
+    `status: retired` is the way out that does not destroy the record. Before it
+    existed the only way to stop a dead criterion from blocking `shipped` was to
+    delete it, and deleting it broke every citation of it. Real case: retiring AC6,
+    AC12 and AC13 of one research set meant removing them from the registry and
+    rewriting their mentions in docs 01 and 02 by hand, so they would not dangle."""
+    items = normalize_acceptance(facts)
+    # Checked at every stage: a retirement is a decision, and a decision with no
+    # date and no reason is the kind nobody can revisit.
+    for e in items:
+        if e["status"] != "retired":
+            continue
+        missing = [k for k in ("retired_on", "retired_because") if not e[k]]
+        if missing:
+            f.add(DRIFT, f"acceptance.{e['id']}",
+                  f"`status: retired` with no {' / '.join(f'`{k}:`' for k in missing)}",
+                  "a retirement is a decision: when, and why the criterion stopped "
+                  "being reachable or relevant — otherwise it reads as a criterion "
+                  "somebody gave up on",
+                  "26 acceptance state")
+    items = [e for e in items if e["status"] != "retired"]
     if status_rank < STATUS_RANK["shipped"]:
         return
-    items = normalize_acceptance(facts)
     if not items:
         return
 
@@ -1389,6 +1415,8 @@ def check_orphan_and_dangling_ids(facts: dict, prose: dict[str, str],
     for name, container in sorted(ids.items()):
         if container in ORPHAN_EXEMPT:
             continue  # a decision is cited by consequence, not by key (report §3.5)
+        if is_history(registry_entry(facts, container, name)):
+            continue  # kept on purpose so it is not re-derived; nobody has to cite it
         if re.search(rf"(?<!\w){re.escape(name)}\b", body, re.I):
             continue
         # Cited by VALUE counts as cited. An orphan is an entry no doc mentions at
@@ -1621,6 +1649,8 @@ def measured_runs(facts: dict):
         ev = ev if isinstance(ev, dict) else {}  # a string here is the basis gate's
         if norm(ev.get("outcome")).startswith("aborted"):
             continue
+        if ev.get("derived_from"):
+            continue        # not a run: its n/spread/conditions are its sources' (35)
         if norm(ev.get("how")) in VARIABLE_HOW:
             yield path, node, ev
 
@@ -1722,13 +1752,14 @@ def check_sample_size(facts: dict, prose: dict[str, str], spec_dir: Path,
                 entry = registry_entry(sibling, norm(container), name)
                 if not isinstance(entry, dict):
                     continue
-                ev = entry.get("evidence")
-                ev = ev if isinstance(ev, dict) else {}
-                if str(ev.get("n") or "").strip() != "1" or ev.get("spread"):
+                single = single_runs_behind(sibling, entry)
+                if not single:
                     continue
+                via = ("" if single == [f"{norm(container)}.{name}"]
+                       else f" (derived from {', '.join(f'`{r}`' for r in single)})")
                 f.add(DRIFT, f"{doc}:{lineno}",
                       f"cites `{container}.{name}` from `{rel}`, which was measured "
-                      "once (`n: 1`) with no `spread:`",
+                      f"once (`n: 1`) with no `spread:`{via}",
                       "this is where one run becomes a constant: the citing set sees "
                       "a number, a path and an id, and not that the owner looked once "
                       "— re-measure in the owning set, or carry the caveat here",
@@ -1879,18 +1910,393 @@ def check_absence_of_signal(facts: dict, f: Findings) -> None:
                   "`null` means unsampled and settles it",
                   "33 absence of signal")
 
-def live_accepted_risks(facts: dict) -> list[tuple[str, str, str]]:
+# --------------------------------------------------------------------------
+# derived evidence, retractions and corrections (checks 35, 36)
+# --------------------------------------------------------------------------
+
+def parse_ref(ref) -> tuple[str, str] | None:
+    """`limits.x` -> ("limits", "x"). Only the registry's own containers qualify: a
+    bare `x` could be anything, and guessing its container is how a citation ends
+    up resolving to the wrong entry."""
+    m = re.fullmatch(r"\s*(%s)\.([A-Za-z0-9_]+)\s*" % "|".join(ID_CONTAINERS),
+                     str(ref), re.I)
+    return (norm(m.group(1)), m.group(2)) if m else None
+
+
+def as_list(value) -> list:
+    if value is None:
+        return []
+    return value if isinstance(value, list) else [value]
+
+
+def single_runs_behind(facts: dict, entry: dict, seen: set | None = None,
+                       label: str = "") -> list[str]:
+    """The `n: 1`, spread-less runs a value ultimately rests on.
+
+    A measured entry answers for itself. A derived one inherits its sources' bar —
+    that is the whole point of deriving instead of re-typing `n` and `spread` — so
+    it is exactly as single-run as the weakest thing it names."""
+    ev = entry.get("evidence")
+    ev = ev if isinstance(ev, dict) else {}
+    refs = as_list(ev.get("derived_from"))
+    if not refs:
+        return ([label or "?"] if str(ev.get("n") or "").strip() == "1"
+                and not ev.get("spread") else [])
+    seen = seen if seen is not None else set()
+    out: list[str] = []
+    for ref in refs:
+        parsed = parse_ref(ref)
+        if not parsed or parsed in seen:
+            continue
+        seen.add(parsed)
+        parent = registry_entry(facts, *parsed)
+        if isinstance(parent, dict):
+            out += single_runs_behind(facts, parent, seen, ".".join(parsed))
+    return out
+
+
+def is_retracted(entry) -> bool:
+    return isinstance(entry, dict) and bool(entry.get("retracted_on"))
+
+
+def is_corrected(entry) -> bool:
+    return isinstance(entry, dict) and bool(entry.get("corrected_on"))
+
+
+def is_history(entry) -> bool:
+    """Kept on purpose and allowed to go uncited: a retracted entry stays so it is
+    not re-derived, a retired criterion stays so its citations keep resolving."""
+    return is_retracted(entry) or (isinstance(entry, dict)
+                                   and norm(entry.get("status")) == "retired")
+
+
+# What "mentions the correction" means mechanically: the citing paragraph or entry
+# says so in words, or names the entry that superseded the one it cites. Both
+# languages the real sets are written in.
+CORRECTION_WORD_RE = re.compile(
+    r"\bretract\w*|\bretract[oó]\w*|\bcorreg\w*|\bcorrecci[oó]n\w*|\bcorrected\b|"
+    r"\bcorrection\w*|\bsupersed\w*|\breemplaz\w*|\bno longer holds\b|"
+    r"\bya no (?:vale|rige|es cierto)\b", re.I)
+
+
+def superseding_refs(entry: dict) -> list[str]:
+    return [str(r) for key in ("retracted_by", "corrected_by")
+            for r in as_list(entry.get(key)) if r]
+
+
+def mentions_correction(text: str, entry: dict) -> bool:
+    if CORRECTION_WORD_RE.search(text):
+        return True
+    for ref in superseding_refs(entry):
+        name = ref.rsplit(".", 1)[-1]
+        if ref in text or re.search(rf"(?<![\w]){re.escape(name)}(?![\w])", text):
+            return True
+    return False
+
+
+def correction_state(entry: dict) -> str:
+    if is_retracted(entry):
+        by = ", ".join(superseding_refs(entry)) or "no replacement"
+        return f"retracted on {entry['retracted_on']} ({by})"
+    return f"corrected on {entry['corrected_on']}" + (
+        f" ({', '.join(superseding_refs(entry))})" if superseding_refs(entry) else "")
+
+
+def check_derived_evidence(facts: dict, f: Findings) -> None:
+    """Check 35. `evidence: { derived_from: [limits.x, limits.y], date, value }`.
+
+    A conclusion read off measurements that already live in the registry is not a
+    new run, and forcing it into the run shape made authors copy `n:` and `spread:`
+    from the entries it rested on — two copies of one bar, the drift this skill
+    exists to stop. Real case: six defects of one research set went `measured` by
+    naming limits inside `cmd:` as prose, and the audit then demanded `n`/`spread`
+    that already lived in those limits.
+
+    It counts as `measured` only while everything it names does. A source that is
+    `asserted`, `decided`, retracted or missing makes the derived value a claim the
+    registry cannot back — CONTRADICTION, the same severity as a `measured` whose
+    `cmd` cannot be re-run (check 24). A corrected source is DRIFT unless the entry
+    says it took the correction into account."""
+    graph: dict[str, list[tuple[str, str]]] = {}
+    for path, node in walk(facts):
+        if not isinstance(node, dict):
+            continue
+        ev = node.get("evidence")
+        if not isinstance(ev, dict) or not ev.get("derived_from"):
+            continue
+        where = pretty_path(facts, path) or "_facts.yml"
+        text = yaml.safe_dump(node, allow_unicode=True)
+        edges = []
+        for ref in as_list(ev.get("derived_from")):
+            parsed = parse_ref(ref)
+            target = registry_entry(facts, *parsed) if parsed else None
+            if not isinstance(target, dict):
+                f.add(CONTRADICTION, where,
+                      f"`derived_from` names `{ref}`, which this registry does not "
+                      "define" + ("" if parsed else " (write it `<container>.<id>`)"),
+                      "a derived value is only as real as its sources — fix the "
+                      "reference, or drop to `basis: asserted`",
+                      "35 derived evidence")
+                continue
+            edges.append(parsed)
+            label = ".".join(parsed)
+            if is_retracted(target):
+                f.add(CONTRADICTION, where,
+                      f"derived from `{label}`, {correction_state(target)}",
+                      "a retracted measurement backs nothing: re-derive from what "
+                      "replaced it, or drop to `basis: asserted`",
+                      "35 derived evidence")
+            elif norm(target.get("basis")) != "measured":
+                f.add(CONTRADICTION, where,
+                      f"derived from `{label}`, which is `basis: "
+                      f"{norm(target.get('basis')) or 'absent'}`",
+                      "derived evidence counts as `measured` only while every source "
+                      "is — measure the source, or drop this to `basis: asserted`",
+                      "35 derived evidence")
+            elif is_corrected(target) and not mentions_correction(text, target):
+                f.add(DRIFT, where,
+                      f"derived from `{label}`, {correction_state(target)}, and "
+                      "the entry does not mention the correction",
+                      "re-read the source against its `correction:` and say in this "
+                      "entry that the derivation still holds",
+                      "35 derived evidence")
+        graph[path] = edges
+
+    # A derivation that reaches itself rests on nothing measured at all.
+    def reaches(start: tuple[str, str], goal: tuple[str, str], seen: set) -> bool:
+        if start == goal:
+            return True
+        if start in seen:
+            return False
+        seen.add(start)
+        entry = registry_entry(facts, *start)
+        ev = entry.get("evidence") if isinstance(entry, dict) else None
+        refs = as_list(ev.get("derived_from")) if isinstance(ev, dict) else []
+        return any(reaches(p, goal, seen) for p in map(parse_ref, refs) if p)
+
+    for container in ID_CONTAINERS:
+        for name, entry in registry_container_entries(facts, container).items():
+            ev = entry.get("evidence") if isinstance(entry, dict) else None
+            if not (isinstance(ev, dict) and ev.get("derived_from")):
+                continue
+            me = (container, name)
+            if any(reaches(p, me, set())
+                   for p in map(parse_ref, as_list(ev["derived_from"])) if p):
+                f.add(CONTRADICTION, f"{container}.{name}",
+                      "`derived_from` is circular — following it leads back here",
+                      "at least one link in the chain has to be a run somebody "
+                      "performed",
+                      "35 derived evidence")
+
+
+def registry_scopes(facts: dict):
+    """-> (label, entry, text without derived_from). One scope per registry entry:
+    a correction mentioned anywhere in the citing entry counts, the same way a
+    paragraph is the unit in prose."""
+    for key, node in facts.items():
+        if key in ID_CONTAINERS:
+            for name, entry in registry_container_entries(facts, key).items():
+                yield f"{key}.{name}", entry, scope_text(entry)
+        elif isinstance(node, (dict, list)):
+            yield str(key), node, scope_text(node)
+
+
+def scope_text(node) -> str:
+    parts = []
+    for path, sub in walk(node):
+        if ".derived_from" in f".{path}" or isinstance(sub, (dict, list)) or sub is None:
+            continue
+        parts.append(str(sub))
+    return "\n".join(parts)
+
+
+def prose_paragraphs(text: str):
+    """-> (first line number, [(line number, line)]). A paragraph is a run of
+    non-blank lines; a table row is its own paragraph, because one row mentioning a
+    retraction says nothing about the row below it."""
+    block: list[tuple[int, str]] = []
+    for lineno, line in enumerate(blank_fences(text).splitlines(), 1):
+        if not line.strip():
+            if block:
+                yield block
+            block = []
+        elif line.lstrip().startswith("|"):
+            if block:
+                yield block
+            yield [(lineno, line)]
+            block = []
+        else:
+            block.append((lineno, line))
+    if block:
+        yield block
+
+
+def check_corrections(facts: dict, prose: dict[str, str], spec_dir: Path,
+                      repo_root: Path, f: Findings, c: Candidates) -> None:
+    """Check 36. `retracted_on` / `retracted_by` and `corrected_on` / `corrected_by` /
+    `correction` were already in use, by hand, and nothing read them. So an entry
+    could be retracted in its own registry while every sentence resting on it — in
+    this set or in another one — went on quoting it as if it held.
+
+    Real case: `sports-multiview-grid` cites limits of the research set that owns
+    them. When the research corrected one, nothing told the grid.
+
+    Citations are read where a program can see them: `container.id` in this set's
+    docs and registry, and `` `docs/features/<slug>/_facts.yml` container.id `` for
+    another set's entries — resolved by loading that registry, exactly as check 30
+    does. A citation is fine when its paragraph (prose) or entry (registry) names
+    the replacement or says the word; `_log.md` is history and is never read.
+
+    The two states do not get the same verdict, and running it on the real sets is
+    what decided that. A RETRACTED entry no longer holds, so a sentence resting on
+    it without saying so is wrong whenever it was written — DRIFT. A CORRECTED entry
+    is usually corrected in place: its value is fixed, and a sentence written after
+    the fix cites the right thing without any reason to mention the history. Nothing
+    in a markdown line says when it was written. Measured on two real sets: of nine
+    such citations, the two in the research set were notes written before the
+    correction and framed exactly the way it inverted; the seven in the other set
+    cited an entry rewritten and renamed in place, one of them in a paragraph that
+    says outright "the first reading was wrong". So a corrected citation is a
+    candidate, and a person decides which side of the correction it was written on."""
+    own_ids = registry_ids(facts)
+
+    # Format: the fields that make a retraction or correction legible later.
+    for label, entry, _ in registry_scopes(facts):
+        if not isinstance(entry, dict):
+            continue
+        if is_retracted(entry) and not (entry.get("retracted_by")
+                                        or entry.get("retracted_because")):
+            f.add(DRIFT, label, "`retracted_on:` with no `retracted_by:` and no "
+                  "`retracted_because:`",
+                  "name the entry that replaced it, or say why it was wrong — a bare "
+                  "date tells the next reader that something happened, not what",
+                  "36 retractions and corrections")
+        if is_corrected(entry) and not entry.get("correction"):
+            f.add(DRIFT, label, "`corrected_on:` with no `correction:`",
+                  "state what changed, in one sentence a citing set can quote",
+                  "36 retractions and corrections")
+        for ref in superseding_refs(entry):
+            parsed = parse_ref(ref)
+            if parsed and registry_entry(facts, *parsed) is None:
+                f.add(DRIFT, label, f"superseded by `{ref}`, which this registry "
+                      "does not define",
+                      "fix the reference — a reader following it lands nowhere",
+                      "36 retractions and corrections")
+
+    siblings: dict[Path, dict | None] = {}
+    own = (spec_dir / "_facts.yml").resolve()
+
+    def sibling_entry(rel: str, container: str, name: str):
+        path = next((b / rel for b in (repo_root, spec_dir, spec_dir.parent)
+                     if (b / rel).is_file()), None)
+        if path is None or path.resolve() == own:
+            return None
+        key = path.resolve()
+        if key not in siblings:
+            try:
+                siblings[key] = load_facts(path)
+            except (yaml.YAMLError, OSError):
+                siblings[key] = None
+        sib = siblings[key]
+        return registry_entry(sib, norm(container), name) if sib else None
+
+    containers = "|".join(ID_CONTAINERS)
+    local_re = re.compile(rf"\b({containers})\.([A-Za-z0-9_]+)", re.I)
+
+    def citations(text: str):
+        """-> [(label, target entry, origin)] for every retracted/corrected cite."""
+        out, spans = [], []
+        for m in CROSS_SET_RE.finditer(text):
+            spans.append((m.start(), m.end()))
+            rel, container, name = m.groups()
+            target = sibling_entry(rel, container, name)
+            if is_retracted(target) or is_corrected(target):
+                out.append((f"{norm(container)}.{name}", target, rel))
+        for m in local_re.finditer(text):
+            if any(a <= m.start() < b for a, b in spans):
+                continue
+            container, name = norm(m.group(1)), m.group(2)
+            if own_ids.get(name) != container:
+                continue
+            target = registry_entry(facts, container, name)
+            if is_retracted(target) or is_corrected(target):
+                out.append((f"{container}.{name}", target, None))
+        return out
+
+    def report_one(where: str, label: str, target: dict, origin: str | None) -> None:
+        src = f" in `{origin}`" if origin else ""
+        if not is_retracted(target):
+            c.add("36", where,
+                  f"cites `{label}`{src}, {correction_state(target)}, and does not "
+                  "mention it — written before the correction, or against the "
+                  "corrected version?")
+            return
+        f.add(DRIFT, where,
+              f"cites `{label}`{src}, {correction_state(target)}, without mentioning "
+              "it",
+              "say it in the same paragraph — the replacement's id or the word — "
+              "or stop resting on it; a citation that reads as if the entry still "
+              "held is how a correction fails to reach the sets built on it",
+              "36 retractions and corrections")
+
+    for label, entry, text in registry_scopes(facts):
+        seen = set()
+        for cited, target, origin in citations(text):
+            if origin is None and (cited == label
+                                   or label in superseding_refs(target)):
+                continue    # the entry itself, or the one that replaced it
+            if cited in seen or mentions_correction(text, target):
+                continue
+            seen.add(cited)
+            report_one(label, cited, target, origin)
+
+    for doc, body in prose.items():
+        if doc == "_log.md":
+            continue
+        for block in prose_paragraphs(body):
+            text = "\n".join(line for _, line in block)
+            seen = set()
+            for cited, target, origin in citations(text):
+                if cited in seen or mentions_correction(text, target):
+                    continue
+                seen.add(cited)
+                lineno = next((n for n, line in block if cited in line
+                               or cited.split(".", 1)[1] in line), block[0][0])
+                report_one(f"{doc}:{lineno}", cited, target, origin)
+
+
+# How far ahead an `accepted.until:` is announced as coming due. Two weeks is the
+# lead a measurement needs to be scheduled rather than improvised the day G1 bites.
+EXPIRY_WARNING_DAYS = 14
+
+
+def live_accepted_risks(facts: dict, today: datetime.date | None = None
+                        ) -> list[tuple[str, str, str, int | None]]:
     """Deferrals with a deadline that has not arrived. Not findings — but not
     silence either: the audit names them and their expiry, which is the whole
-    reason the field exists rather than a note in a log entry."""
+    reason the field exists rather than a note in a log entry.
+
+    -> (id, detail, because, days left). Days left is what lets the report separate
+    the ones coming due: a list of four risks all printed the same way reads as
+    "handled" until the morning G1 refuses all four at once. Real case: four risks
+    of one research set, accepted together, all expire on 2026-10-23."""
+    today = today or datetime.date.today()
     out = []
     for d in facts.get("defects") or []:
         if not isinstance(d, dict):
             continue
-        state, detail = accepted_state(d)
+        state, detail = accepted_state(d, today)
         if state == "live":
-            because = str((d.get("accepted") or {}).get("because", "")).strip()
-            out.append((str(d.get("id", "?")), detail, because))
+            acc = d.get("accepted") or {}
+            because = str(acc.get("because", "")).strip()
+            until = acc.get("until")
+            if not isinstance(until, datetime.date):
+                try:
+                    until = datetime.date.fromisoformat(str(until).strip())
+                except ValueError:
+                    until = None
+            left = (until - today).days if until else None
+            out.append((str(d.get("id", "?")), detail, because, left))
     return out
 
 
@@ -2065,7 +2471,8 @@ HUMAN_PASS = [
      None),
     ("5", "checklist coverage", "each doc 01 checklist item has a counterpart in doc "
      "02 (implementation/test) and/or doc 03 (stakeholder)", "02|03"),
-    ("6", "acceptance parity", "doc 02's Definition of Done vs `acceptance[]`", "02"),
+    ("6", "acceptance parity", "doc 02's Definition of Done vs `acceptance[]`, "
+     "criteria with `status: retired` left out", "02"),
     ("7", "scope parity", "`changes[]` vs each doc's affected-components table. "
      "`related_docs[]` do NOT participate — one appearing in a \"what changes\" table "
      "is itself a CONTRADICTION", None),
@@ -2104,23 +2511,37 @@ HUMAN_PASS = [
     ("28", "`tracking.issues` / `pr` / `milestone` on GitHub", "deliberately NOT "
      "automated: an auditor that makes network calls is a different kind of tool. "
      "`gh issue view` / `gh pr view` and check the state matches `status:`", None),
+    ("36", "citations of a corrected entry", "the candidates below cite an entry "
+     "carrying `corrected_on:` with no mention of the correction nearby. A corrected "
+     "entry is usually fixed in place, so a sentence written AFTER the fix is right "
+     "as it stands; one written before it may rest on exactly what was corrected. "
+     "Nothing in the text says which — read it against `correction:`. Citations of "
+     "a RETRACTED entry are findings, not candidates", None),
 ]
 
 
 def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
-           prose, as_json: bool) -> int:
+           prose, as_json: bool, declared_status: str | None = None,
+           audited_as: str | None = None,
+           today: datetime.date | None = None) -> int:
     order = {CONTRADICTION: 0, DRIFT: 1, POLISH: 2}
     f.items.sort(key=lambda x: (order[x["severity"]], x["check"], x["where"]))
 
     if as_json:
-        print(json.dumps({"status": facts.get("status"), "findings": f.items,
+        print(json.dumps({"status": declared_status or facts.get("status"),
+                          "audited_as": audited_as, "findings": f.items,
+                          "accepted_risks": [
+                              {"id": r[0], "detail": r[1], "days_left": r[3]}
+                              for r in live_accepted_risks(facts, today)],
                           "candidates": cands.by_check,
                           "deferred_docs": [d["file"] for d in deferred]},
                          indent=2, ensure_ascii=False))
         return 1 if f.count(CONTRADICTION) else 0
 
     status = str(facts.get("status") or "draft")
-    print(f"# audit — {facts.get('feature', '?')}  (status: {status})\n")
+    shown = (f"status: {declared_status}, audited AS `{audited_as}` — preview, the "
+             "file was not touched" if audited_as else f"status: {status}")
+    print(f"# audit — {facts.get('feature', '?')}  ({shown})\n")
     scoped = ", ".join(d["file"] for d in in_scope if d["exists"]) or "none"
     print(f"docs in scope: {scoped}")
     if deferred:
@@ -2151,15 +2572,28 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
                 print(f"  - {i.strip()}")
             print()
 
-    risks = live_accepted_risks(facts)
+    risks = live_accepted_risks(facts, today)
+    due = [r for r in risks if r[3] is not None and r[3] <= EXPIRY_WARNING_DAYS]
     if risks:
         print("## Accepted risks, with their expiry\n")
         print("Recorded decisions to ship with a cause still asserted. Not findings "
               "— until the date passes, and then G1 refuses again:\n")
-        for rid, detail, because in risks:
+        for rid, detail, because, left in risks:
             print(f"  defects.{rid} — {detail}")
             if because:
                 print(f"      {because}")
+        print()
+    if due:
+        # Apart from the list above on purpose: the ones that are about to turn
+        # back into CONTRADICTIONs are the ones somebody has to act on this week.
+        print(f"## Accepted risks due within {EXPIRY_WARNING_DAYS} days\n")
+        print("Still not findings. Each becomes a G1 CONTRADICTION the day after "
+              "its `until:` — schedule the measurement, or extend `until:` with a "
+              "reason a person signs:\n")
+        for rid, detail, _, left in sorted(due, key=lambda r: r[3]):
+            when = ("today" if left == 0 else "tomorrow" if left == 1
+                    else f"in {left} days")
+            print(f"  defects.{rid} — expires {when} ({detail})")
         print()
 
     print("## Requires a human pass\n")
@@ -2189,6 +2623,8 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
         verdict += f" · stage {status}: {len(deferred)} doc(s) not due yet"
     if risks:
         verdict += f" · {len(risks)} accepted risk(s) with a due date"
+    if due:
+        verdict += f", {len(due)} due within {EXPIRY_WARNING_DAYS} days"
     if cands.total():
         # Counted apart from the findings on purpose. A candidate has no severity
         # yet, so folding it into the verdict would make the count assert something
@@ -2206,13 +2642,35 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repo-root", default=None,
                     help="anchor/file resolution root (default: git toplevel)")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--as-status", choices=sorted(STATUS_RANK, key=STATUS_RANK.get),
+                    default=None,
+                    help="audit the set as if `status:` already read STAGE — in "
+                         "memory, the file is not touched")
+    ap.add_argument("--today", default=None, metavar="YYYY-MM-DD",
+                    help="the date `accepted.until:` is measured against "
+                         "(default: the real today)")
     args = ap.parse_args(argv)
+    today = None
+    if args.today:
+        try:
+            today = datetime.date.fromisoformat(args.today)
+        except ValueError:
+            ap.error(f"--today {args.today!r} is not a YYYY-MM-DD date")
 
     spec_dir = Path(args.spec_dir).resolve()
     facts_path = spec_dir / "_facts.yml"
     if not facts_path.is_file():
         sys.exit(f"no _facts.yml in {spec_dir} — not a feature-spec set.")
     facts = load_facts(facts_path)
+    declared_status = str(facts.get("status") or "draft")
+    if args.as_status:
+        # A shallow copy, never a write: the point is to see what a flip would
+        # surface BEFORE making it, in place, so every anchor still resolves against
+        # the real tree. Real case: a research set about to go `shipped` was audited
+        # on a copy made outside the repo to preview the flip, and 54 findings came
+        # back — most of them anchors "missing" only because the copy was elsewhere.
+        facts = dict(facts)
+        facts["status"] = args.as_status
     repo_root, root_is_real = repo_root_for(spec_dir, args.repo_root)
 
     rank, in_scope, deferred = resolve_stage(facts, spec_dir)
@@ -2226,7 +2684,7 @@ def main(argv: list[str] | None = None) -> int:
     check_top_level_keys(facts, f)
     check_docs_on_disk(in_scope, deferred, f)
     check_sibling_docs(facts, spec_dir, repo_root, f)
-    check_basis_gates(facts, f)
+    check_basis_gates(facts, f, today)
     check_declared_dependencies(facts, f)
     check_changes_vocabulary(facts, f)
     check_acceptance_state(facts, rank, f)
@@ -2244,15 +2702,24 @@ def main(argv: list[str] | None = None) -> int:
     check_run_conditions(facts, spec_dir, repo_root, f)
     check_aborted_runs(facts, f)
     check_absence_of_signal(facts, f)
+    check_derived_evidence(facts, f)
+    check_corrections(facts, prose, spec_dir, repo_root, f, c)
     check_doc_size(in_scope, f)
     check_profile_and_log(facts, spec_dir, repo_root, root_is_real, f)
-    check_log_stage(facts, spec_dir, f)
+    if not args.as_status or norm(args.as_status) == norm(declared_status):
+        # Under --as-status the transition has not happened, so the log cannot
+        # record it yet; reporting that would be the one finding the preview itself
+        # manufactures.
+        check_log_stage(facts, spec_dir, f)
     check_prose_orphans(facts, prose, c)
     check_contract_shape(facts, prose, c)
     check_cross_refs(facts, prose, in_scope, c)
     check_doc02_executability(facts, prose, in_scope, c)
 
-    return report(f, c, facts, in_scope, deferred, prose, args.json)
+    audited_as = (args.as_status if args.as_status
+                  and norm(args.as_status) != norm(declared_status) else None)
+    return report(f, c, facts, in_scope, deferred, prose, args.json,
+                  declared_status=declared_status, audited_as=audited_as, today=today)
 
 
 if __name__ == "__main__":

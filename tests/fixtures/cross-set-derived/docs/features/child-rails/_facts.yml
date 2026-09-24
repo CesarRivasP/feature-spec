@@ -1,0 +1,8 @@
+feature: child-rails
+status: draft
+profile: _profile.fixture.yml
+changes:
+  - { id: C1, file: docs/features/child-rails/01-master-plan.md, kind: planned,
+      change: 'dimensiona sobre el veredicto del padre' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

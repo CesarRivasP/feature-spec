@@ -207,6 +207,67 @@ evidence:
 
 Same rule from the other side in `references/gap-sweep.md` §Concluding from silence.
 
+## Derived evidence — a conclusion read off measurements already here
+
+Not every `measured` is a run. Often the entry that settles a defect is the *reading*
+of two or three limits that were each measured properly: "the bottleneck is CPU per
+frame" is what `limits.frames_single_url` and `limits.frames_multi_url` say side by
+side. Writing that as a run means inventing a `how:` and a `cmd:`, and then check 30
+asks for an `n:` and a `spread:` — which already live in the limits.
+
+```yaml
+evidence:
+  derived_from: [limits.frames_single_url, limits.frames_multi_url]
+  date: 2026-09-23
+  value: '32,1 contra 50,3 fps por tile con las mismas palancas'
+```
+
+- No `how:`, no `cmd:`. What there is to re-run is the sources' commands.
+- **It inherits `n:`, `spread:` and `conditions:`** from its sources and does not repeat
+  them. A copied bar is a second copy of one datum, and the second copy is never the one
+  updated. A set citing a derived entry sees through it: if it rests on a single,
+  spread-less run, check 30 says so, naming the run.
+- **It is `measured` only while every source is.** A source that is `asserted`,
+  `decided`, retracted, missing, or a chain that leads back to itself → `CONTRADICTION`
+  (check 35). A source that was corrected → `DRIFT` unless the entry says the derivation
+  survived the correction.
+
+*Real case:* six defects of one research set went `measured` by naming the limits that
+answered them inside `cmd:` as prose — `cmd: limits.a + limits.b`. The audit then asked
+each for the `n:` and `spread:` those limits already carried, and they were copied by
+hand.
+
+## Retractions and corrections — never delete, never edit in silence
+
+An entry that turns out wrong is the most instructive thing in the registry, for the
+same reason a dead hypothesis is: deleted, it gets re-derived. Two shapes, depending on
+whether it still holds:
+
+```yaml
+# it no longer holds
+retracted_on: 2026-09-21
+retracted_by: limits.purge_frees_proportionally   # what replaced it — or, if nothing:
+# retracted_because: 'the probe ran with the cache half full; the zero was circumstantial'
+
+# it holds, amended
+corrected_on: 2026-09-23
+corrected_by: limits.multi_url_arm_reaches_50fps_per_tile   # optional: what forced it
+correction: 'the sign was backwards: the same url x4 is the HARD arm, not the easy one'
+```
+
+- Keep `basis:`, `evidence:` and the original text. The retraction or correction is
+  written **beside** them, not over them.
+- `correction:` is one sentence a citing set can quote. The long story goes in `note:`.
+- **A citation that rests on a retracted entry without saying so is `DRIFT`** — in this
+  set and in any set that cites it qualified (check 36). Say it in the same paragraph:
+  name the replacement, or use the word.
+- **A citation of a corrected entry is a candidate, not a finding.** A correction is
+  usually made in place, so a sentence written after it is right as it stands; only a
+  person reading it against `correction:` can tell which side it was written on.
+
+*Real case:* `sports-multiview-grid` cites limits of the research set that measured
+them. When the research corrected one, nothing told the grid.
+
 ## Rules
 
 1. **Behavioral claims are claims.** "the framework puts focus on the first
@@ -261,8 +322,12 @@ Same rule from the other side in `references/gap-sweep.md` §Concluding from sil
   ```
 
   With a live `until:` the gate stands down and the audit **lists** the deferral
-  and its expiry — not a finding, not silence. Past `until:`, G1 refuses again and
-  names how late it is. Missing a field, or a `by:` that reads like a model id,
+  and its expiry — not a finding, not silence. Within **14 days** of `until:` it is
+  listed again, apart, as coming due, so the measurement gets scheduled instead of
+  improvised the morning G1 bites (*real case:* four risks of one set, accepted
+  together, all expiring on 2026-10-23). Past `until:`, G1 refuses again and
+  names how late it is. `audit.py --today <date>` shows what it will say on a given
+  day. Missing a field, or a `by:` that reads like a model id,
   and the block excuses nothing.
 
   It is a **deferral with a deadline, not an exemption** — the same rule the
