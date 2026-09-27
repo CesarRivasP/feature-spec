@@ -101,12 +101,14 @@ The log outranks the context window only while it fits in one. A real set reache
 
 **Rotate; never summarize.** A summary is a new claim about old rounds, written by whoever is least able to tell which detail mattered — and the details that matter are exactly the ones a summary drops: a rejection's evidence, a measurement's conditions, the reasoning chain that turned a defect false. Rotation keeps every word.
 
-1. **Move** rounds `R1…R<k>` verbatim to `_log-R1-R<k>.md` beside it. Never edit them. Pick `k` so that everything after it still has open findings or recent context — usually all but the last five to ten rounds.
-2. **Open `_log.md` again** with its header and one entry, `## R<k+1> · <date> · <agent> · rotate`:
-   - `**Read:**` — **every** file of the set with its line count and blob. This is the new baseline check 16 compares against; without it, every file reads as unrecorded.
-   - `**Log read through:** R<k>` and `**Archived:** _log-R1-R<k>.md (<n> lines, blob <sha7>)`.
-   - `**Carried open:**` — every finding without a final disposition, by id (`R12-F3`), each with one line saying what it waits on. This is an index, not a summary: it points into the archive and restates nothing.
-3. **Continue numbering** from `R<k+2>`. Round ids are never reset — findings are addressed by them across files.
+1. **Open the rotation round's stub** at the end of `_log.md`, as any round does, and read it back.
+2. **Move** rounds `R1…R<k>` verbatim to `_log-R1-R<k>.md` beside it, under a short header saying what the file is and that it is never edited. Keep `R<k+1>…` in `_log.md` as recent context — usually the last five to ten rounds. Before writing either file, check that header + archived rounds + kept rounds reassemble the original byte for byte; a rotation that loses a line is the summary it exists to avoid.
+3. **Complete the rotation entry** — `## R<n+1> · <date> · <agent> · rotate`, numbered after the last round, never reset:
+   - `**Read:**` — **every** file of the set (`_facts.yml`, each file in `docs[]`, the profile) with its line count and blob. This is the new baseline check 16 compares against.
+   - `**Stage:** <status> → <status>` — **carried**, when the last real transition went to the archive. Check 16 reads `Stage:` from `_log.md` only; without this line a set past `draft` reports a transition that never happened.
+   - `**Archived:**` and `**Edits:**` name `_log-R1-R<k>.md` **with its line count and blob**. It is a file of the set, and check 16 asks every such file for a version.
+   - `**Carried open:**` — every finding without a final disposition, by id (`R12-F3`), each with one line saying what it waits on. An index, not a summary: it points into the archive and restates nothing. If the dispositions were not re-judged, say so rather than implying they were.
+4. **Run the audit.** A clean run means the baseline took.
 
 The archive is history: it is never audited for anchors (check 18 reads the registry and registered docs only), never registered in `docs[]` (check 9 skips `_`-prefixed files), never synced, and reading it is required only when a carried finding points into it.
 
