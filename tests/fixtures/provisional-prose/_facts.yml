@@ -1,0 +1,18 @@
+# Check 41. A mock preamble written while the repo had no tests said so, and
+# stayed saying so for fifteen rounds while 133 tests existed. Marked
+# provisional, each sentence fires the day what settles it moves.
+feature: provisional-prose
+status: implementing
+profile: ../_profile.fixture.yml
+tests_baseline:
+  basis: measured
+  evidence: { how: shell, cmd: 'npm test', date: 2026-09-20, value: '133/133 passing' }
+changes:
+  - { id: C1, file: 01-master-plan.md, kind: planned, built_on: 2026-09-15, change: 'x' }
+defects:
+  - { id: D1, claim: 'refutada', basis: measured, status: dead,
+      evidence: { how: shell, cmd: 'npm test', date: 2026-09-12, value: 'no' } }
+  - { id: D2, claim: 'abierta', basis: asserted, status: open, falsified_by: 'x',
+      log_line: null }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

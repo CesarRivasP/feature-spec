@@ -53,6 +53,17 @@ Rules for the split:
    memory.
 7. **Each half gets its own changelog table**, sharing the tag+date spine of the set. The split itself
    is a changelog entry stating that no technical content changed.
+8. **Three sweeps rule 4 does not cover**, each done by hand in a real split of `02b` → `02b2` and
+   `02c` → `02c2`, across all seven files of the set:
+   - **The line that counts the set.** "The set of five documents" is now six — and seven after the
+     next split. `rg -n -i 'set of (two|three|four|five|six|seven|eight|nine|\d+)'` over every doc.
+   - **The pointer chain.** Rule 5 gives `02` a pointer to `02b`; after a second split the chain is
+     `02` → `02b` → `02b2` → `02c`, and every link is a "Continues in" line naming the next file. A
+     half that ends without one reads as truncated.
+   - **`Phase N` from sibling docs.** Rule 4 sweeps `§` refs in the two halves. A coverage map in doc
+     01, a DoD table in `02e`, a stakeholder step in `03` that says "Phase 9" meant the old file; after
+     the cut it must name the half (`` `02c` Phase 9 ``). `rg -n 'Phase [0-9]+|Fase [0-9]+'` over
+     every **other** doc in `docs[]`, not only the halves.
 
 The same rules apply to any doc in the set; 02 is just the one that hits the threshold first.
 
@@ -99,3 +110,4 @@ A set already written in one language does not get retranslated because the prof
 Two different records, do not merge them: the **changelog** below is per-revision, prose, and written for the human who approves the set. `_log.md` (`references/handoff.md`) is per-round, append-only, and written for the next agent — it records file versions and finding dispositions, and is never synced into the docs.
 
 - The set shares a changelog spine (from `_facts.yml dates.revisions[]`). Each doc's changelog shows the entries relevant to it, newest first, using the SAME tag+date. Divergent tags/dates are a `CONTRADICTION`.
+- **The two orders are opposite, and that is where inserts go wrong.** `dates.revisions[]` is oldest first — **append** a new revision at the end. A doc's changelog is newest first — **prepend** it, directly under `## Changelog`. The reflex anchor for either edit is the latest tag, and inserting "next to the latest tag" is correct in one file and inverts the other. It happened three times in one set. Audit check 40 reads both orders and the dates.

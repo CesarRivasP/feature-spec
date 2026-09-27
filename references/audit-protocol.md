@@ -111,7 +111,7 @@ For every entry carrying `basis: measured`, **re-run `evidence.cmd`** (`how: she
 Full contract in `references/evidence.md`.
 
 ### 2. Singletons unique — [human]
-`dates.*`, revision tags, `tests_baseline`, version numbers must be identical in every doc that mentions them. Any variance → `CONTRADICTION`.
+`dates.*`, revision tags, `tests_baseline`, version numbers must be identical in every doc that mentions them. Any variance → `CONTRADICTION`. The date each changelog gives a revision tag, and the order of those entries, is check 40's and mechanical; the rest stays here.
 
 ### 3. Contract shape — [script + human]
 Each JSON payload/response block in prose must match `contracts.*` field-for-field (same keys, same nesting). Extra/missing/renamed field → `CONTRADICTION`. Note: a field the sender injects downstream (not in the client body) is allowed IF a doc note explains it — flag as `POLISH` if the note is missing.
@@ -142,7 +142,7 @@ Doc 02 "Definition of Done" (or, if 02 is split, whichever half holds it) == `_f
 - Before 02 exists, `acceptance[]` has no copy to diverge from and there is nothing to compare. It is still authored, still audited by every registry-level check, and still the contract — it is the *parity* that waits, not the criteria.
 
 ### 7. Scope parity — [human]
-Compare **only** `changes[]` (components created/modified) against each doc's "componentes que cambian" table / affected-modules enumeration. Missing/extra member → `CONTRADICTION`.
+Compare **only** `changes[]` (components created/modified) against each doc's "componentes que cambian" table / affected-modules enumeration. Missing/extra member → `CONTRADICTION`. This compares the registry with the documents; whether the registry matches the **tree** is check 38's, and mechanical.
 - `related_docs[]` (referenced-but-unmodified docs) do **NOT** participate in scope parity — they are context pointers, not scope. A `related_doc` appearing in a "what changes" table is itself a `CONTRADICTION` (miscategorized: it's referenced, not modified). This is the "`manual-user-creation.md` (a reference) sat next to `resend-webhook` (a real new function) in one list" bug.
 
 ### 8. Prose-orphan contracts & endpoints — [script + human]
@@ -176,6 +176,8 @@ Any integer field whose meaning depends on a predicate (`attended`, `resolved`, 
 For every `evidence.date` — and, in a set still on the legacy shape this file accepts above, every `verified.date` — compare against today and against the last commit touching the measured surface.
 - `evidence.date` older than the most recent change to what it measures → `CONTRADICTION` (re-run `cmd`).
 - `evidence.date` older than 7 days on a volatile metric (prod counts, dashboard state) → `DRIFT`: re-measure before approval. Check 1b re-runs the command; this one flags the ones you'd never think to re-run because nothing looks wrong.
+
+This dates evidence. Prose that went stale while its evidence stayed fresh is checks 41 and 42.
 
 ### 13. Doc 02 executability — [script + human] *stage-gated (needs 02)*
 Parte A is the input to the builder. Scan it for:
@@ -225,14 +227,21 @@ Part of check 14's G1. A live `accepted:` block is listed under *Accepted risks,
 
 ### 16. Handoff log — [script + human]
 Contract in `references/handoff.md`. Only applies once `_log.md` exists — a single-agent set never needs one, and its absence is not a finding.
-- **A file's current `wc -l` + `git hash-object` differ from what the last entry naming it recorded → `DRIFT`.** Someone edited without appending. The next round is about to review a version no entry describes, and every disposition it writes will be against the wrong text.
+
+**[script]** settles every bullet below except the two about dispositions — round order, the three required fields, the `Stage:` line, the log's size, and each file's version. Only `**Read:**` and `**Edits:**` lines are read for versions, and HTML comments (the template's commented example) are skipped.
+- **A file's current `wc -l` + `git hash-object` differ from what the last entry naming it recorded → `DRIFT`.** Someone edited without appending. The next round is about to review a version no entry describes, and every disposition it writes will be against the wrong text. The blob is computed the way git computes it, so a gitignored spec needs no git at all.
+  *Real case, and why this left the human list:* the command that opened a round's stub failed with a shell error (`unmatched "`); its author read the next line of output instead and worked a whole round with nothing on disk. It surfaced only at the end, when the closing edit found no anchor. From the next round it is exactly this finding.
+- **A set's own file (`_facts.yml`, a doc, the profile) last named in `Read:` / `Edits:` with no line count and no blob → `DRIFT`.** `_facts.yml (v17)` names a revision the log cannot check against the disk. A code file named in `Edits:` is exempt — its version is git's business.
+- **`_log.md` past 800 lines → `POLISH`.** The log outranks the context window only while it fits in one. Rotate it — `references/handoff.md` §Rotating the log — never summarize it.
 - **A finding carried two or more rounds with no disposition → `DRIFT`.** Silence is how a finding gets rediscovered every round and settled in none.
 - **A disposition of `rejected` with no command output or observation behind it → `DRIFT`.** "I disagree" is the finding surviving in disguise; a rejection is a claim and takes the same basis as any other.
 - **An entry missing `agent`, `Read:`, or `Log read through:` → `DRIFT`.** Without them the entry cannot be checked against anything, which is the only thing it was for.
 - **`_facts.yml status:` differs from the last `**Stage:**` line the log records, and no entry explains the change → `DRIFT`.** A stage transition puts docs into audit scope and unlocks `implement`; unrecorded, it is indistinguishable from a typo in the registry. A set whose log has no `Stage:` line at all and sits at `draft` is fine — nothing transitioned yet.
 - **`Log read through:` naming a round earlier than the previous entry → `POLISH`**, and note it in the findings: that round skipped history and its dispositions may re-litigate settled items.
 - **A transcribed entry with no `Source:` line → `DRIFT`.** A finding raised against a pasted excerpt and one raised against the full file are not the same claim.
-- Round ids non-monotonic, or two entries with the same id → `CONTRADICTION`. Findings are addressed as `R<n>-F<m>`; ambiguous ids break every reference to them.
+- Round ids non-monotonic, or two entries with the same id → `CONTRADICTION`. Findings are addressed as `R<n>-F<m>`; ambiguous ids break every reference to them. **Exempt: two consecutive headings with one id** — a stub and its completion appended rather than edited in place (`— STUB` / `— CERRADA`), which is the stub rule's own shape. Their fields are read across both.
+- More than three entries missing required fields collapse into **one** finding naming them all: a log that stopped recording `Read:` did so for a stretch of rounds, and fifteen identical findings bury the rest of the report.
+- **[human]**, and only these two: a finding carried two rounds with no disposition, and a `rejected` with no output behind it. Both are readings of what a disposition says.
 
 ### 17. Doc size — [script]
 `wc -l` every file in `docs[]`.
@@ -328,6 +337,9 @@ Real case: `F2` depended on `F3`. A later round measured `F3` and left it `dead`
 
 Remaining `open` is a perfectly valid resolution — `F2` stayed open as an accepted risk. **`open` with no `outcome:` after its dependency died is the finding**, because the two are indistinguishable from the outside.
 
+- **A `defects[]` `status:` outside `open | fixed | dead` → `DRIFT`.** This check reads `dead` and check 34 reads `dead` / `fixed`; any other word closes the entry where no rule can see it, which is §Enum fields one level down. A refuted hypothesis is `dead`. A confirmed one is `basis: measured` and stays `open` until its fix lands, then `fixed`.
+  *Real case:* six defects of one set closed as `status: resolved` — two of them **false**, one with a whole component deferred on it. Not one dependant was revisited, and the set audited clean for fourteen rounds.
+
 ### 28. Tracking vs reality — [script + human]
 `tracking.*` is where "cheap-to-verify state is never asserted" is broken most often.
 - `tracking.branch` naming a branch that does not exist in this checkout → `DRIFT`. One command settles it.
@@ -381,7 +393,7 @@ Four player buckets reach Sentry through `usePlayerActions.js:399 onError`. The 
 
 The same rule from the other side — before the spec is built rather than after the query is run — is `references/gap-sweep.md` §Concluding from silence.
 
-### 34. `changes[]` dependency on a revised decision — [script]
+### 34. `changes[]` dependency on a revised decision or a settled hypothesis — [script]
 Check 27 cascades from a `defects[]`/`alternatives[]` entry's `depends_on` target going `status: dead`. A `changes[]` entry can rest on a premise the same way, but `decisions.*` has no `dead` state — the registry's own convention is to edit `what:` **in place** rather than mint a new key, so a `changes[]` entry pointing at a path that premise no longer supports has nothing to cascade from.
 
 `decisions.*` may carry `revised_on:` — set when `what:` is edited after the fact, instead of silently mutated. A `changes[]` entry may declare `depends_on: [decisions.<key>]` and `reviewed_on:`, the date a person last confirmed the entry still holds.
@@ -389,6 +401,11 @@ Check 27 cascades from a `defects[]`/`alternatives[]` entry's `depends_on` targe
 - **A `changes[]` entry's `depends_on` names a `decisions.*` key carrying `revised_on:`, and the entry has no `reviewed_on:`, or one older than `revised_on:` → `DRIFT`.** The premise moved and nobody came back to check whether the entry still points where it should.
 
 *Real case:* a `changes[]` entry kept pointing at a directory a later decision had retired. Nothing in the registry connected the two — the decision's `what:` was simply edited — so the stale entry rode through `implement` unchallenged.
+
+**The same arrow, from a hypothesis.** `depends_on:` on a `changes[]` entry may name a `defects[]` / `alternatives[]` id — `defects.D1` or bare `D1` — for an entry deferred or shaped *because* something is unproven.
+- **The target is now `dead`, `fixed` or `basis: measured`, and the entry has no `reviewed_on:`, or one older than the target's latest date (`evidence.date` and the other `*_on:` fields) → `DRIFT`.** The premise has an answer; a deferral waiting on it may have just become permanent, or due.
+
+*Real case:* `C11` was deferred until `D1` was verified. `D1` resolved **false** and the deferral turned from provisional into permanent. No check asked, and the stakeholder doc kept describing `D1` as an open hypothesis for nineteen more rounds.
 
 ### 35. Derived evidence — [script]
 Contract in `references/evidence.md` §Derived evidence. `evidence: { derived_from: [limits.x, limits.y], date, value }` is a conclusion read off measurements already in the registry, not a run of its own. It needs no `how:` or `cmd:`, and it inherits its sources' `n:`, `spread:` and `conditions:` instead of repeating them — checks 30 and 31 skip it locally, and check 30's cross-set tier looks through it to the runs it rests on.
@@ -423,9 +440,77 @@ The citing set learns about the owner's correction the next time the **citing se
 *Real case:* `sports-multiview-grid` cites limits of the research set that measured them. When the research corrected one — the sign of a comparison was backwards — nothing told the grid. The candidate/finding split is measured, not assumed: on the two real sets holding such citations, the two in the research set were notes written before the correction and framed exactly the way it inverted; the seven in the other set cited an entry rewritten and renamed in place, one of them in a paragraph that says outright that the first reading was wrong.
 
 
+### 37. Registry ids unique — [script]
+An id names one entry for the life of the set.
+- **Two entries of one list container (`defects`, `alternatives`, `acceptance`, `changes`) with the same `id:` → `CONTRADICTION`.** A retired or retracted entry stays in its list on purpose (checks 26, 36), so handing its id to a new entry is exactly this.
+- **One id under two of those containers → `CONTRADICTION`.** A bare `depends_on: [X1]` can no longer say which it means.
+- **`reserved_ids:` — an id held for an entry deleted before `status: retired` existed.** Reused → `CONTRADICTION`; reserved with no reason → `DRIFT`.
+
+*Real case:* `AC21` and `AC22` were written in R3 and removed in R5, with a decision saying they return **verbatim** if it reopens. In R21 the same ids went to two new criteria. Caught reading a doc, not by the audit — and had the decision reopened, a recovered criterion would silently have meant something else. Worse than a gap in the numbering.
+
+### 38. Source tree vs `changes[]` — [script]
+Check 7 compares `changes[]` against the **documents**, by hand; check 20 asks whether each declared file **exists**. Nothing compared the disk against the registry, in the direction that matters once code is written: a file that exists and that the registry does not know.
+
+`changes[]` is what `review` sweeps and what `implement` writes phases against. A file outside it is outside both.
+
+`source_tree: { globs: [...], exclude: [{ glob, because }] }` declares, positively, the part of the tree this set owns — in a repo shared by several features, "every file" is not this set's scope. A `changes[].file` that is a directory covers every file under it.
+- **A file matched by `globs:`, not excluded, that no `changes[].file` names or contains → `DRIFT`.**
+- **An exclusion with no `because:` → `DRIFT`.** An exclusion is a scope decision; one with no reason quietly grows to cover whatever is inconvenient.
+- **A glob that climbs out of the checkout → `DRIFT`**, and nothing outside is read.
+- **No `source_tree:` in an `implementing` / `shipped` set with `kind: planned` entries → `POLISH`.**
+
+Runs from `implementing` on, or earlier once `source_tree:` is declared or any entry carries `built_on:` (check 39).
+
+*Real case:* ten components — built, tested, deployed to the device — — had no entry for **fifteen rounds**, while every audit came back `0 contradictions, 0 drift`. The set was consistent with itself and wrong about the world. The gap sweep could not have found a hazard in any of them in that window, because nothing told it the file existed.
+
+### 39. `changes[]` built state — [script]
+`kind:` is intent — planned, deferred, moved out. It says nothing about whether the thing exists. `built_on: YYYY-MM-DD` does.
+- **`status: shipped` and a `kind: planned` entry with no `built_on:` → `DRIFT`.** Collapsed to one finding when no entry carries the field at all, as check 26 does for a set that predates it.
+- **`built_on:` on a `deferred` / `moved_out` entry → `DRIFT`.** Either the lifecycle moved and `kind:` should say so, or the date is wrong.
+- **`built_on:` that is not a date → `DRIFT`.**
+- **`built_on:` while `status:` is below `implementing` → `DRIFT`.** The set forgot to flip, and every check gated on `implementing` — 20, 38 — is asleep. Below `implementing`, a `built_on:` whose file is missing is also reported here, since check 20 does not run yet.
+
+*Real case:* after thirty rounds a real registry could not answer *"what is done?"*. Its author invented `built:`, missed it on two entries that were built, and a report counted **18 components where there were 20**. The same set stayed at `status: reviewed` through all thirty rounds of building.
+
+### 40. Revision order — [script]
+`dates.revisions[]` is **oldest first**. Every doc's changelog is **newest first**. The two are opposite by design, and that opposition is the trap: the natural anchor for inserting a revision is the most recent tag, and prepending there is right in a doc and inverts the registry — or the reverse.
+- **Two revisions with one tag → `CONTRADICTION`.**
+- **A revision listed after one it is older than (by date, or by the number in `v<n>`) → `DRIFT`.**
+- **A doc's `## Changelog` listing a registry tag after one it is not older than → `DRIFT`.** Both shapes are read: `### <date> — <tag>` headings and `| <tag> | <date> |` table rows.
+- **A changelog entry dating a tag differently from the registry → `CONTRADICTION`.** This is the half of check 2 a program can settle.
+
+*Real case:* inverted **three times** in one set, each caught by reading and none by a check.
+
+### 41. Provisional prose — [script]
+`sync` propagates **values**. A sentence that was true when written — *"the repository contains no application code"*, *"no test has run here"* — has no value to propagate. It stays on the page, true-looking, for as long as nobody rereads it.
+
+A sentence written against a state its author knows will change says so, inline: `[PROVISIONAL: <registry ref> YYYY-MM-DD]`. The ref is the entry whose change will make it false (`tests_baseline`, `changes.C1`, `defects.D3`); the date is when the sentence was written.
+- **The ref moved after that date — `built_on:`, `evidence.date`, `revised_on:`, `corrected_on:`, `retired_on:`, `verified_on:`, `reviewed_on:` → `DRIFT`.**
+- **The ref is settled outright — `dead`, `fixed`, `approved`, `retired`, retracted → `DRIFT`**, dated or not. Undated, `basis: measured` or a `built_on:` also settle it.
+- **The ref names nothing in the registry → `DRIFT`.**
+
+Fenced blocks are not read: a marker inside a code sample is an example.
+
+*Real case:* the mock preamble of a test doc opened with *"the repository contains no application code"* and *"no test has run here"* for **fifteen rounds**, while 133 tests existed, and described a fake with a signature the interface no longer had. `references/implementable.md` allowed writing it against an empty repo and did not ask for it to be marked.
+
+### 42. Prose older than what it cites — [script + human]
+A doc regenerated on a date is right about the registry **as of** that date. `docs[].regenerated_on:` records it.
+- **[script]** — for each doc with the field, every registry entry it cites (by id, or `container.key`) that moved afterwards — any of check 41's dates — comes out as a **candidate**, most recent first. A doc with no `regenerated_on:` in an `implementing` / `shipped` set is a candidate too: it cannot be dated at all.
+- **[human]** — most sentences citing a moved entry are still true: a component that got built is still the component the doc describes. Read each listed citation against the entry as it is now; then bump `regenerated_on:`.
+
+*Real case:* the stakeholder doc — the one handed to an external reviewer — went **31 rounds** untouched and carried **five false claims**, one contradicting a measurement in its own registry. Check 12 dates `evidence.date`; nothing dated prose.
+
+### 43. Contract vs the code that validates it — [script + human]
+Check 3 compares `contracts.*` with prose. Nothing compared it with the code that reads the payload at runtime — so a field could be added to the registry and to seven documents and still be missing from the validator, the first symptom an `undefined` three phases from the cause.
+
+`contracts.<id>.validated_in: <path>` names that code. It is entry-level metadata, stripped before check 3 diffs anything.
+- **`validated_in:` that does not resolve to a file → `CONTRADICTION`.**
+- **[script]** — each payload field the file never names, as a word, is a **candidate**. A grep, never an execution (§Run the script first).
+- **[human]** — a validator that loops over a list built elsewhere names no field and is still right. The durable bridge is a **contract parity test** in the repo, which reads `contracts.*` from the registry on every run: `references/implementable.md` §Contract parity.
+
 ## Enum fields are read lowercased — always
 
-Every enum-valued field in the registry (`status`, `basis`, `role`, `kind`, `where`, `outcome`, `stage`, `evidence.how`, `acceptance[].status`, including `retired`) is compared against lowercase literals throughout this file. **Normalize before comparing, or the check fails open.**
+Every enum-valued field in the registry (`status` — the set's, a defect's, a criterion's —, `basis`, `role`, `kind`, `where`, `outcome`, `stage`, `evidence.how`, `acceptance[].status`, including `retired`) is compared against lowercase literals throughout this file. **Normalize before comparing, or the check fails open.**
 
 This is not cosmetic. `status: Shipped` ranked as unknown, which ranks as `draft` — so a shipped set audited as a draft: G1 clean, checks 5, 6, 13 and 26 all skipped, with a root cause still `basis: asserted`. `role: Root_Cause` blinded G1 on its own. `kind: Deferred` never had its `reopens_when:` demanded. **A gate that fails open is worse than no gate**, because its silence reads as a pass.
 

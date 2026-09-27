@@ -1,0 +1,22 @@
+# Check 37. AC2 is retired and then handed out again (the real case: AC21/AC22
+# removed in R5, reused in R21). X1 names a defect AND an alternative, so a bare
+# `depends_on: [X1]` cannot say which. AC21 was deleted before `status: retired`
+# existed and is held in `reserved_ids:` — AC21 reuses it. AC3 is the control.
+feature: ids-unique
+status: draft
+profile: ../_profile.fixture.yml
+reserved_ids:
+  AC21: 'removed R5 with C15/C16; returns verbatim if decisions.x reopens'
+  AC30: ''
+defects:
+  - { id: X1, claim: 'algo', basis: decided, status: open }
+alternatives:
+  - { id: X1, name: otra, outcome: chosen, basis: decided }
+acceptance:
+  - { id: AC2, item: 'criterio viejo', status: retired, retired_on: 2026-09-01,
+      retired_because: 'alcance recortado' }
+  - { id: AC2, item: 'criterio nuevo', status: written }
+  - { id: AC3, item: 'control', status: written }
+  - { id: AC21, item: 'reusa un id reservado', status: written }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

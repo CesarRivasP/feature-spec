@@ -113,6 +113,8 @@ When an entry leaves the build, re-walk two lists before moving on:
 
 This rule **reincidió two days after it was written**, in the same set, which is why it is also a mechanical check rather than only a paragraph here: a cancelled heartbeat left two acceptance criteria nothing could satisfy — one of them annotated *"this is THE test of the set"* — and the set was marked `status: shipped` with a clean audit, because no check compared `acceptance[]` against reality. Registering the decision in `_log.md` is **not** the same as propagating it: the log is narrative, `acceptance[]` is contract.
 
+**The same walk runs when a defect closes.** A `defects[]` entry going `dead`, `fixed` or `basis: measured` is a trim seen from the hypothesis side: every `changes[]` entry deferred or shaped because it was unproven (`depends_on: [defects.<id>]`, audit check 34), every `acceptance[]` criterion written around it, and every doc sentence still calling it open (mark those `[PROVISIONAL: defects.<id>]` when you write them — check 41). *Real case:* a component was deferred until a hypothesis was verified; the hypothesis resolved false, the deferral became permanent, and the stakeholder doc kept calling the hypothesis open.
+
 Deferring before doc 02 exists is the cheap case and the reason `implement` is a separate stage — a trimmed entry costs a registry edit instead of a rewritten phase. Deferring after 02 exists means regenerating the phases that were written around it; `sync` cannot do this, because it propagates values and a trim changes shape.
 
 ## Recording the result

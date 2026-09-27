@@ -334,6 +334,86 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("36", "01-master-plan.md:6"),     # corrected: a candidate, not a finding
       ("36", "01-master-plan.md:8"),     # the replacement
       ("21", "purge_frees_nothing")]),   # qualified cross-set ref, not dangling
+
+    # ---- the registry against the world: checks 37-43, 16's parsing half --------
+
+    # §37 — AC2 retired, then handed out again; X1 in two containers; AC21 reused
+    # from `reserved_ids:`; a reservation with no reason.
+    ("ids-unique",
+     [("37", "@acceptance.AC2"),
+      ("37", "also used under alternatives:"),
+      ("37", "reuses `AC21`"),
+      ("37", "@reserved_ids.AC30")],
+     [("37", "@acceptance.AC3")]),
+
+    # §38 — a built file no `changes[]` entry names; a directory entry covering a
+    # file under it; an exclusion with a reason and one without.
+    ("source-tree",
+     [("38", "@src/c.ts"),
+      ("38", "no `because:`")],
+     [("38", "@src/a.ts"),
+      ("38", "@src/lib/b.ts"),
+      ("38", "@src/c.test.ts"),
+      ("38", "@src/gen/out.ts")]),
+
+    # §39 — in a shipped set: built and present (control), built and gone,
+    # planned and never dated, deferred and "built", a date that is prose.
+    ("built-state",
+     [("20", "src/gone.ts"),                 # check 20 owns the missing file here
+      ("39", "@changes.C3"),
+      ("39", "`kind: deferred`"),
+      ("39", "is not a date"),
+      ("38", "no `source_tree:`")],
+     [("39", "@changes.C1"),
+      ("39", "src/gone.ts` does not exist")]),   # ...so 39 does not repeat it
+    ("built-status-lag",
+     [("39", "`status: reviewed` while 1")],
+     []),
+
+    # §40 — an oldest-first list prepended by reflex, a newest-first changelog
+    # inverted, and a changelog date the registry does not give the tag.
+    ("revision-order",
+     [("40", "listed after `v3` but older"),
+      ("40", "lists `v2` after `v1`"),
+      ("40", "`v2` dated 2026-09-09")],
+     [("40", "lists `v1` after `v3`"),
+      ("40", "lists `v5` after `v3`")]),      # older by date: ordered by age, not
+                                              #   by position in an inverted registry
+
+    # §41 — provisional sentences whose settling entry moved, and the ones that
+    # must stay quiet: a marker dated after the last measurement, an open defect.
+    ("provisional-prose",
+     [("41", "@01-master-plan.md:3"),         # tests_baseline measured after
+      ("41", "@01-master-plan.md:7"),         # C1 built after
+      ("41", "@01-master-plan.md:9"),         # D1 dead
+      ("41", "names nothing")],
+     [("41", "@01-master-plan.md:5"),         # written after the last measurement
+      ("41", "@01-master-plan.md:11")]),      # D2 still open, asserted
+
+    # §43 — a validator that does not exist is a finding; the field it never
+    # names is a candidate (CANDIDATE_CASES).
+    ("contract-code",
+     [("43", "src/refund-validate.ts")],
+     []),
+
+    # §34 defect half + §27 vocabulary.
+    ("defect-cascade",
+     [("34", "@changes.C1"),
+      ("34", "@changes.C4"),
+      ("27", "`status: resolved`")],
+     [("34", "@changes.C2"),
+      ("34", "@changes.C3")]),
+
+    # §16 — the parsing half: order, required fields, recorded versions.
+    ("log-integrity",
+     [("16", "`R2` after R3"),
+      ("16", "has no Read:"),
+      ("16", "has no agent"),
+      ("16", "@01-master-plan.md"),
+      ("16", "no line count or blob")],
+     [("16", "@02-implementation-and-e2e.md"),   # recorded blob matches the disk
+      ("16", "R9"),                              # inside an HTML comment
+      ("16", "`R6`")]),                          # stub + completion, one round
 ]
 
 # (fixture, extra args, expect, reject) — cases that only exist under a flag.
@@ -522,6 +602,20 @@ CANDIDATE_CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] 
       ("8", "levels"),                        #   is not a payload to diff against
       ("8", "02-implementation.md:12")]),     # the first fence, by line: exempted
                                               #   inside the count, never on its own
+
+    # §42 — doc 01 predates what it cites; doc 02 cannot be dated at all.
+    ("doc-freshness",
+     [("42", "changes.C1"),
+      ("42", "defects.D1"),
+      ("42", "no `regenerated_on:`")],
+     [("42", "changes.C2"),                   # built before the doc was
+      ("42", "changes.C3")]),                 # moved after, but never cited
+
+    # §43 — the field the validator never names; the ones it does stay quiet.
+    ("contract-code",
+     [("43", "`currency`")],
+     [("43", "`user_id`"),
+      ("43", "`amount`")]),
 ]
 
 

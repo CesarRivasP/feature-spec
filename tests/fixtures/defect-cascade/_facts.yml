@@ -1,0 +1,26 @@
+# Check 34, defect half, and check 27's vocabulary. C1 was deferred because D1
+# was unverified; D1 died and C1 was never reviewed — the real case turned a
+# provisional deferral into a permanent one in silence. C4 was reviewed before D3
+# was measured. C2 was reviewed after (silent); C3 rests on a D4 still open
+# (silent). D5 closed as `resolved`, a word no rule reads.
+feature: defect-cascade
+status: reviewed
+profile: ../_profile.fixture.yml
+defects:
+  - { id: D1, claim: 'x', basis: measured, status: dead,
+      evidence: { how: shell, cmd: 'npm test', date: 2026-09-10, value: 'no' } }
+  - { id: D3, claim: 'y', basis: measured, status: open,
+      evidence: { how: shell, cmd: 'npm test', date: 2026-09-10, value: 'si' } }
+  - { id: D4, claim: 'z', basis: asserted, status: open, falsified_by: 'w', log_line: null }
+  - { id: D5, claim: 'v', basis: measured, status: resolved,
+      evidence: { how: shell, cmd: 'npm test', date: 2026-09-10, value: 'si' } }
+changes:
+  - { id: C1, file: src/a.ts, kind: deferred, deferred_because: decisions.x,
+      reopens_when: 'D1 verificada. Hoy: 0 corridas', depends_on: [defects.D1], change: 'a' }
+  - { id: C2, file: src/b.ts, kind: planned, depends_on: [D3], reviewed_on: 2026-09-12,
+      change: 'b' }
+  - { id: C3, file: src/c.ts, kind: planned, depends_on: [defects.D4], change: 'c' }
+  - { id: C4, file: src/d.ts, kind: planned, depends_on: [defects.D3],
+      reviewed_on: 2026-09-01, change: 'd' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

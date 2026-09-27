@@ -1,0 +1,16 @@
+# Check 38. src/c.ts was built and never registered — the real case was ten
+# files for fifteen rounds. src/lib/b.ts sits under a directory entry and is
+# covered. src/c.test.ts is excluded with a reason; the src/gen exclusion has none.
+feature: source-tree
+status: implementing
+profile: ../_profile.fixture.yml
+source_tree:
+  globs: ['src/**/*.ts']
+  exclude:
+    - { glob: '**/*.test.ts', because: 'tests are counted by tests_baseline' }
+    - { glob: 'src/gen/**' }
+changes:
+  - { id: C1, file: src/a.ts, kind: planned, built_on: 2026-09-20, change: 'a' }
+  - { id: C2, file: src/lib, kind: planned, built_on: 2026-09-20, change: 'lib' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
