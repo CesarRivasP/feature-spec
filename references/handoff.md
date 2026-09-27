@@ -17,6 +17,8 @@ One `##` block per round, appended at the end of the file. Never edit or delete 
 
 **The stub goes in first.** `SKILL.md` used to say each mode "appends an entry before finishing", and that is backwards: the round that most needs a record is the one that does not reach the end. Open with the agent, the versions read, and what you are about to do; fill in findings, edits and dispositions when you finish.
 
+**Then read it back.** `tail -n 8 _log.md` and confirm your `## R<n>` header is the last one in the file — before any other edit. The fix is not writing the stub more carefully; it is checking that it landed. *Real case:* the command that wrote a stub failed with a shell error (`unmatched "`); its author read the next line of output instead of that one and worked a whole round with nothing on disk. It surfaced only at the end, when the closing edit found no anchor for itself. A stub that fails in silence leaves exactly the silence the rule exists to prevent. From the next round, audit check 16 reports it as a file whose version no entry recorded.
+
 ```markdown
 ## R3 · 2026-08-19 · claude-opus-5 · validate
 **Read:** 02-implementation-and-e2e.md (487 lines, blob 3f9a12c) · _facts.yml (129 lines, blob 8b2e004)
@@ -91,7 +93,22 @@ The shape generalizes; three is just the common case.
 
 Repeat from 2 as needed. `verify` (device/instrumented observation) is its own action and can enter at any point; it is the only one that can turn an `asserted` claim into a `measured` one.
 
-**A round that edits without appending an entry is invisible**, and the next round reviews a file matching no entry in the log. Audit check 16 catches it after the fact; appending as you go is what prevents it.
+**A round that edits without appending an entry is invisible**, and the next round reviews a file matching no entry in the log. Audit check 16 catches it after the fact — it recomputes every set file's line count and blob and compares them with the last `Read:` / `Edits:` line that recorded them; appending as you go is what prevents it. That comparison only works for files recorded **with** a version: `_facts.yml (v17)` names a revision nothing can check, and is itself a finding.
+
+## Rotating the log
+
+The log outranks the context window only while it fits in one. A real set reached 1140 lines in 39 rounds, and a log nobody reads to the end is a log whose last disposition nobody sees. Audit check 16 raises a `POLISH` past 800 lines.
+
+**Rotate; never summarize.** A summary is a new claim about old rounds, written by whoever is least able to tell which detail mattered — and the details that matter are exactly the ones a summary drops: a rejection's evidence, a measurement's conditions, the reasoning chain that turned a defect false. Rotation keeps every word.
+
+1. **Move** rounds `R1…R<k>` verbatim to `_log-R1-R<k>.md` beside it. Never edit them. Pick `k` so that everything after it still has open findings or recent context — usually all but the last five to ten rounds.
+2. **Open `_log.md` again** with its header and one entry, `## R<k+1> · <date> · <agent> · rotate`:
+   - `**Read:**` — **every** file of the set with its line count and blob. This is the new baseline check 16 compares against; without it, every file reads as unrecorded.
+   - `**Log read through:** R<k>` and `**Archived:** _log-R1-R<k>.md (<n> lines, blob <sha7>)`.
+   - `**Carried open:**` — every finding without a final disposition, by id (`R12-F3`), each with one line saying what it waits on. This is an index, not a summary: it points into the archive and restates nothing.
+3. **Continue numbering** from `R<k+2>`. Round ids are never reset — findings are addressed by them across files.
+
+The archive is history: it is never audited for anchors (check 18 reads the registry and registered docs only), never registered in `docs[]` (check 9 skips `_`-prefixed files), never synced, and reading it is required only when a carried finding points into it.
 
 ## Delegating a defect to a set of its own
 

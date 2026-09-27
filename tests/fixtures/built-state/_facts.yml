@@ -1,0 +1,16 @@
+# Check 39, in a shipped set. C1 is built and on disk (control). C2 claims built
+# and its file is gone. C3 is planned and never dated — the real case counted 18
+# components where there were 20. C4 is deferred and "built". C5's date is prose.
+# No `source_tree:` either, so check 38 asks for one.
+feature: built-state
+status: shipped
+profile: ../_profile.fixture.yml
+changes:
+  - { id: C1, file: src/one.ts, kind: planned, built_on: 2026-09-20, change: 'uno' }
+  - { id: C2, file: src/gone.ts, kind: planned, built_on: 2026-09-20, change: 'dos' }
+  - { id: C3, file: src/three.ts, kind: planned, change: 'tres' }
+  - { id: C4, file: src/four.ts, kind: deferred, built_on: 2026-09-20,
+      deferred_because: decisions.x, reopens_when: 'pico > 200. Hoy: 5', change: 'cuatro' }
+  - { id: C5, file: src/five.ts, kind: planned, built_on: 'la semana pasada', change: 'cinco' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

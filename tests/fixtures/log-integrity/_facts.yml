@@ -1,0 +1,11 @@
+# Check 16, the parsing half. R3 comes before R2. R4 has no `Read:`. R5's header
+# names no agent. 01 was recorded at a version it no longer has — the real case
+# was a stub whose shell command failed, and a round worked with nothing on disk.
+# 02 matches what R5 recorded (control). R6 is a stub and its completion as two
+# headings with one id — one round in two passes, not a repeated id. `_facts.yml` is named with no version.
+feature: log-integrity
+status: draft
+profile: ../_profile.fixture.yml
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation-and-e2e.md, role: implementation, stage: draft }

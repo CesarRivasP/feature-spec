@@ -1,0 +1,15 @@
+# Check 43. `currency` was added to the registry and every doc, and not to the
+# validator that reads it at runtime. `user_id` and `amount` are validated. The
+# second contract points at a validator that does not exist.
+feature: contract-code
+status: implementing
+profile: ../_profile.fixture.yml
+contracts:
+  payment:
+    request_body: [user_id, amount, currency]
+    validated_in: src/validate.ts
+  refund:
+    request_body: [payment_id]
+    validated_in: src/refund-validate.ts
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

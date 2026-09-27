@@ -1,0 +1,18 @@
+# Check 40. v5 was prepended-by-reflex into an oldest-first list: listed after v3,
+# dated before it. Doc 01's changelog (newest first) puts v2 after v1 — inverted.
+# Doc 02 gives v2 a date the registry does not. v3 -> v1 in doc 01 is correct and
+# must stay silent, and so must doc 02's v3 -> v5: by DATE v5 is older, so
+# newest-first holds even though the registry lists it later.
+feature: revision-order
+status: reviewed
+profile: ../_profile.fixture.yml
+dates:
+  drafted: 2026-09-01
+  revisions:
+    - { tag: v1, date: 2026-09-01, note: 'inicio' }
+    - { tag: v2, date: 2026-09-03, note: 'segunda' }
+    - { tag: v3, date: 2026-09-05, note: 'tercera' }
+    - { tag: v5, date: 2026-09-04, note: 'insertada al reves' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation-and-e2e.md, role: implementation, stage: reviewed }

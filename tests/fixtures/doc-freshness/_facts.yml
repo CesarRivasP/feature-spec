@@ -1,0 +1,17 @@
+# Check 42. Doc 01 was regenerated 2026-09-10. It cites C1 (built after) and D1
+# (measured after) — candidates. C2 was built before it; C3 moved after but is
+# never cited — both silent. Doc 02 carries no date at all in an implementing set.
+feature: doc-freshness
+status: implementing
+profile: ../_profile.fixture.yml
+changes:
+  - { id: C1, file: src/a.ts, kind: planned, built_on: 2026-09-15, change: 'a' }
+  - { id: C2, file: src/b.ts, kind: planned, built_on: 2026-09-05, change: 'b' }
+  - { id: C3, file: src/c.ts, kind: planned, built_on: 2026-09-20, change: 'c' }
+defects:
+  - { id: D1, claim: 'x', basis: measured, status: open,
+      evidence: { how: shell, cmd: 'npm test', date: 2026-09-12, value: 'si' } }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft,
+      regenerated_on: 2026-09-10 }
+  - { id: "02", file: 02-implementation-and-e2e.md, role: implementation, stage: reviewed }

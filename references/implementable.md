@@ -50,10 +50,21 @@ Parte B lists *what* to assert; the executor needs *how* this repo asserts it.
 
 - Name the test file path (existing or new) per bullet.
 - Include the repo's mock/setup preamble verbatim once — whatever this stack's is (`vi.mock` + `importOriginal` + setup file; `@Before` + MockK/Mockito rules + test runner annotation; a fake DI module). Copy it from a real test in the repo and say which file you copied it from. Inventing a preamble that doesn't match the repo's produces a test that cannot run.
+  - **A greenfield repo has no test to copy from.** Then the preamble is *designed* here, and everything said about the repo's state in it — "no application code yet", "no test has run", a fake's signature — is marked `[PROVISIONAL: tests_baseline YYYY-MM-DD]` (or `changes.<id>` for a fake of a component not built yet). Audit check 41 reports the marker the day `tests_baseline` is re-measured or the component lands. *Real case:* such a preamble said the repo had no code and no tests for fifteen rounds while 133 tests existed, and described a fake with a signature the interface no longer had. Once real tests exist, replace the designed preamble with one copied from them.
 - Name the queries/matchers the repo uses (`screen.getByRole("button", { name: "…" })`, `onView(withId(...))`, `composeTestRule.onNodeWithTag(...)`), so the executor's component exposes the identifier the test looks for. Test and component must be specified together or they won't meet.
 - State the exact baseline command and its expected line, both from the profile: `<commands.tests>` → a line containing `<commands.tests_expect>`, with the count from `_facts.yml tests_baseline`.
 - **Parity and negative assertions need a `Falla si:` line.** "Idéntico en ambos casos" / "nunca dispara X" is the easiest shape to false-green — the null scenario (mock the same response twice, assert one branch) passes by construction whether or not the code actually discriminates. State the concrete mutation that must turn the test red: which branch to break, which value to change. If you can't name one, the assertion isn't verifying the thing it claims to.
 - **Match the assert's layer to the test file's layer.** An assertion about a service/util symbol ("`AuthClient.resendConfirmation` returns cleanly") belongs in that service's test file. Pointing it at a page-level test file forces the executor through the UI to reach it — which collapses it into whatever other row already exercises that same click, producing two tests for one fact.
+
+## Contract parity
+
+`contracts.*` is compared with prose (audit check 3). Nothing in the spec set can compare it with the **code** — an auditor that runs code is a different tool, and the audit deliberately never executes anything. So the bridge lives in the repo, as a test the build already runs:
+
+- **The test reads `contracts.*` from `_facts.yml` on every run** — `yaml.safe_load`, a YAML import, whatever the stack has — and asserts that the validator checks **exactly** those fields: none missing, none extra. The field list is never copied into the test; copied, it is a second registry that drifts.
+- **It is proved by mutation, like any parity assertion** (`Falla si:` above): add a field to the contract in the registry and the test goes red; remove one from the validator and it goes red.
+- **Doc 02 specifies it** in the phase that writes the validator, and the contract entry names that validator in `validated_in:`. Audit check 43 greps it for every field and lists the ones it never names — which is how a contract without a parity test gets noticed.
+
+*Real case:* a field could be added to the registry and to all seven documents and still be missing from the runtime validator. The first symptom would have been an `undefined` at runtime, three phases away from the cause. The parity test cost a dozen lines and was the only bridge registry ↔ code the set had.
 
 ## Schema / migrations
 
@@ -67,3 +78,5 @@ Applies to any persisted store this stack has — a SQL table, a Room entity, a 
 ## What still belongs to a human
 
 Be explicit about the boundary. Steps that need a dashboard, a DNS record, a secret, or a judgment call are labeled `[MANUAL]` / `[OWNER EXTERNO]` right in the phase heading, so an autonomous executor stops there instead of hallucinating a way through.
+
+**Every `[MANUAL]` step names the `acceptance[]` criterion it verifies, and its result is recorded there** — `status: executed` (or `approved`), `verified_on:`, and what was observed in `evidence:`. Not in a paragraph under the step. *Real case:* two manual steps found things no test could, and when they ran there was nowhere to write it; the author added a "Done 2026-09-25 (R25)" paragraph by convention of their own. To the audit — and to the next agent — a manual step that ran and one that did not were indistinguishable. A step that verifies no criterion is either a missing criterion or a step nobody needs.

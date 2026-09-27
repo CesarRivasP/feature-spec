@@ -436,7 +436,7 @@ HTTP_REQUEST_LINE_RE = re.compile(
 # no metadata level to strip.
 CONTRACT_META = {"note", "notes", "description", "desc", "example", "examples",
                  "source", "owner", "owned_by", "cited_in", "auth", "basis",
-                 "evidence"}
+                 "evidence", "validated_in"}
 PAYLOAD_KEYS = {"fields", "columns", "request_body", "response_ok", "response_err",
                 "request", "response", "payload", "body", "schema", "rows"}
 
@@ -2466,6 +2466,702 @@ def check_log_stage(facts: dict, spec_dir: Path, f: Findings) -> None:
 
 
 # --------------------------------------------------------------------------
+# the registry against the world — checks 37-43, and check 16's mechanical half
+#
+# Every check above compares the registry with the documents, or the registry with
+# itself. A set can pass all of them and be wrong about the tree it describes: ten
+# components built, tested and deployed sat outside `changes[]` for fifteen rounds
+# of a real set, and every audit in between came back `0 contradictions, 0 drift`.
+# Self-consistent and wrong about the world is the exact failure this skill exists
+# to prevent, one level up from where it used to look.
+# --------------------------------------------------------------------------
+
+LIST_ID_CONTAINERS = ("defects", "alternatives", "acceptance", "changes")
+DEFECT_STATUSES = {"open", "fixed", "dead"}
+# Every field that says "this entry moved on this date". Check 42 dates a doc
+# against them; check 41 resolves a dated provisional marker against them.
+MOVED_ON_FIELDS = ("built_on", "revised_on", "corrected_on", "retracted_on",
+                   "retired_on", "verified_on", "reviewed_on")
+
+
+def to_date(value) -> datetime.date | None:
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    if isinstance(value, datetime.date):
+        return value
+    m = re.match(r"\s*(\d{4}-\d{2}-\d{2})", str(value or ""))
+    if not m:
+        return None
+    try:
+        return datetime.date.fromisoformat(m.group(1))
+    except ValueError:
+        return None
+
+
+def moved_on(entry) -> list[tuple[str, datetime.date]]:
+    """-> [(field, date)] for every date on which this entry changed."""
+    if not isinstance(entry, dict):
+        return []
+    out = []
+    for field in MOVED_ON_FIELDS:
+        d = to_date(entry.get(field))
+        if d:
+            out.append((field, d))
+    ev = entry.get("evidence")
+    if isinstance(ev, dict):
+        d = to_date(ev.get("date"))
+        if d:
+            out.append(("evidence.date", d))
+    return out
+
+
+def check_unique_ids(facts: dict, f: Findings) -> None:
+    """Check 37. Two criteria written in R3 were removed in R5, with a decision
+    saying they come back verbatim if it reopens. In R21 the same ids went to two
+    new criteria. Caught by reading a doc, not by the audit — and if the decision
+    reopens, a recovered criterion silently means something else.
+
+    With `status: retired` a retired entry stays in its list, so reusing its id is
+    a duplicate and this check sees it. An id deleted before that field existed has
+    no entry left to collide with, which is what `reserved_ids:` is for."""
+    seen: dict[str, list[str]] = {}
+    for key in LIST_ID_CONTAINERS:
+        ids = [str(e["id"]) for e in facts.get(key) or []
+               if isinstance(e, dict) and e.get("id") is not None]
+        for i in sorted({i for i in ids if ids.count(i) > 1}):
+            f.add(CONTRADICTION, f"{key}.{i}",
+                  f"id used by {ids.count(i)} entries",
+                  "an id names ONE entry for the life of the set. A retired or "
+                  "retracted id stays reserved — give the new entry the next free "
+                  "number",
+                  "37 registry ids unique")
+        for i in set(ids):
+            seen.setdefault(i, []).append(key)
+    for i, keys in sorted(seen.items()):
+        if len(keys) > 1:
+            f.add(CONTRADICTION, f"{keys[0]}.{i}",
+                  f"id also used under {', '.join(k + ':' for k in keys[1:])}",
+                  "a bare `depends_on: [" + i + "]` can no longer say which one it "
+                  "means — rename one of them",
+                  "37 registry ids unique")
+
+    reserved = facts.get("reserved_ids")
+    if reserved is None:
+        return
+    if not isinstance(reserved, dict):
+        f.add(DRIFT, "reserved_ids", "not a mapping",
+              "`reserved_ids: { AC21: '<why it is reserved>' }` — the reason is what "
+              "lets someone decide later whether it may ever be freed",
+              "37 registry ids unique")
+        return
+    for rid, why in reserved.items():
+        if not str(why or "").strip():
+            f.add(DRIFT, f"reserved_ids.{rid}", "reserved with no reason",
+                  "say why it is reserved and what would bring it back",
+                  "37 registry ids unique")
+        for key in seen.get(str(rid), ()):
+            f.add(CONTRADICTION, f"{key}.{rid}",
+                  f"reuses `{rid}`, which `reserved_ids:` holds for another entry",
+                  "give this entry the next free number — a reserved id comes back "
+                  "only as the entry it was reserved for",
+                  "37 registry ids unique")
+
+
+def source_tree_files(facts: dict, repo_root: Path, f: Findings) -> set[str] | None:
+    """-> repo-relative paths `source_tree.globs` selects, minus declared exclusions.
+    None when the set declares no source tree."""
+    tree = facts.get("source_tree")
+    if not tree:
+        return None
+    if not isinstance(tree, dict) or not tree.get("globs"):
+        f.add(DRIFT, "source_tree", "declared with no `globs:`",
+              "`source_tree: { globs: ['src/**/*.ts'], exclude: [...] }`",
+              "38 source tree vs changes[]")
+        return None
+    files: set[str] = set()
+    root = repo_root.resolve()
+    for pattern in as_list(tree.get("globs")):
+        pattern = str(pattern).strip()
+        if not pattern or pattern.startswith("/") or ".." in Path(pattern).parts:
+            f.add(DRIFT, "source_tree.globs", f"`{pattern}` escapes the checkout",
+                  "globs are repo-relative, and a registry path is input — keep it "
+                  "inside the repo",
+                  "38 source tree vs changes[]")
+            continue
+        for p in repo_root.glob(pattern):
+            if p.is_file():
+                try:
+                    files.add(p.resolve().relative_to(root).as_posix())
+                except ValueError:
+                    continue      # a symlink out of the checkout is not ours to read
+    for ex in as_list(tree.get("exclude")):
+        glob = ex.get("glob") if isinstance(ex, dict) else ex
+        because = ex.get("because") if isinstance(ex, dict) else None
+        if not str(because or "").strip():
+            f.add(DRIFT, f"source_tree.exclude `{glob}`", "excluded with no `because:`",
+                  "an exclusion is a decision about scope; one with no reason cannot "
+                  "be revisited and quietly grows to cover whatever is inconvenient",
+                  "38 source tree vs changes[]")
+        if glob:
+            files = {x for x in files if not fnmatch_path(x, str(glob))}
+    return files
+
+
+def fnmatch_path(path: str, pattern: str) -> bool:
+    """Repo-relative glob match where `**/` spans any number of directories,
+    including none — the same reading `Path.glob` gives the include side."""
+    rx = re.escape(pattern).replace(r"\*\*/", "(?:.*/)?").replace(r"\*\*", ".*")
+    rx = rx.replace(r"\*", "[^/]*").replace(r"\?", "[^/]")
+    return re.fullmatch(rx, path) is not None
+
+
+def change_paths(facts: dict) -> list[tuple[dict, str]]:
+    out = []
+    for e in facts.get("changes") or []:
+        if not isinstance(e, dict) or norm(e.get("where")) == "external":
+            continue
+        raw = str(e.get("file") or e.get("path") or "").strip().strip("/")
+        if raw:
+            out.append((e, raw))
+    return out
+
+
+def check_source_coverage(facts: dict, repo_root: Path, status_rank: int,
+                          f: Findings) -> None:
+    """Check 38. `changes[]` is what `review` sweeps and what `implement` writes
+    phases against. A file the registry does not know is outside both: the gap
+    sweep could not have found a hazard in it, and nothing said so.
+
+    Real case: ten components —
+    built, tested, deployed to the device — had no `changes[]` entry for fifteen
+    rounds. Check 7 compares `changes[]` against the DOCUMENTS, by hand; nothing
+    compared it against the disk.
+
+    The set declares which part of the tree it owns, positively (`globs:`), because
+    in a repo shared by several features "every file" is not this set's scope. A
+    file under a `changes[].file` that is a directory counts as covered."""
+    built = any(e.get("built_on") for e, _ in change_paths(facts))
+    if not facts.get("source_tree") and status_rank < STATUS_RANK["implementing"] \
+            and not built:
+        return        # nothing is built yet, so the tree cannot be ahead of the plan
+    files = source_tree_files(facts, repo_root, f)
+    if files is None:
+        if any(norm(e.get("kind")) == "planned" for e, _ in change_paths(facts)):
+            f.add(POLISH, "_facts.yml", "no `source_tree:` — nothing compares "
+                  "`changes[]` against the files that exist",
+                  "declare the globs this set owns: `source_tree: { globs: "
+                  "['src/**/*.ts'] }`. Without it a component built and never "
+                  "registered is invisible to `review` and to `implement`",
+                  "38 source tree vs changes[]")
+        return
+    declared = [p for _, p in change_paths(facts)]
+    for path in sorted(files):
+        if any(path == d or path.startswith(d + "/") for d in declared):
+            continue
+        f.add(DRIFT, path, "exists under `source_tree:` and no `changes[]` entry "
+              "names it",
+              "register it (`kind: planned` + `built_on:`), or exclude it with a "
+              "`because:` — unregistered, `review` never sweeps it",
+              "38 source tree vs changes[]")
+
+
+def check_built_state(facts: dict, repo_root: Path, status_rank: int,
+                      f: Findings) -> None:
+    """Check 39. `kind:` is intent — planned, deferred, moved out. After thirty
+    rounds a real registry could not answer "what is done?", so its author invented
+    `built:` and then missed it on two entries that were built: a report counted 18
+    components where there were 20. `built_on:` is the field; this check reads it
+    against the disk in the direction check 38 does not."""
+    changes = change_paths(facts)
+    adopted = any(e.get("built_on") for e, _ in changes)
+    unbuilt = []
+    for e, raw in changes:
+        cid = str(e.get("id") or raw)
+        kind = norm(e.get("kind"))
+        built = e.get("built_on")
+        if built is None:
+            if kind == "planned":
+                unbuilt.append(cid)
+            continue
+        if to_date(built) is None:
+            f.add(DRIFT, f"changes.{cid}", f"`built_on: {built!r}` is not a date",
+                  "YYYY-MM-DD — the round goes in `built_in:` if you want it",
+                  "39 changes[] built state")
+        if kind in ("deferred", "moved_out"):
+            f.add(DRIFT, f"changes.{cid}",
+                  f"`built_on:` on a `kind: {kind}` entry",
+                  "either it was built and the lifecycle moved — say so in `kind:` — "
+                  "or `built_on:` is wrong",
+                  "39 changes[] built state")
+            continue
+        # From `implementing` on, check 20 already reports the missing file.
+        target = confined(repo_root, raw)
+        if status_rank < STATUS_RANK["implementing"] and target is not None \
+                and not target.exists():
+            f.add(CONTRADICTION, f"changes.{cid}",
+                  f"`built_on: {built}` but `{raw}` does not exist",
+                  "a built component has a file — fix the path, or clear `built_on:`",
+                  "39 changes[] built state")
+    if adopted and status_rank < STATUS_RANK["implementing"]:
+        f.add(DRIFT, "status", f"`status: {facts.get('status')}` while "
+              f"{sum(1 for e, _ in changes if e.get('built_on'))} `changes[]` "
+              "entries carry `built_on:`",
+              "code exists, so the set is `implementing` — flip it and record the "
+              "`Stage:` line. Below it, checks 20 and 38 still treat every file as "
+              "one the set has not written yet",
+              "39 changes[] built state")
+    if norm(facts.get("status")) != "shipped" or not unbuilt:
+        return
+    if not adopted:
+        f.add(DRIFT, "changes", f"`status: shipped` and no entry carries `built_on:` "
+              f"({len(unbuilt)} planned)",
+              "the registry cannot say what was built, so neither can anything that "
+              "reads it — date each planned entry that landed",
+              "39 changes[] built state")
+        return
+    for cid in unbuilt:
+        f.add(DRIFT, f"changes.{cid}", "`kind: planned` with no `built_on:` in a "
+              "shipped set",
+              "it landed (date it), or it did not (`kind: deferred` / `moved_out`)",
+              "39 changes[] built state")
+
+
+def revision_number(tag) -> int | None:
+    m = re.fullmatch(r"\s*v?(\d+)(?:\.\d+)*\s*", str(tag))
+    return int(m.group(1)) if m else None
+
+
+CHANGELOG_HEADING = re.compile(r"^##\s+(changelog|historial|registro de cambios)\b",
+                               re.I | re.M)
+CHANGELOG_ENTRY = re.compile(
+    r"^(?:#{3,4}\s+(?P<d1>\d{4}-\d{2}-\d{2})\s*[—–-]+\s*`?(?P<t1>[\w.]+)`?"
+    r"|\|\s*`?(?P<t2>[\w.]+)`?\s*\|\s*(?P<d2>\d{4}-\d{2}-\d{2})\s*\|"
+    r"|\|\s*(?P<d3>\d{4}-\d{2}-\d{2})\s*\|\s*`?(?P<t3>[\w.]+)`?\s*\|)", re.M)
+
+
+def changelog_entries(text: str) -> list[tuple[int, str, str]]:
+    """-> [(line, tag, date)] inside the doc's `## Changelog` section, in order."""
+    m = CHANGELOG_HEADING.search(text)
+    if not m:
+        return []
+    start = m.end()
+    nxt = re.search(r"^##\s", text[start:], re.M)
+    body = text[start:start + nxt.start()] if nxt else text[start:]
+    base = text[:start].count("\n") + 1
+    out = []
+    for e in CHANGELOG_ENTRY.finditer(blank_fences(body)):
+        tag = e.group("t1") or e.group("t2") or e.group("t3")
+        date = e.group("d1") or e.group("d2") or e.group("d3")
+        out.append((base + body[:e.start()].count("\n"), tag.rstrip(":"), date))
+    return out
+
+
+def check_revision_order(facts: dict, prose: dict[str, str], f: Findings) -> None:
+    """Check 40. The registry lists `dates.revisions[]` oldest first; every doc's
+    changelog lists them newest first. The two orders are opposite by design, and
+    that is the trap: the natural anchor for inserting a revision is the most
+    recent tag, and prepending there is right in one file and inverts the other.
+    Real case: it happened three times in one set, each caught by reading.
+
+    Also settles the half of check 2 a program can: a changelog entry must carry
+    the SAME date the registry gives its tag."""
+    revs = ((facts.get("dates") or {}) if isinstance(facts.get("dates"), dict)
+            else {}).get("revisions") or []
+    revs = [r for r in revs if isinstance(r, dict) and r.get("tag") is not None]
+    tags = [str(r["tag"]) for r in revs]
+    for t in sorted({t for t in tags if tags.count(t) > 1}):
+        f.add(CONTRADICTION, f"dates.revisions {t}", f"tag used {tags.count(t)} times",
+              "a tag names one revision", "40 revision order")
+    for prev, cur in zip(revs, revs[1:]):
+        pd, cd = to_date(prev.get("date")), to_date(cur.get("date"))
+        pn, cn = revision_number(prev["tag"]), revision_number(cur["tag"])
+        if (pd and cd and cd < pd) or (pn is not None and cn is not None and cn <= pn):
+            f.add(DRIFT, f"dates.revisions {cur['tag']}",
+                  f"listed after `{prev['tag']}` but older than it",
+                  "`dates.revisions[]` is OLDEST first — the docs' changelogs are the "
+                  "ones that run newest first. Append new revisions at the end",
+                  "40 revision order")
+    # Age by date, then by the tag's number — never by position in the registry,
+    # which may itself be the inverted list.
+    age = {str(r["tag"]): (to_date(r.get("date")) or datetime.date.min,
+                           revision_number(r["tag"]) or 0) for r in revs}
+    dates = {str(r["tag"]): to_date(r.get("date")) for r in revs}
+    for doc, text in prose.items():
+        entries = [(ln, t, d) for ln, t, d in changelog_entries(text) if t in age]
+        for (_, pt, _), (ln, t, _) in zip(entries, entries[1:]):
+            if age[t] >= age[pt]:
+                f.add(DRIFT, f"{doc}:{ln}",
+                      f"changelog lists `{t}` after `{pt}`, but `{t}` is not older",
+                      "doc changelogs run NEWEST first — the opposite of "
+                      "`dates.revisions[]`. Move the entry above its predecessor",
+                      "40 revision order")
+        for ln, t, d in entries:
+            if dates.get(t) and to_date(d) != dates[t]:
+                f.add(CONTRADICTION, f"{doc}:{ln}",
+                      f"`{t}` dated {d}, the registry dates it {dates[t]}",
+                      "the changelog spine is shared: same tag, same date",
+                      "40 revision order")
+
+
+PROVISIONAL = re.compile(
+    r"\[PROVISIONAL:\s*([A-Za-z_][\w.]*)(?:\s+(\d{4}-\d{2}-\d{2}))?\s*\]")
+
+
+def resolve_marker_ref(facts: dict, ref: str):
+    """-> (label, entry) or (ref, None)."""
+    parsed = parse_ref(ref)
+    if parsed:
+        return f"{parsed[0]}.{parsed[1]}", registry_entry(facts, *parsed)
+    if ref in facts and isinstance(facts.get(ref), dict):
+        return ref, facts[ref]                    # e.g. tests_baseline
+    owner = registry_ids(facts).get(ref)
+    if owner:
+        return f"{owner}.{ref}", registry_entry(facts, owner, ref)
+    return ref, None
+
+
+def settled_state(entry: dict) -> str | None:
+    """What makes a provisional sentence due for rewriting, without a date."""
+    if is_retracted(entry):
+        return "retracted"
+    st = norm(entry.get("status"))
+    if st in ("dead", "fixed", "approved", "retired"):
+        return f"`status: {st}`"
+    if entry.get("built_on"):
+        return f"built {entry['built_on']}"
+    if norm(entry.get("basis")) == "measured":
+        return "`basis: measured`"
+    return None
+
+
+def check_provisional_markers(facts: dict, prose: dict[str, str],
+                              f: Findings) -> None:
+    """Check 41. `sync` propagates VALUES. A sentence that was true when written —
+    "the repository contains no application code", "no test has run here" — has no
+    value to propagate, so it stays true on the page for as long as nobody rereads
+    it. Real case: fifteen rounds, in the mock preamble of a test doc, while 133
+    tests existed.
+
+    A sentence written against a state the author KNOWS will change says so:
+    `[PROVISIONAL: <registry ref> YYYY-MM-DD]`. The ref is what will settle it, the
+    date is when it was written. The marker becomes a finding the moment the ref
+    moves past that date — built, measured, revised, retired — or reaches a state
+    that settles it outright. Without a date it fires on the settled state alone."""
+    for doc, text in prose.items():
+        clean = blank_fences(text)
+        for m in PROVISIONAL.finditer(clean):
+            ln = clean[:m.start()].count("\n") + 1
+            label, entry = resolve_marker_ref(facts, m.group(1))
+            if not isinstance(entry, dict):
+                f.add(DRIFT, f"{doc}:{ln}",
+                      f"`[PROVISIONAL: {m.group(1)}]` names nothing in the registry",
+                      "point it at the entry whose change will make the sentence "
+                      "false — `changes.C1`, `tests_baseline`, `defects.D3`",
+                      "41 provisional prose")
+                continue
+            written = to_date(m.group(2))
+            state = settled_state(entry)
+            final = state and not state.startswith(("built", "`basis"))
+            why = state if written is None or final else None
+            if why is None:
+                later = [(fld, d) for fld, d in moved_on(entry) if d > written]
+                if later:
+                    fld, d = max(later, key=lambda x: x[1])
+                    why = f"`{fld}: {d}`, after the marker's {written}"
+            if why:
+                f.add(DRIFT, f"{doc}:{ln}",
+                      f"provisional on `{label}`, which has since moved ({why})",
+                      "reread the paragraph against what is true now, rewrite it, "
+                      "and drop the marker",
+                      "41 provisional prose")
+
+
+def citing_pattern(container: str, key: str) -> re.Pattern:
+    if container in LIST_ID_CONTAINERS:
+        return re.compile(r"(?<![\w.])%s(?![\w])" % re.escape(key))
+    return re.compile(r"(?<![\w])%s\.%s(?![\w])" % (re.escape(container),
+                                                     re.escape(key)))
+
+
+def check_doc_freshness(facts: dict, prose: dict[str, str], status_rank: int,
+                        c: Candidates) -> None:
+    """Check 42, a candidate generator. A document regenerated on a date is right
+    about the registry AS OF that date; every entry it cites that moved afterwards
+    is a sentence that may now be false. Real case: the document handed to an
+    external reviewer went 31 rounds untouched and carried five false claims, one
+    of them contradicting a measurement in its own registry.
+
+    Candidate, not finding: most sentences citing a moved entry are still true —
+    a component that got built is still the component the doc describes. Which
+    ones are not is a reading, and the list is what makes the reading short."""
+    docs = [d for d in facts.get("docs") or [] if isinstance(d, dict)]
+    moved: list[tuple[str, re.Pattern, list[tuple[str, datetime.date]]]] = []
+    for container in ID_CONTAINERS:
+        for key, entry in registry_container_entries(facts, container).items():
+            dates = moved_on(entry)
+            if dates:
+                moved.append((f"{container}.{key}", citing_pattern(container, key),
+                              dates))
+    if not moved:
+        return
+    for d in docs:
+        name = str(d.get("file") or "")
+        if name not in prose:
+            continue
+        stamp = to_date(d.get("regenerated_on"))
+        if stamp is None:
+            if status_rank >= STATUS_RANK["implementing"]:
+                c.add("42", name, "no `regenerated_on:` in `docs[]` — this doc cannot "
+                      "be dated against the entries it cites")
+            continue
+        text = blank_fences(prose[name])
+        hits = []
+        for label, pat, dates in moved:
+            newer = [(fld, dt) for fld, dt in dates if dt > stamp]
+            if newer and pat.search(text):
+                fld, dt = max(newer, key=lambda x: x[1])
+                hits.append((dt, f"{label} ({fld} {dt})"))
+        # Most recent first: the entry that moved last is the likeliest to have
+        # left a sentence behind, and the list is truncated.
+        hits = [h for _, h in sorted(hits, key=lambda x: x[0], reverse=True)]
+        if hits:
+            shown = ", ".join(hits[:8]) + (f", +{len(hits) - 8} more"
+                                           if len(hits) > 8 else "")
+            c.add("42", name, f"regenerated {stamp}; cites {len(hits)} entr"
+                  f"{'y' if len(hits) == 1 else 'ies'} that moved since: {shown}")
+
+
+def check_contract_code(facts: dict, repo_root: Path, f: Findings,
+                        c: Candidates) -> None:
+    """Check 43. Check 3 compares `contracts.*` with prose; nothing compared it with
+    the code that reads the payload at runtime. A field could be added to the
+    registry and to seven documents and still be missing from the validator — the
+    first symptom an `undefined` three phases away from the cause.
+
+    `validated_in:` names the file that checks the contract. The field-name search
+    is a grep, never an execution, and it produces candidates: a validator that
+    loops over a list built elsewhere names no field at all and is still correct.
+    The real bridge is a contract parity test in the repo (references/
+    implementable.md §Contract parity); this points at where one is missing."""
+    node = facts.get("contracts")
+    if not isinstance(node, dict):
+        return
+    blocks = contract_blocks(facts)
+    for cid, entry in node.items():
+        if not isinstance(entry, dict) or not entry.get("validated_in"):
+            continue
+        fields: set[str] = set()
+        for label, keys in blocks:
+            if label == f"contracts.{cid}" or label.startswith(f"contracts.{cid}."):
+                fields |= keys
+        for raw in as_list(entry.get("validated_in")):
+            raw = str(raw).split(":")[0].strip()
+            target = confined(repo_root, raw)
+            if target is None or not target.is_file():
+                f.add(CONTRADICTION, f"contracts.{cid}",
+                      f"`validated_in: {raw}` does not resolve to a file in the repo",
+                      "point it at the validator that reads this payload at runtime",
+                      "43 contract vs code")
+                continue
+            code = target.read_text(encoding="utf-8", errors="ignore")
+            missing = sorted(k for k in fields
+                             if not re.search(r"(?<![\w])%s(?![\w])" % re.escape(k),
+                                              code))
+            if missing:
+                c.add("43", f"contracts.{cid}",
+                      f"{raw} never names {', '.join(f'`{k}`' for k in missing)}")
+
+
+def check_defect_status_vocabulary(facts: dict, f: Findings) -> None:
+    """Check 27's precondition. The cascade reads `status: dead` and nothing else,
+    so a defect closed with any other word is closed where no rule can see it.
+    Real case: six defects closed as `status: resolved` — two of them FALSE, one
+    with a whole component deferred on it — and not one dependant was revisited,
+    because `resolved` matched no rule. Same failure as §Enum fields: a gate that
+    fails open reads as a pass."""
+    for e in facts.get("defects") or []:
+        if not isinstance(e, dict) or e.get("status") is None:
+            continue
+        st = norm(e.get("status"))
+        if st not in DEFECT_STATUSES:
+            f.add(DRIFT, f"defects.{e.get('id', '?')}",
+                  f"`status: {e.get('status')}` is not open | fixed | dead",
+                  "refuted → `dead`; confirmed → `basis: measured` and `open` until "
+                  "the fix lands, then `fixed`. Nothing depending on this entry is "
+                  "revisited while the word is unknown",
+                  "27 dead-dependency cascade")
+
+
+def check_changes_defect_cascade(facts: dict, f: Findings) -> None:
+    """Check 34, the defect half. A `changes[]` entry can rest on a hypothesis as
+    well as on a decision: "C11 deferred until D1 is verified". When D1 resolved —
+    false — the deferral turned from provisional into permanent, and no rule asked
+    anyone to say so. `depends_on: [defects.D1]` plus `reviewed_on:` makes the
+    arrow followable: a dependency that settled after the entry was last reviewed
+    is DRIFT."""
+    for idx, e in enumerate(facts.get("changes") or []):
+        if not isinstance(e, dict):
+            continue
+        cid = str(e.get("id") or e.get("file") or f"[{idx}]")
+        reviewed = to_date(e.get("reviewed_on"))
+        for dep in e.get("depends_on") or []:
+            parsed = parse_ref(dep)
+            if parsed and parsed[0] not in ("defects", "alternatives"):
+                continue
+            key = parsed[1] if parsed else str(dep)
+            target = next((x for k in ("defects", "alternatives")
+                           for x in facts.get(k) or []
+                           if isinstance(x, dict) and str(x.get("id")) == key), None)
+            if target is None:
+                continue
+            st = norm(target.get("status"))
+            measured = norm(target.get("basis")) == "measured"
+            if not (st in ("dead", "fixed") or measured):
+                continue
+            when = max((d for _, d in moved_on(target)), default=None)
+            if reviewed and (when is None or reviewed >= when):
+                continue
+            state = f"`status: {st}`" if st in ("dead", "fixed") else "`basis: measured`"
+            f.add(DRIFT, f"changes.{cid}",
+                  f"depends on `{key}`, now {state}"
+                  + (f" ({when})" if when else "")
+                  + (f", with `reviewed_on: {reviewed}` before that" if reviewed
+                     else ", and was never `reviewed_on:` since"),
+                  "the premise has an answer — confirm `kind:` still holds (a "
+                  "deferral waiting on it may now be permanent, or due), then set "
+                  "`reviewed_on:`",
+                  "34 changes[] dependency on a revised decision")
+
+
+LOG_MAX_LINES = 800
+LOG_FILE_RECORD_ANY = re.compile(
+    r"`?(?P<file>[\w./-]+\.(?:md|ya?ml|tpl|json))`?(?:\s*\((?P<inner>[^()]*)\))?")
+
+
+def git_blob(data: bytes) -> str:
+    import hashlib
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
+                        f: Findings) -> None:
+    """Check 16, the half that is parsing. Round ids, the three required fields,
+    and the versions each entry recorded against the files as they are now.
+
+    Real case for the last one: the command opening a round's stub failed with a
+    shell error, the author read the next line of output instead, and worked a
+    whole round with nothing on disk. Noticed only at the end, when the closing
+    edit found no anchor. A file whose line count or blob no longer matches the
+    last entry that recorded it is exactly that round, seen from the next one.
+
+    `_log.md` grows without bound, and the log outranks the context window only
+    while it fits in one — past LOG_MAX_LINES it is rotated, never summarized."""
+    log = spec_dir / "_log.md"
+    if not log.is_file():
+        return
+    raw = log.read_text(encoding="utf-8")
+    text = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), raw,
+                  flags=re.S)
+    heads = list(re.finditer(r"^## (R(\d+))\b(.*)$", text, re.M))
+    last = 0
+    incomplete: list[tuple[int, str, list[str]]] = []
+    for i, h in enumerate(heads):
+        n = int(h.group(2))
+        ln = text[:h.start()].count("\n") + 1
+        # A stub and its completion written as two consecutive headings with one
+        # id is one round in two passes — the stub rule's own shape, appended
+        # rather than edited in place. Its fields are read across both.
+        if i and n == last and int(heads[i - 1].group(2)) == n:
+            continue
+        if n <= last:
+            f.add(CONTRADICTION, f"_log.md:{ln}",
+                  f"`{h.group(1)}` after R{last} — round ids must increase",
+                  "findings are addressed as `R<n>-F<m>`; a repeated or backwards id "
+                  "breaks every reference to them",
+                  "16 handoff log")
+        last = max(last, n)
+        parts = [p for p in re.split(r"\s+·\s+", h.group(3).strip(" ·")) if p]
+        j = i + 1
+        while j < len(heads) and int(heads[j].group(2)) == n:
+            j += 1
+        body = text[h.end():heads[j].start() if j < len(heads) else len(text)]
+        missing = [lbl for lbl, ok in (
+            ("agent", len(parts) >= 2),
+            ("Read:", re.search(r"^\*\*Read:\*\*", body, re.M)),
+            ("Log read through:", re.search(r"^\*\*Log read through:\*\*", body, re.M)),
+        ) if not ok]
+        if missing:
+            incomplete.append((ln, h.group(1), missing))
+    # A log that stopped recording the fields did so for a stretch of rounds, not
+    # one. Fifteen identical findings bury the rest of the report; one finding
+    # naming the fifteen does not.
+    why = ("without them the entry cannot be checked against anything, which is the "
+           "only thing it was for")
+    if len(incomplete) > 3:
+        fields = sorted({m for _, _, ms in incomplete for m in ms})
+        f.add(DRIFT, f"_log.md:{incomplete[0][0]}",
+              f"{len(incomplete)} entries miss {', '.join(fields)}: "
+              + ", ".join(f"`{rid}` ({', '.join(ms)})" for _, rid, ms in incomplete),
+              why, "16 handoff log")
+    else:
+        for ln, rid, missing in incomplete:
+            f.add(DRIFT, f"_log.md:{ln}", f"`{rid}` has no {', '.join(missing)}",
+                  why, "16 handoff log")
+
+    # Only the fields that claim a version: `**Read:**` and `**Edits:**` lines. A
+    # file named in narrative is not a claim about which version was read.
+    recorded: dict[str, tuple[int, str | None, int | None]] = {}
+    for fm in re.finditer(r"^\*\*(?:Read|Edits):\*\*.*$", text, re.M):
+        base = text[:fm.start()].count("\n") + 1
+        for m in LOG_FILE_RECORD_ANY.finditer(fm.group(0)):
+            inner = m.group("inner") or ""
+            lines = re.search(r"(\d+)\s*(?:lines?|líneas?)", inner)
+            blob = re.search(r"blob\s+([0-9a-f]{7,40})", inner)
+            short = re.fullmatch(r"\s*(\d+)\s*,\s*([0-9a-f]{7,40})\s*", inner)
+            if short:           # `(520, c732dbe)` — the same record, abbreviated
+                lines, blob = short, re.match(r".*?,\s*([0-9a-f]{7,40})", inner)
+            recorded[m.group("file")] = (base, blob.group(1) if blob else None,
+                                         int(lines.group(1)) if lines else None)
+    for name, (ln, blob, nlines) in sorted(recorded.items()):
+        target = next((p for p in (confined(spec_dir, name), confined(repo_root, name))
+                       if p is not None and p.is_file()), None)
+        if target is None or target.name == "_log.md":
+            continue
+        if blob is None and nlines is None:
+            # Required of the set's own files. A code file named in `Edits:` is a
+            # pointer to what changed, and its version is git's business.
+            ours = target.resolve().parent == spec_dir.resolve() \
+                or target.name == "_profile.yml"
+            if not ours:
+                continue
+            f.add(DRIFT, name,
+                  f"last named at _log.md:{ln} with no line count or blob",
+                  "record `(<n> lines, blob <sha7>)` for every file read or edited — "
+                  "without it the version that round worked against cannot be checked",
+                  "16 handoff log")
+            continue
+        data = target.read_bytes()
+        now_lines = data.count(b"\n")
+        now_blob = git_blob(data)
+        if (nlines is not None and nlines != now_lines) or \
+                (blob and not now_blob.startswith(blob)):
+            f.add(DRIFT, name,
+                  f"last recorded at _log.md:{ln} as "
+                  f"{nlines if nlines is not None else '?'} lines"
+                  + (f", blob {blob}" if blob else "")
+                  + f"; now {now_lines} lines, blob {now_blob[:7]}",
+                  "someone edited without recording it — or a round's stub never "
+                  "reached the disk. Append the entry that accounts for this version",
+                  "16 handoff log")
+
+    total = raw.count("\n")
+    if total > LOG_MAX_LINES:
+        f.add(POLISH, "_log.md", f"{total} lines — past what one read can hold",
+              "rotate, never summarize: references/handoff.md §Rotating the log",
+              "16 handoff log")
+
+
+# --------------------------------------------------------------------------
 # output
 # --------------------------------------------------------------------------
 
@@ -2533,10 +3229,20 @@ HUMAN_PASS = [
      "corroborate; `profile:` pointing somewhere the upward walk does not resolve "
      "today. The script settles `repo:` and `app:` and nothing else", None),
     ("16", "handoff log integrity", "only once `_log.md` exists. The script settles "
-     "the `Stage:` line against `status:`; a person still checks that each file's "
-     "current `wc -l` + `git hash-object` match what the last entry naming it "
-     "recorded, that no finding is carried two rounds with no disposition, that a "
-     "`rejected` disposition cites output, and that round ids are monotonic", None),
+     "the `Stage:` line, round-id order, the three required fields, the size, and "
+     "each file's `wc -l` + blob against the last entry that recorded them; a person "
+     "still checks that no finding is carried two rounds with no disposition and "
+     "that a `rejected` disposition cites output", None),
+    ("42", "prose older than what it cites", "the candidates below are docs whose "
+     "`regenerated_on:` predates a change to an entry they cite — built, measured, "
+     "revised, retired. `sync` moves values; a sentence that stopped being true has "
+     "no value to move. Most citations of a moved entry are still right; read each "
+     "listed one against the entry as it is now, then bump `regenerated_on:`", None),
+    ("43", "contract vs the code that validates it", "the candidates below are "
+     "`contracts.*` fields the `validated_in:` file never names. A validator that "
+     "loops over a list defined elsewhere names none and is still right — the "
+     "durable answer is a contract parity test in the repo "
+     "(references/implementable.md §Contract parity)", None),
     ("28", "`tracking.issues` / `pr` / `milestone` on GitHub", "deliberately NOT "
      "automated: an auditor that makes network calls is a different kind of tool. "
      "`gh issue view` / `gh pr view` and check the state matches `status:`", None),
@@ -2719,6 +3425,14 @@ def main(argv: list[str] | None = None) -> int:
     check_acceptance_state(facts, rank, f)
     check_dead_dependency_cascade(facts, f)
     check_changes_decision_cascade(facts, f)
+    check_changes_defect_cascade(facts, f)
+    check_defect_status_vocabulary(facts, f)
+    check_unique_ids(facts, f)
+    check_source_coverage(facts, repo_root, rank, f)
+    check_built_state(facts, repo_root, rank, f)
+    check_revision_order(facts, prose, f)
+    check_provisional_markers(facts, prose, f)
+    check_contract_code(facts, repo_root, f, c)
     check_file_existence(facts, repo_root, rank, f)
     check_anchors(facts, prose, repo_root, f)
     check_orphan_and_dangling_ids(facts, prose, f)
@@ -2740,10 +3454,12 @@ def main(argv: list[str] | None = None) -> int:
         # record it yet; reporting that would be the one finding the preview itself
         # manufactures.
         check_log_stage(facts, spec_dir, f)
+    check_log_integrity(facts, spec_dir, repo_root, f)
     check_prose_orphans(facts, prose, c)
     check_contract_shape(facts, prose, c)
     check_cross_refs(facts, prose, in_scope, c)
     check_doc02_executability(facts, prose, in_scope, c)
+    check_doc_freshness(facts, prose, rank, c)
 
     audited_as = (args.as_status if args.as_status
                   and norm(args.as_status) != norm(declared_status) else None)
