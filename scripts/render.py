@@ -210,6 +210,11 @@ class MarkdownRenderer:
                 i += 1
             if para:
                 out.append("<p>" + _inline(" ".join(para)) + "</p>")
+            else:
+                # A `|` line with no separator under it: not a table, and refused by
+                # the paragraph above. Left unconsumed, this loop never ends.
+                out.append("<p>" + _inline(line.strip()) + "</p>")
+                i += 1
 
         return "\n".join(out)
 
@@ -298,7 +303,8 @@ STOP_VALUES = {
 # registry paths that describe the set itself rather than a datum cited in prose
 STOP_PATH_PREFIXES = ("docs[", "feature", "profile")
 # keys whose scalar is structural, not a shared datum cited in prose
-STOP_KEY_TAILS = {"basis", "how", "status", "role", "outcome", "id", "tag"}
+STOP_KEY_TAILS = {"basis", "how", "status", "role", "outcome", "id", "tag",
+                  "kind", "where"}
 
 
 def walk(node, path: str = ""):
@@ -1206,6 +1212,38 @@ def build_defects(facts: dict) -> str:
     return "".join(parts)
 
 
+def trace_datums(facts: dict, docs: list[dict]) -> tuple[
+        dict[str, list[str]], dict[str, dict[str, int]], list[str]]:
+    """Both passes over the docs. -> (datums, citation counts per doc id, dangling
+    refs); each doc gains its `html` and `headings`.
+
+    Shared with `audit.py`, which prints its correspondence matrix from this same
+    call: the table in the terminal and the one in the page are one count, not two
+    that agree today."""
+    datums = {v: p for v, p in collect_datums(facts).items()
+              if not all(x.startswith(STOP_PATH_PREFIXES) for x in p)}
+    rx = build_datum_regex(datums)
+
+    # pass 1: markdown -> html, collecting headings for cross-ref resolution
+    sections: dict[str, dict[str, str]] = {}
+    for d in docs:
+        renderer = MarkdownRenderer(prefix=f"d{d['id']}-")
+        d["html"] = renderer.render(d["text"])
+        d["headings"] = renderer.headings
+        sections[d["id"]] = {h["number"]: h["id"] for h in renderer.headings if h["number"]}
+
+    # pass 2: cross-refs, then provenance (order matters — refs may contain datums)
+    dangling: list[str] = []
+    per_doc: dict[str, dict[str, int]] = {}
+    doc_ids = [x["id"] for x in docs]
+    for d in docs:
+        d["html"] = link_crossrefs(d["html"], d["id"], sections, dangling, doc_ids)
+        hits: dict[str, int] = {}
+        d["html"] = mark_provenance(d["html"], datums, rx, hits)
+        per_doc[d["id"]] = hits
+    return datums, per_doc, dangling
+
+
 def build_matrix(datums: dict[str, list[str]], per_doc: dict[str, dict[str, int]],
                  docs: list[dict]) -> tuple[str, list[str]]:
     rows = []
@@ -1303,27 +1341,7 @@ def build_page(spec_dir: Path) -> str:
 
     claims = collect_claims(facts)
     warnings = status_gate(facts, claims) + escaped_docs
-    datums = {v: p for v, p in collect_datums(facts).items()
-              if not all(x.startswith(STOP_PATH_PREFIXES) for x in p)}
-    rx = build_datum_regex(datums)
-
-    # pass 1: markdown -> html, collecting headings for cross-ref resolution
-    sections: dict[str, dict[str, str]] = {}
-    for d in docs:
-        renderer = MarkdownRenderer(prefix=f"d{d['id']}-")
-        d["html"] = renderer.render(d["text"])
-        d["headings"] = renderer.headings
-        sections[d["id"]] = {h["number"]: h["id"] for h in renderer.headings if h["number"]}
-
-    # pass 2: cross-refs, then provenance (order matters — refs may contain datums)
-    dangling: list[str] = []
-    per_doc: dict[str, dict[str, int]] = {}
-    doc_ids = [x["id"] for x in docs]
-    for d in docs:
-        d["html"] = link_crossrefs(d["html"], d["id"], sections, dangling, doc_ids)
-        hits: dict[str, int] = {}
-        d["html"] = mark_provenance(d["html"], datums, rx, hits)
-        per_doc[d["id"]] = hits
+    datums, per_doc, dangling = trace_datums(facts, docs)
 
     matrix_html, orphans = build_matrix(datums, per_doc, docs)
 

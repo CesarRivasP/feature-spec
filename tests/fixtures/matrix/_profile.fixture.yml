@@ -1,0 +1,4 @@
+# This mini-repo's own profile, so `--read-line` has one to stamp and check 16 has
+# one to compare it against.
+repo: matrix
+prose_language: es

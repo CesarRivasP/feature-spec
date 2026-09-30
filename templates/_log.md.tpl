@@ -8,9 +8,10 @@ next round re-deriving it.
 If your context disagrees with the log, your context is stale: re-read the files
 the last entry names, at the versions it names.
 
-Hashes: `git hash-object <file>` (no commit or staging needed, works on
-gitignored files) — first 7 chars, plus `wc -l`. Both. Full contract and the
-disposition rules in `references/handoff.md`.
+Hashes: `python3 scripts/audit.py <dir> --read-line [FILE ...]` prints the
+`Read:` line. By hand: `git hash-object <file>` (no commit or staging needed,
+works on gitignored files) — first 7 chars, plus `wc -l`. Both. Full contract
+and the disposition rules in `references/handoff.md`.
 
 ---
 

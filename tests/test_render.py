@@ -61,11 +61,34 @@ def check_escaping_doc() -> list[str]:
     return failures
 
 
+def check_stray_pipe() -> list[str]:
+    """A table row with no header above it must render, and the render must END.
+
+    `audit.py` prints its correspondence matrix from this renderer, so a doc that
+    hangs the view now hangs the audit with it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "view.html"
+        try:
+            subprocess.run(
+                [sys.executable, str(RENDER), str(FIXTURES / "render-stray-pipe"),
+                 "-o", str(out)], capture_output=True, text=True, timeout=30)
+        except subprocess.TimeoutExpired:
+            return ["render-stray-pipe: a `|` line with no separator under it hangs "
+                    "the renderer"]
+        html = out.read_text(encoding="utf-8") if out.is_file() else ""
+    failures = []
+    if "fila suelta tras una línea en blanco" not in html:
+        failures.append("render-stray-pipe: the stray row was dropped from the page")
+    if "Texto después de la fila suelta" not in html:
+        failures.append("render-stray-pipe: nothing after the stray row was rendered")
+    return failures
+
+
 def main() -> int:
     verbose = "-v" in sys.argv[1:]
     failures: list[str] = []
     n = 0
-    for fn in (check_xss_link, check_escaping_doc):
+    for fn in (check_xss_link, check_escaping_doc, check_stray_pipe):
         f = fn()
         n += 1
         if verbose:
