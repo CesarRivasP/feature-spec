@@ -26,7 +26,7 @@ So: anything the repo cannot tell you, and that a wrong value would carry into t
 
 ## Intake set A — the profile (once per repo, in `new` step 0)
 
-Skip entirely if the upward walk from the spec directory finds a `_profile.yml` (see `SKILL.md` `new` step 0). Only ask about `null` fields when a spec actually needs them.
+Skip entirely if the upward walk from the spec directory finds a `_profile.yml` (see `references/mode-new.md` step 0). Only ask about `null` fields when a spec actually needs them.
 
 If the walk finds one but it sits **further up than the app you are speccing** — a monorepo root profile while you are inside one variant — that is a question, not a default: confirm whether this app shares it or needs its own. Inheriting the wrong `app_id` is silent.
 
