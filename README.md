@@ -29,7 +29,7 @@ cp -R feature-spec ~/.claude/skills/
 To pin a version instead of tracking `main`:
 
 ```bash
-git clone --branch v1.17.0 --depth 1 git@github.com:CesarRivasP/feature-spec.git
+git clone --branch v1.18.0 --depth 1 git@github.com:CesarRivasP/feature-spec.git
 ```
 
 Restart the session so the skill is picked up. No MCP servers, no package to install: the skill itself is markdown and YAML.
@@ -242,6 +242,9 @@ references/
   doc-pattern.md                      the 4-doc pattern, splitting, heading language
   implementable.md                    how to write doc 02 for a context-free executor
   render.md                           what the HTML view reads, its invariants, the gates it surfaces
+  parallel.md                         splitting a mode across subagents by tier; runners claude / agy / inline
+agents/
+  spec-strong.md · spec-mid.md · spec-cheap.md   read-only tier definitions to copy into .claude/agents/
 scripts/
   audit.py                            the mechanized checks; shares its registry core with render.py
   render.py                           the renderer: spec set -> one self-contained view.html
@@ -274,7 +277,8 @@ If anything outside this repo reads `docs/features/`, check its patterns when yo
 
 | version | what it added |
 |---|---|
-| [**v1.17.0**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.17.0) | `audit.py <dir> --index` prints the registry's table of contents: every top-level key and every entry with its line span, from the YAML parser's own marks, labelled with its enum fields. A round reads the entries it touches by offset instead of the whole file — a 142KB registry indexes in 6KB, a 307KB one in 11KB. Spans stop at the entry: the comment above it and the blank after it belong to neither |
+| [**v1.18.0**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.18.0) | `review` can run in parallel, opt-in per repo (`_profile.yml parallel:`). Work is sorted by what it demands — judgment, derivation, transcription — into tiers `strong` / `mid` / `cheap`, and the profile maps each tier to whatever the runner can start: a Claude model or agent (`agents/spec-*.md`, read-only, with `model` + `effort`), or an AGY model id (`gemini-3.8-flash-high/-medium/-low`). Subagents write nothing; the main session writes every file and names each subagent in the log stub before starting any. Measured on one real set with two layers, `n: 1`: 101 s vs 158 s, 217k vs 97k tokens, and different findings rather than more — so it stays off unless waiting is the cost that matters. `references/parallel.md` |
+| [v1.17.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.17.0) | `audit.py <dir> --index` prints the registry's table of contents: every top-level key and every entry with its line span, from the YAML parser's own marks, labelled with its enum fields. A round reads the entries it touches by offset instead of the whole file — a 142KB registry indexes in 6KB, a 307KB one in 11KB. Spans stop at the entry: the comment above it and the blank after it belong to neither |
 | [v1.16.1](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.16.1) | Check 16's log-size `POLISH` counts bytes too: past 800 lines **or** 80KB, whichever comes first. A real log of long entries was 103KB — about 26k tokens — at 701 lines, and the line threshold alone let it through |
 | [v1.16.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.16.0) | `audit-protocol.md` stops carrying what the agent is told not to do. The 26 `[script]` checks were 33KB of its 75KB, read on every audit by an agent the same file tells not to re-run them. They moved verbatim to `references/audit-checks-script.md`, read when one of their findings needs explaining; the protocol keeps the checks that need a person, plus an index of the rest by number and name. 75KB → 44KB per audit |
 | [v1.15.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.15.0) | `SKILL.md` becomes a router. It was 51KB loaded on every invocation, whichever mode ran; it is 12KB now — the layout, the log-first rule, one table row per mode saying what it does and what it refuses, and the eight rules that decide most rounds. Each mode's full procedure moved verbatim to `references/mode-<name>.md`, and the rules to `references/rules.md`; a mode reads its own file before running and nothing else. Same words, in the file that needs them |
