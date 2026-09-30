@@ -3055,6 +3055,9 @@ def check_changes_defect_cascade(facts: dict, f: Findings) -> None:
 
 
 LOG_MAX_LINES = 800
+# Lines undercount a log written in long paragraphs. Real case: 701 lines, 103KB — about
+# 26k tokens, well past what one read holds, and silent under the line threshold alone.
+LOG_MAX_BYTES = 80_000
 LOG_FILE_RECORD_ANY = re.compile(
     r"`?(?P<file>[\w./-]+\.(?:md|ya?ml|tpl|json))`?(?:\s*\((?P<inner>[^()]*)\))?")
 
@@ -3076,7 +3079,8 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
     last entry that recorded it is exactly that round, seen from the next one.
 
     `_log.md` grows without bound, and the log outranks the context window only
-    while it fits in one — past LOG_MAX_LINES it is rotated, never summarized."""
+    while it fits in one — past LOG_MAX_LINES or LOG_MAX_BYTES it is rotated, never
+    summarized."""
     log = spec_dir / "_log.md"
     if not log.is_file():
         return
@@ -3175,9 +3179,10 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
                   "reached the disk. Append the entry that accounts for this version",
                   "16 handoff log")
 
-    total = raw.count("\n")
-    if total > LOG_MAX_LINES:
-        f.add(POLISH, "_log.md", f"{total} lines — past what one read can hold",
+    total, size = raw.count("\n"), len(raw.encode("utf-8"))
+    if total > LOG_MAX_LINES or size > LOG_MAX_BYTES:
+        f.add(POLISH, "_log.md",
+              f"{total} lines, {size // 1000}KB — past what one read can hold",
               "rotate, never summarize: references/handoff.md §Rotating the log",
               "16 handoff log")
 
