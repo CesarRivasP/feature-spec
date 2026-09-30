@@ -67,7 +67,7 @@ The full list is `references/rules.md` — every mode that writes is held to it,
 ## References
 - `references/mode-<name>.md` — one per mode, the full procedure; `references/rules.md` — the rules every writing mode is held to.
 - `references/doc-pattern.md` — the 4-doc pattern, section skeletons, naming, cross-ref rules.
-- `references/audit-protocol.md` — the exact mechanical checks + severity taxonomy + matrix format.
+- `references/audit-protocol.md` — the checks that need a human pass, the index of the ones the script settles, severity taxonomy, matrix format. `references/audit-checks-script.md` — the full text of every `[script]` check, read only when one of its findings needs explaining.
 - `references/gap-sweep.md` — the `review` mode checklist: does this spec add functional/security gaps? Stack layers alongside it: `gap-sweep-web-baas.md`, `gap-sweep-android-native.md`, `gap-sweep-mobile-tv.md`, `gap-sweep-payments-onprem.md`, `gap-sweep-web-3d-client.md`.
 - `references/intake.md` — the questions to ask before writing anything, batched, with what may never be guessed.
 - `references/handoff.md` — the append-only `_log.md`, for sets passed between agents: entry format, dispositions, and why the log beats the context window.
