@@ -1,0 +1,27 @@
+---
+source: vault ingestion prepends this frontmatter
+---
+# The registry's table of contents. Two documents in one stream, so the index reads
+# the last; block entries of different lengths; a comment and a blank line between
+# entries, which belong to neither span; one entry flow-style on one line.
+feature: registry-index
+status: draft
+defects:
+  - id: D1
+    role: root_cause
+    basis: asserted
+    claim: 'dos
+      líneas'
+
+  # comment between entries
+  - id: D2
+    role: symptom
+    basis: decided
+    outcome: 'a sentence long enough to be prose, never a label'
+limits:
+  cloudflare: { timeout: 100s, basis: decided }
+  resend:
+    route: resend-webhook
+    basis: measured
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

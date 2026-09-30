@@ -13,7 +13,7 @@ script FIRST, then the judgment pass over what it lists — in that order.
 
     python3 scripts/audit.py docs/features/<slug>/ [--repo-root DIR] [--json]
                              [--as-status STAGE] [--today YYYY-MM-DD]
-                             [--no-matrix] [--read-line [FILE ...]]
+                             [--no-matrix] [--read-line [FILE ...]] [--index]
 
 It never executes `evidence.cmd` (protocol check 1b). A registry is a data file that
 travels between repos and agents; running commands out of it because it claims they
@@ -3187,6 +3187,72 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
               "16 handoff log")
 
 
+INDEX_LABEL_KEYS = ("kind", "role", "basis", "status", "outcome")
+
+
+def _node_lines(key, value, lines: list[str]) -> tuple[int, int]:
+    """1-based inclusive line span of one entry, from the key (or list item) to the
+    last line its value occupies.
+
+    A block node's end mark sits at the next token — often the indentation of the
+    following key, one line past the entry. Only a mark with text before it on its
+    line ends ON that line. Trailing blank and comment lines belong to nobody."""
+    start = (key or value).start_mark.line + 1
+    m = value.end_mark
+    end = m.line + (1 if m.line < len(lines) and lines[m.line][:m.column].strip() else 0)
+    while end > start and (not lines[end - 1].strip()
+                           or lines[end - 1].lstrip().startswith("#")):
+        end -= 1
+    return start, max(start, end)
+
+
+def _scalar_fields(node) -> dict[str, str]:
+    if not isinstance(node, yaml.MappingNode):
+        return {}
+    return {k.value: v.value for k, v in node.value
+            if isinstance(k, yaml.ScalarNode) and isinstance(v, yaml.ScalarNode)}
+
+
+def registry_index(text: str) -> list[str]:
+    """The registry's table of contents: every top-level key, and every entry inside a
+    container, with the lines it spans.
+
+    A real registry reached 307KB, and every round read it whole to touch three
+    entries. This is what lets a round read the entries it needs by offset instead —
+    `Read(offset=start, limit=end-start+1)` — and the whole file only when it means
+    to. Spans come from the YAML parser's own marks, not from a regex over the text,
+    so a flow-style entry spanning four lines and a block entry spanning forty are
+    measured the same way. Comments above an entry belong to no span."""
+    lines = text.split("\n")
+    docs = list(yaml.compose_all(text))
+    root = docs[-1] if docs else None      # a vault-ingested registry: the last document
+    if not isinstance(root, yaml.MappingNode):
+        return []
+    out = []
+    for key, value in root.value:
+        a, b = _node_lines(key, value, lines)
+        inner = []
+        if isinstance(value, yaml.SequenceNode):
+            for i, item in enumerate(value.value):
+                f = _scalar_fields(item)
+                name = f.get("id") or f.get("file") or f"[{i}]"
+                inner.append((_node_lines(None, item, lines), name, f))
+        elif isinstance(value, yaml.MappingNode) and any(
+                isinstance(v, yaml.MappingNode) for _, v in value.value):
+            for k, v in value.value:
+                inner.append((_node_lines(k, v, lines), k.value, _scalar_fields(v)))
+        count = f" ({len(inner)})" if inner else ""
+        out.append(f"L{a}-{b}".ljust(12) + f"{key.value}{count}")
+        for (x, y), name, f in inner:
+            # Enum values only: `outcome:` is sometimes a paragraph, and an index
+            # line that carries one is no longer an index.
+            label = " · ".join(str(f[k]) for k in INDEX_LABEL_KEYS
+                               if f.get(k) and len(str(f[k])) <= 24 and " " not in str(f[k]))
+            out.append("  " + f"L{x}-{y}".ljust(12) + f"{key.value}.{name}"
+                       + (f"  {label}" if label else ""))
+    return out
+
+
 def read_line(facts: dict, spec_dir: Path, repo_root: Path,
               names: list[str]) -> tuple[str, list[str]]:
     """-> (the `**Read:**` line, names that resolve to no file).
@@ -3531,6 +3597,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-matrix", action="store_true",
                     help="leave the correspondence matrix out — for a re-run after "
                          "a fix, when the table was already read")
+    ap.add_argument("--index", action="store_true",
+                    help="print the registry's table of contents — each top-level "
+                         "key and each entry with its line span — and exit without "
+                         "auditing")
     ap.add_argument("--read-line", nargs="*", default=None, metavar="FILE",
                     help="print the `**Read:**` line of a `_log.md` entry — line "
                          "count and blob of each FILE, or of every file of the set "
@@ -3558,6 +3628,16 @@ def main(argv: list[str] | None = None) -> int:
         facts = dict(facts)
         facts["status"] = args.as_status
     repo_root, root_is_real = repo_root_for(spec_dir, args.repo_root)
+
+    if args.index:
+        text = facts_path.read_text(encoding="utf-8")
+        lines = registry_index(text)
+        print(f"# index — _facts.yml ({text.count(chr(10))} lines, "
+              f"blob {git_blob(text.encode('utf-8'))[:7]})\n")
+        print("Read an entry by its span: offset = first line, limit = last - first + 1."
+              "\n")
+        print("\n".join(lines))
+        return 0
 
     if args.read_line is not None:
         line, missing = read_line(facts, spec_dir, repo_root, args.read_line)

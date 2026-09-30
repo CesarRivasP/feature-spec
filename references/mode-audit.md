@@ -1,6 +1,8 @@
 # `audit <slug>` — consistency check (default: inline)
 **Resolve the stage first** (`references/audit-protocol.md` §Stage gating): `status:` ranks `draft < reviewed < implementing < shipped`, each `docs[]` entry declares the `stage:` it is written at, and checks 5, 6 and 13 only run once their doc is in scope. A doc that is out of scope but exists on disk is checked anyway. A set with no `stage:` fields anywhere audits exactly as it did before staging existed.
 
+**Read the registry by index, not whole.** `python3 scripts/audit.py docs/features/<slug>/ --index` prints every top-level key and every entry with its line span and its enum labels (`kind`, `role`, `basis`, `status`); read the entries a finding or a check points at by offset. A 142KB registry indexes in 6KB, a 307KB one in 11KB. Read the file whole only when the round means to.
+
 **Run the script, then the judgment pass — in that order.**
 
 ```
