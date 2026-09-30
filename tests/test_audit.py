@@ -605,6 +605,13 @@ CANDIDATE_CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] 
       ("8", "02-implementation.md:12")]),     # the first fence, by line: exempted
                                               #   inside the count, never on its own
 
+    # §13 — the test plan is its own doc since v1.14.0, and the sweep reads it as
+    # it reads `02`: an unresolved test-file path in `02e` is what the executor
+    # copies. `03` names the same shape and is not the builder's input.
+    ("tests-doc-02e",
+     [("13", "02e-tests-and-e2e.md:6")],
+     [("13", "03-stakeholder.md")]),
+
     # §42 — doc 01 predates what it cites; doc 02 cannot be dated at all.
     ("doc-freshness",
      [("42", "changes.C1"),

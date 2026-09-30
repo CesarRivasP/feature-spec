@@ -1,0 +1,16 @@
+# The default set since v1.14.0: the phases in `02`, the test plan in `02e`
+# (`role: tests`). Check 13 scans every doc whose id starts with `02`, so an
+# unresolved test-file path in `02e` is a candidate exactly as it would be in `02`
+# — the B.1 bullet is what the executor copies. `03` is not scanned: the step in
+# it names `path/to/` and must stay quiet.
+feature: tests-doc-02e
+status: reviewed
+profile: ../_profile.fixture.yml
+defects: []
+acceptance:
+  - { id: AC1, text: 'el toast aparece en menos de 300 ms', status: written }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation.md, role: implementation, stage: reviewed }
+  - { id: "02e", file: 02e-tests-and-e2e.md, role: tests, stage: reviewed }
+  - { id: "03", file: 03-stakeholder.md, role: stakeholder, stage: reviewed }

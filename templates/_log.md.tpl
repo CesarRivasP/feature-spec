@@ -37,7 +37,7 @@ and the disposition rules in `references/handoff.md`.
 **Read:** <every file re-opened, with lines + blob>
 **Log read through:** R3
 **Stage:** draft → reviewed — <who confirmed, and when; `review` findings all dispositioned>
-**Edits:** `02-implementation-and-e2e.md` (nuevo, <n> líneas) · `03-stakeholder-requirements.md` (nuevo, <n> líneas)
+**Edits:** `02-implementation.md` (nuevo, <n> líneas) · `02e-tests-and-e2e.md` (nuevo, <n> líneas) · `03-stakeholder-requirements.md` (nuevo, <n> líneas)
 **Still open:** <what remains>
 <!-- Stub FIRST (agent + versions read + what you are about to write), generate, THEN
      complete. This round writes the two biggest files in the set; if it dies partway,

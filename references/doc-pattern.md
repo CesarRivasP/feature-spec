@@ -1,12 +1,13 @@
-# Doc Pattern — the 3-doc feature spec set
+# Doc Pattern — the 4-doc feature spec set
 
-## Why three docs
+## Why four docs
 Each serves a distinct reader; splitting keeps each focused and lets the audit check that they agree.
 
 | Doc | Reader | Answers |
 |---|---|---|
 | `01-master-plan` | internal team + approver | What/why, architecture, data contracts, security, cost, risks, master checklist |
-| `02-implementation-and-e2e` | the engineer building it | File-by-file steps, verification per phase, unit/integration/E2E tests, Definition of Done |
+| `02-implementation` | the engineer building it | File-by-file steps, one verification pointer per phase |
+| `02e-tests-and-e2e` | the engineer proving it | Unit/integration test plan with the repo's mock preamble, manual E2E steps, Definition of Done |
 | `03-stakeholder-requirements` | the external owner (partner/other team) | Only what THEY must build/validate, the interface they receive, their checklist, joint test steps |
 
 ## Naming
@@ -15,6 +16,10 @@ Each serves a distinct reader; splitting keeps each focused and lets the audit c
 - `NN` is zero-padded order (01, 02, 03). `<slug>` is kebab-case, stable, shared across the set.
 - A doc that outgrows itself keeps its number and gains a letter: `02b-<what-it-holds>.md`. The letter says
   "continuation of 02", not "new role" — see *Splitting an oversized doc*.
+- **`02e` is reserved for the tests doc** (`role: tests`). It is not a split half: it exists from the first
+  `implement`, holds Parte B, Parte C and the Definition of Done, and inherits `02`'s preamble the way a half
+  does. Phase splits take `02b`, `02c`, `02d` and sort before it — `02e` stays last, where the reader
+  arrives after the phases. A set written before it existed keeps its tests inside `02`; nothing forces a move.
 - Match the repo's existing convention — detect it, don't impose.
 
 ## Splitting an oversized doc
@@ -91,7 +96,7 @@ The `.tpl` files carry the `es` rendering. `_profile.yml prose_language:` decide
 A set already written in one language does not get retranslated because the profile changed — that rewrites every cross-ref and every registry string for zero gain. The profile governs new sets.
 
 ## Cross-reference rules
-- Reference sibling docs by filename + section: `` `02-implementation-and-e2e.md` Fase 3 `` or `01-master-plan.md §4.1`.
+- Reference sibling docs by filename + section: `` `02-implementation.md` Fase 3 `` or `01-master-plan.md §4.1`. From `02e`, a phase is always `` `02` Fase 3 `` — a bare `Fase 3` reads as local and `02e` has none.
 - When a doc intentionally differs from the naive expectation (e.g. a field present in the wire contract but absent from the client body because it's injected downstream), add an explicit `>` note explaining it AND cross-ref the doc that owns the full contract. This turns a would-be CONTRADICTION into a documented, reconciled fact.
 
 ## Single-source-of-truth discipline

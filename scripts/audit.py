@@ -629,7 +629,8 @@ def check_doc02_executability(facts: dict, prose: dict[str, str],
       vague enumeration  `etc.`, `y similares`, `análogo a lo anterior`
       external step      dashboard / DNS / secret with no `[MANUAL]` label
 
-    Scoped to doc 02, which is what the check is about and what stage-gates it.
+    Scoped to every doc whose id starts with `02` — the phases, their split halves,
+    and `02e`, the test plan — which is what the check is about and what stage-gates it.
 
     The path sweep reads fenced blocks too — a `path/to/` inside a paste-ready
     snippet is the defect at its worst, since that is the text the builder copies.
@@ -3329,8 +3330,8 @@ HUMAN_PASS = [
      None),
     ("5", "checklist coverage", "each doc 01 checklist item has a counterpart in doc "
      "02 (implementation/test) and/or doc 03 (stakeholder)", "02|03"),
-    ("6", "acceptance parity", "doc 02's Definition of Done vs `acceptance[]`, "
-     "criteria with `status: retired` left out", "02"),
+    ("6", "acceptance parity", "the Definition of Done (doc 02e, or the doc that holds "
+     "it) vs `acceptance[]`, criteria with `status: retired` left out", "02"),
     ("7", "scope parity", "`changes[]` vs each doc's affected-components table. "
      "`related_docs[]` do NOT participate — one appearing in a \"what changes\" table "
      "is itself a CONTRADICTION", None),

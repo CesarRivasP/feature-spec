@@ -136,11 +136,11 @@ Every "ver doc 0X §Y" / "see doc 0X" points to a doc in `docs[]` and a section 
 - **Two shapes are exempt, and a sweep that flags them is producing noise:** (a) a section number quoted *as text* — a defect being described (`` fixed the cross-ref `§3.6`→`§3.5` ``) or an example — is not a ref; (b) a changelog clause that names the doc once and then enumerates what changed inside it (`` `02` gained §0.3b, §1.1, §2.5 ``) is narrative about one doc, not five navigation targets. Judge by whether a reader would *follow* the ref. Mechanical sweeps over-report here: verify each hit by eye before writing it up.
 
 ### 5. Checklist coverage — [human] *stage-gated (needs 02 or 03)*
-Each master-plan (doc 01) checklist item has a counterpart in doc 02 (implementation/test) and/or doc 03 (stakeholder). Item with no downstream counterpart → `DRIFT`.
+Each master-plan (doc 01) checklist item has a counterpart in doc 02 (implementation), doc 02e (test / E2E) and/or doc 03 (stakeholder). Item with no downstream counterpart → `DRIFT`.
 - **When neither 02 nor 03 is in scope yet, this check does not go quiet — it inverts.** Emit every doc 01 checklist item under `pending downstream coverage`, as a list, not a finding. That list is the input `implement` must cover; without it the items are simply unread until someone rediscovers them, which is how a checklist item becomes a shipped gap. Not covering one later IS the `DRIFT`.
 
 ### 6. Acceptance parity — [human] *stage-gated (needs 02)*
-Doc 02 "Definition of Done" (or, if 02 is split, whichever half holds it) == `_facts.yml acceptance[]` item-for-item, criteria with `status: retired` left out. Divergence → `CONTRADICTION`.
+The "Definition of Done" — doc 02e, or whichever doc holds it in a set written before `02e` existed — == `_facts.yml acceptance[]` item-for-item, criteria with `status: retired` left out. Divergence → `CONTRADICTION`.
 - Before 02 exists, `acceptance[]` has no copy to diverge from and there is nothing to compare. It is still authored, still audited by every registry-level check, and still the contract — it is the *parity* that waits, not the criteria.
 
 ### 7. Scope parity — [human]
@@ -182,7 +182,7 @@ For every `evidence.date` — and, in a set still on the legacy shape this file 
 This dates evidence. Prose that went stale while its evidence stayed fresh is checks 41 and 42.
 
 ### 13. Doc 02 executability — [script + human] *stage-gated (needs 02)*
-Parte A is the input to the builder. Scan it for:
+Parte A (doc 02) is the input to the builder and Parte B (doc 02e) the input to whoever proves it; every doc whose id starts with `02` is scanned. Scan for:
 - unresolved paths — `(o el componente correspondiente)`, `path/to/`, `…/algo` → `DRIFT`
 - named-but-undefined symbols — a constant/toast/env var referenced without its file, exported name, and literal value → `DRIFT`
 - edits with no anchor — "agregar X en Y" with no `file:line` or quoted neighboring line → `DRIFT`

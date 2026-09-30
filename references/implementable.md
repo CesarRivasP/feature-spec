@@ -46,7 +46,7 @@ Instrumentation added to prove or kill a hypothesis is part of the spec, not sca
 
 ## Tests
 
-Parte B lists *what* to assert; the executor needs *how* this repo asserts it.
+Parte B (doc `02e`) lists *what* to assert; the executor needs *how* this repo asserts it.
 
 - Name the test file path (existing or new) per bullet.
 - Include the repo's mock/setup preamble verbatim once — whatever this stack's is (`vi.mock` + `importOriginal` + setup file; `@Before` + MockK/Mockito rules + test runner annotation; a fake DI module). Copy it from a real test in the repo and say which file you copied it from. Inventing a preamble that doesn't match the repo's produces a test that cannot run.
