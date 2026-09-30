@@ -56,3 +56,14 @@ gap_sweep_layers: []       # e.g. [android-native] or [web-baas, mobile-tv]
 
 # --- optional: subagent for `audit --deep`. null = Explore / general-purpose. ---
 deep_review_agent: null
+
+# --- optional: split a mode across subagents by tier (references/parallel.md) ---
+# Absent = every mode runs serially, as before. `review` is the only parallel mode today.
+# A tier is whatever the runner can start: a Claude model or agent name, an AGY model id.
+# parallel:
+#   review_layers: true         # base sweep in `strong`, each gap_sweep_layers entry in `mid`
+#   runner: claude              # claude | agy | inline
+#   tiers:
+#     strong: spec-strong       # claude: agents/spec-*.md copied to .claude/agents/, or a bare model
+#     mid:    spec-mid          # agy:    gemini-3.8-flash-high / -medium / -low
+#     cheap:  spec-cheap
