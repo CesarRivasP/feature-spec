@@ -100,7 +100,7 @@ Repeat from 2 as needed. `verify` (device/instrumented observation) is its own a
 
 ## Rotating the log
 
-The log outranks the context window only while it fits in one. A real set reached 1140 lines in 39 rounds, and a log nobody reads to the end is a log whose last disposition nobody sees. Audit check 16 raises a `POLISH` past 800 lines.
+The log outranks the context window only while it fits in one. A real set reached 1140 lines in 39 rounds, and a log nobody reads to the end is a log whose last disposition nobody sees. Audit check 16 raises a `POLISH` past 800 lines or 80KB, whichever comes first — a log of long entries reached 103KB, about 26k tokens, at 701 lines.
 
 **Rotate; never summarize.** A summary is a new claim about old rounds, written by whoever is least able to tell which detail mattered — and the details that matter are exactly the ones a summary drops: a rejection's evidence, a measurement's conditions, the reasoning chain that turned a defect false. Rotation keeps every word.
 

@@ -868,9 +868,37 @@ def read_line_round_trips() -> list[str]:
     return problems
 
 
+def log_size_counts_bytes() -> list[str]:
+    """Check 16's size threshold, in both units. A log of long entries hit 103KB at
+    701 lines — about 26k tokens — and the line threshold alone let it through. The
+    control is the same text cut under both limits: it must stay quiet."""
+    problems = []
+    entry = ("## R{n} · 2026-09-30 · test · review\n**Read:** none\n"
+             "**Log read through:** R{p}\n" + "x" * 1500 + "\n\n")
+    for rounds, expect in ((60, True), (20, False)):
+        with tempfile.TemporaryDirectory() as tmp:
+            spec = Path(tmp) / "matrix"
+            shutil.copytree(FIXTURES / "matrix", spec)
+            (spec / "_log.md").write_text(
+                "".join(entry.format(n=i, p=i - 1) for i in range(1, rounds + 1)),
+                encoding="utf-8")
+            data = json.loads(subprocess.run(
+                [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec),
+                 "--json"], capture_output=True, text=True).stdout)
+            hit = any(f["check"].startswith("16") and "past what one read" in f["what"]
+                      for f in data["findings"])
+            if hit != expect:
+                problems.append(f"log size: {rounds} rounds of 1.5KB "
+                                f"({'over' if expect else 'under'} 80KB, under 800 lines) "
+                                f"{'not ' if expect else ''}reported")
+    return problems
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     failures, total = [], 0
+    total += 1
+    failures += log_size_counts_bytes()
 
     total += 1
     failures += accepted_risks_come_due()
