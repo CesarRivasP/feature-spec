@@ -1,0 +1,16 @@
+# The correspondence matrix, as a program counts it. `100s` is written out twice
+# in 01 and once in 03. `resend-webhook` appears only inside a fence in 02, which
+# is not prose. The note is written out in no doc. `kind:` and `where:` are enums:
+# the words `planned` and `repo` in doc 01 are not citations of anything.
+feature: matrix
+status: reviewed
+profile: _profile.fixture.yml
+limits:
+  cloudflare: { timeout: 100s, basis: decided, note: 'el proxy corta antes que el origen' }
+  resend: { route: resend-webhook, basis: decided }
+changes:
+  - { id: C1, file: src/handler.ts, kind: planned, where: repo, change: 'cortar la espera en el handler' }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation.md, role: implementation, stage: reviewed }
+  - { id: "03", file: 03-stakeholder.md, role: stakeholder, stage: reviewed }

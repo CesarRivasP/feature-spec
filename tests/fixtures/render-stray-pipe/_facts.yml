@@ -1,0 +1,8 @@
+# A table row with no header above it. Real case: a changelog whose rows were
+# separated by blank lines — every row after the first stood alone, a line opening
+# with `|` and no separator under it. The renderer's table branch declined it, its
+# paragraph branch declined it too, and the loop never advanced: `view` hung.
+feature: render-stray-pipe
+status: draft
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

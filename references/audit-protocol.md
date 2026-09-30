@@ -91,7 +91,9 @@ coming, before it comes.
 ## Checks
 
 ### 1. Data-vs-registry (highest priority) — [human]
-For every shared datum in `_facts.yml`, grep each doc for where it's cited. Assert the doc's value/wording is **identical**.
+For every shared datum in `_facts.yml`, find where each doc cites it. Assert the doc's value/wording is **identical**.
+
+**Start from the matrix the script printed, not from a grep per datum.** A counted cell is a verbatim citation — identical by construction. The work is the `·` cells: for each, either the doc has no reason to cite the datum, or it cites it in other words, and only the second is a finding. Two things the count cannot see: a fenced block is not counted, and a short value (`100`, `2026`) also matches where it means something else.
 - Doc value ≠ registry value → `CONTRADICTION`.
 - Datum used in ≥2 docs but missing from registry → `DRIFT` (orphan fact — promote to registry).
 - Same datum spelled differently across docs (e.g. `~100s` vs `100 seconds`) → `POLISH`.
@@ -526,11 +528,13 @@ Before flagging any string mismatch (checks 1, 2, 6, 7): strip surrounding YAML 
 
 ## Output format
 
-**Correspondence matrix** — rows = shared data, columns = docs, cell = ✅ / ⚠️ / ✗ / — (n/a):
+**Correspondence matrix** — `audit.py` prints it under `## Correspondence matrix`: rows = registry datums cited verbatim in at least one doc, columns = docs, cell = how many times, `·` = never. **Do not rebuild it.** Report its count line, and then only the rows check 1 changed — cell = ✅ (counted) / ⚠️ (cited in other words) / ✗ (cited with another value) / — (n/a):
 
 | Dato | 01 | 02 | 03 | Match |
 |---|---|---|---|---|
-| limits.cloudflare (100s/524) | ✅ | — | ✅ | ✅ |
+| limits.cloudflare (100s/524) | ✅ | — | ⚠️ `100 seconds` | ⚠️ |
+
+A set where check 1 changed nothing reports the count line and no table. `--no-matrix` leaves the table out of a re-run after a fix; `--json` carries it as `matrix`.
 
 **Findings** — most-severe first, one line each:
 `doc0X §sec: <TAG>: <what mismatches>. <fix>.`

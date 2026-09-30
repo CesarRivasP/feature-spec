@@ -112,10 +112,10 @@ Optional, over exactly those candidates: `python3 scripts/triage.py docs/feature
 It deliberately never executes `evidence.cmd` (check 1b). A registry is a data file that travels between repos and agents; running commands out of one because it says they are safe is the thing an auditor must not do. Re-running evidence is a human step and the script lists it as one.
 
 Then do the judgment pass and emit:
-- a **correspondence matrix** (each shared datum × each doc → match/miss), and
+- the **correspondence matrix** — the script prints it (each registry datum × each doc, as a count of verbatim citations); **never rebuild it by hand**. A number settles that cell's wording; a `·` is where check 1 looks. Report the script's count line plus only the rows the judgment pass changed (`⚠️` cited in other words, `✗` cited with another value) — the full table is already in the script's output and in `view`. `--no-matrix` leaves it out on a re-run after a fix.
 - a **findings list**, most-severe first, each tagged `CONTRADICTION` / `DRIFT` / `POLISH`.
 
-Report the matrix + findings as terminal text. Do NOT auto-edit in `audit` mode unless the user says "fix" — surface first, patch on request.
+Report those rows + the findings as terminal text. Do NOT auto-edit in `audit` mode unless the user says "fix" — surface first, patch on request.
 
 `audit <slug> --deep` → after the inline pass, spawn a **cold reviewer subagent** (`_profile.yml deep_review_agent:` if set, else `Explore`/`general-purpose`) that re-reads the docs with NO context on how they were written and returns compressed findings. The inline pass validates against rules; the deep pass catches normalized-away assumptions the author is blind to. Merge both, dedupe, present once. Use `--deep` at the final gate, not during iteration.
 
@@ -163,7 +163,7 @@ Reconcile `_facts.yml` against observations from a device run or instrumented se
 `audit` asks whether the docs agree with the registry. `review` asks whether the plan is safe to build. **`verify` asks whether the registry is TRUE** — and it is the only one of the three that can fail after a clean `audit`. Run it before flipping `status: shipped`; gate G1 in `references/evidence.md` refuses that flip while a root cause is still `asserted`.
 
 ### `handoff <slug> [round]` — hand the set to another agent, or take it from one
-For sets worked by more than one model: one drafts, a second reviews it cold, the first dispositions the findings. Appends a round entry to `_log.md` recording the agent, the **line count and blob hash of every file read** (`git hash-object <file>` — no commit needed, works on gitignored specs), how far back it read the log, and one disposition per prior finding: `confirmed` / `rejected` / `deferred` / `superseded`.
+For sets worked by more than one model: one drafts, a second reviews it cold, the first dispositions the findings. Appends a round entry to `_log.md` recording the agent, the **line count and blob hash of every file read** (`python3 scripts/audit.py <dir> --read-line [FILE ...]` prints the whole `**Read:**` line; `git hash-object <file>` is the same by hand — no commit needed, works on gitignored specs), how far back it read the log, and one disposition per prior finding: `confirmed` / `rejected` / `deferred` / `superseded`.
 
 A rejected finding states the evidence that killed it and **stays in the log** — same reasoning as a dead hypothesis in `verify`: a rejection with evidence stops the next round re-deriving it, and a rejection without evidence is exactly what a later round should reopen. An external model with no filesystem gets its entry transcribed, and the entry says so plus what it was actually shown — a finding raised against a pasted excerpt was made without the preamble and the surrounding phases.
 

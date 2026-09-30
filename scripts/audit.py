@@ -13,6 +13,7 @@ script FIRST, then the judgment pass over what it lists — in that order.
 
     python3 scripts/audit.py docs/features/<slug>/ [--repo-root DIR] [--json]
                              [--as-status STAGE] [--today YYYY-MM-DD]
+                             [--no-matrix] [--read-line [FILE ...]]
 
 It never executes `evidence.cmd` (protocol check 1b). A registry is a data file that
 travels between repos and agents; running commands out of it because it claims they
@@ -36,7 +37,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from render import (accepted_state, collect_claims, confined, norm,
-                        status_gate, walk, yaml)
+                        status_gate, trace_datums, walk, yaml)
 except ImportError as exc:  # pragma: no cover
     sys.exit(
         f"cannot import the shared registry core from render.py: {exc}\n"
@@ -1336,6 +1337,22 @@ def check_file_existence(facts: dict, repo_root: Path, status_rank: int,
                   "20 declared paths exist")
 
 
+def name_index(repo_root: Path) -> dict[str, list[str]]:
+    """Every file and directory under the root, by name, from ONE walk.
+
+    A bare anchor is resolved by looking its name up across the whole checkout, and
+    that used to be an `rglob` per anchor. Real case: a React Native monorepo with
+    `node_modules` on disk and 207 bare anchors across one set walked 7,000
+    directories 207 times — 44 of the audit's 44.4 seconds. Nothing is pruned: the
+    count of files carrying a name is part of the finding, and `index.ts` being
+    unique outside `node_modules` does not make it an address."""
+    index: dict[str, list[str]] = {}
+    for base, dirs, files in os.walk(repo_root):
+        for name in dirs + files:
+            index.setdefault(name, []).append(os.path.join(base, name))
+    return index
+
+
 def check_anchors(facts: dict, prose: dict[str, str], repo_root: Path,
                   f: Findings) -> None:
     """§1.1, the most frequent finding of all. Check 13 verifies an edit HAS an
@@ -1347,10 +1364,11 @@ def check_anchors(facts: dict, prose: dict[str, str], repo_root: Path,
     and its anchors are never corrected."""
     sources = {"_facts.yml": yaml.safe_dump(facts, allow_unicode=True)}
     sources.update(prose)
+    by_name: dict[str, list[str]] | None = None
     for src, text in sources.items():
         if src == "_log.md":
             continue
-        for path_str, line_str in set(ANCHOR_RE.findall(text)):
+        for path_str, line_str in sorted(set(ANCHOR_RE.findall(text))):
             line = int(line_str)
             if "/" in path_str:
                 target = confined(repo_root, path_str)
@@ -1363,7 +1381,9 @@ def check_anchors(facts: dict, prose: dict[str, str], repo_root: Path,
                           "18 anchors resolve")
                     continue
             else:
-                matches = list(repo_root.rglob(path_str))
+                if by_name is None:
+                    by_name = name_index(repo_root)
+                matches = [Path(p) for p in by_name.get(path_str, ())]
                 if len(matches) != 1:
                     f.add(DRIFT, src,
                           f"bare anchor `{path_str}:{line}` with no path "
@@ -3161,6 +3181,119 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
               "16 handoff log")
 
 
+def read_line(facts: dict, spec_dir: Path, repo_root: Path,
+              names: list[str]) -> tuple[str, list[str]]:
+    """-> (the `**Read:**` line, names that resolve to no file).
+
+    An entry's `Read:` is the one field that proves which version was reviewed, and
+    writing it by hand is a `wc -l` and a `git hash-object` per file, every round,
+    typed into one line. This prints that line with the arithmetic check 16 will
+    redo against it — same line count, same blob — so the two cannot disagree on
+    how a file is measured.
+
+    With no names it covers the set: the registry, every `docs[]` file on disk, the
+    profile. That is what is there to read, not what was read; the line claims the
+    second, so the caller keeps the files it opened. `_log.md` is left out — check
+    16 never compares it, and `Log read through:` is the field that speaks for it."""
+    files: list[tuple[str, Path]] = []
+    missing: list[str] = []
+    if names:
+        for name in names:
+            target = next((p for p in (confined(spec_dir, name),
+                                       confined(repo_root, name))
+                           if p is not None and p.is_file()), None)
+            if target is None:
+                missing.append(name)
+            else:
+                files.append((name, target))
+    else:
+        files.append(("_facts.yml", spec_dir / "_facts.yml"))
+        for entry in facts.get("docs") or []:
+            if not isinstance(entry, dict):
+                continue
+            name = str(entry.get("file", ""))
+            target = confined(spec_dir, name)
+            if target is not None and target.is_file():
+                files.append((name, target))
+        prof = facts.get("profile")
+        target = profile_path(str(prof), spec_dir, repo_root) if prof else None
+        if target is not None:
+            # Named the way check 16 will resolve it: against the spec dir, else
+            # against the repo root. `../_profile.yml` resolves against neither.
+            for base in (spec_dir.resolve(), repo_root.resolve()):
+                if base in target.parents:
+                    files.append((target.relative_to(base).as_posix(), target))
+                    break
+            else:
+                files.append((str(prof), target))
+    parts = []
+    for name, target in files:
+        data = target.read_bytes()
+        lines = data.count(b"\n")
+        parts.append(f"`{name}` ({lines} lines, blob {git_blob(data)[:7]})")
+    return "**Read:** " + " · ".join(parts), missing
+
+
+MATRIX_VALUE_WIDTH = 60
+
+
+def correspondence(facts: dict, prose: dict[str, str], in_scope: list[dict]) -> dict:
+    """The correspondence matrix: each registry datum x each doc, counted.
+
+    The protocol's output opens with this table and an agent used to build it by
+    hand — one grep per datum per doc, then the table typed out. Every cell of it
+    is a string search, and `render.py` already ran that search to draw the same
+    table in the view. It is printed here from that one implementation.
+
+    A count is a verbatim citation. What it cannot say is why a cell is empty: the
+    doc has no reason to cite the datum, or cites it in other words — and the
+    second is check 1, which stays a person's. Only rows cited somewhere are kept;
+    a datum no doc writes out is a note or a claim far more often than an orphan,
+    and ids never named in prose are check 21's."""
+    ids = {d["file"]: d["id"] for d in in_scope}
+    labels = [ids.get(name, "?") for name in prose]
+    if "?" in labels or len(set(labels)) != len(labels):
+        # Two docs under one column would have their counts merged into it.
+        labels = [Path(name).stem for name in prose]
+    docs = [{"id": label, "file": name, "text": text}
+            for label, (name, text) in zip(labels, prose.items())]
+    datums, per_doc, _ = trace_datums(facts, docs)
+    rows = []
+    for value, paths in datums.items():
+        counts = [per_doc[d["id"]].get(value, 0) for d in docs]
+        if any(counts):
+            rows.append({"value": value, "paths": paths, "counts": counts})
+    return {"docs": labels, "rows": rows, "uncited": len(datums) - len(rows)}
+
+
+def print_matrix(matrix: dict) -> None:
+    rows, docs = matrix["rows"], matrix["docs"]
+    total = len(rows) + matrix["uncited"]
+    print("## Correspondence matrix\n")
+    if not rows:
+        print(f"None of the registry's {total} datum(s) is cited verbatim in any "
+              "doc — check 1 has the whole set to read.\n")
+        return
+    print("Computed — do not rebuild it by hand. A number is how many times the "
+          "datum's exact string occurs in that doc's prose; fenced blocks are not "
+          "counted, and a short value (`100`, `2026`) also matches where it means "
+          "something else. `·` is what check 1 still has to settle: the doc has no "
+          "reason to cite the datum, or cites it in other words.\n")
+    print("| datum | registry | " + " | ".join(docs) + " |")
+    print("|---|---|" + "---|" * len(docs))
+    for row in rows:
+        value = " ".join(row["value"].split())
+        if len(value) > MATRIX_VALUE_WIDTH:
+            value = value[:MATRIX_VALUE_WIDTH - 1] + "…"
+        paths = ", ".join(row["paths"][:2])
+        if len(row["paths"]) > 2:
+            paths += f" +{len(row['paths']) - 2}"
+        cells = " | ".join(str(n) if n else "·" for n in row["counts"])
+        print(f"| {value.replace('|', chr(92) + '|')} | {paths} | {cells} |")
+    print(f"\n{len(rows)} of {total} datums cited verbatim in at least one doc. The "
+          f"other {matrix['uncited']} occur in none as written — `view` lists them.\n")
+
+
 # --------------------------------------------------------------------------
 # output
 # --------------------------------------------------------------------------
@@ -3258,7 +3391,8 @@ HUMAN_PASS = [
 def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
            prose, as_json: bool, declared_status: str | None = None,
            audited_as: str | None = None,
-           today: datetime.date | None = None) -> int:
+           today: datetime.date | None = None,
+           matrix: dict | None = None) -> int:
     order = {CONTRADICTION: 0, DRIFT: 1, POLISH: 2}
     f.items.sort(key=lambda x: (order[x["severity"]], x["check"], x["where"]))
 
@@ -3269,6 +3403,7 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
                               {"id": r[0], "detail": r[1], "days_left": r[3]}
                               for r in live_accepted_risks(facts, today)],
                           "candidates": cands.by_check,
+                          "matrix": matrix,
                           "deferred_docs": [d["file"] for d in deferred]},
                          indent=2, ensure_ascii=False))
         return 1 if f.count(CONTRADICTION) else 0
@@ -3351,6 +3486,9 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
             print(f"      · {cand['where']}: {cand['what']}")
     print()
 
+    if matrix:
+        print_matrix(matrix)
+
     c, d, p = f.count(CONTRADICTION), f.count(DRIFT), f.count(POLISH)
     verdict = (f"{c} contradictions, {d} drift, {p} polish" if f.items
                else "clean — every mechanized check passed")
@@ -3384,6 +3522,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--today", default=None, metavar="YYYY-MM-DD",
                     help="the date `accepted.until:` is measured against "
                          "(default: the real today)")
+    ap.add_argument("--no-matrix", action="store_true",
+                    help="leave the correspondence matrix out — for a re-run after "
+                         "a fix, when the table was already read")
+    ap.add_argument("--read-line", nargs="*", default=None, metavar="FILE",
+                    help="print the `**Read:**` line of a `_log.md` entry — line "
+                         "count and blob of each FILE, or of every file of the set "
+                         "when none is named — and exit without auditing")
     args = ap.parse_args(argv)
     today = None
     if args.today:
@@ -3407,6 +3552,18 @@ def main(argv: list[str] | None = None) -> int:
         facts = dict(facts)
         facts["status"] = args.as_status
     repo_root, root_is_real = repo_root_for(spec_dir, args.repo_root)
+
+    if args.read_line is not None:
+        line, missing = read_line(facts, spec_dir, repo_root, args.read_line)
+        if missing:
+            sys.exit(f"--read-line: no such file under {spec_dir} or {repo_root}: "
+                     + ", ".join(missing))
+        print(line)
+        if not args.read_line:
+            print("every file of the set is listed — `Read:` claims the ones you "
+                  "opened. Drop the rest, or name them: --read-line FILE ...",
+                  file=sys.stderr)
+        return 0
 
     rank, in_scope, deferred = resolve_stage(facts, spec_dir)
     prose = {d["file"]: d["path"].read_text(encoding="utf-8")
@@ -3463,8 +3620,11 @@ def main(argv: list[str] | None = None) -> int:
 
     audited_as = (args.as_status if args.as_status
                   and norm(args.as_status) != norm(declared_status) else None)
+    matrix = (None if args.no_matrix or not prose
+              else correspondence(facts, prose, in_scope))
     return report(f, c, facts, in_scope, deferred, prose, args.json,
-                  declared_status=declared_status, audited_as=audited_as, today=today)
+                  declared_status=declared_status, audited_as=audited_as, today=today,
+                  matrix=matrix)
 
 
 if __name__ == "__main__":

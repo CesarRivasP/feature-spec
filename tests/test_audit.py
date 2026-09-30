@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -763,12 +765,112 @@ def accepted_risks_come_due() -> list[str]:
     return problems
 
 
+def matrix_is_counted() -> list[str]:
+    """The correspondence matrix used to be the agent's to build — a grep per datum
+    per doc, then the table typed out — while `render.py` already counted the same
+    cells for the view. It is printed from that count now.
+
+    What has to hold: a fence is not prose, an enum word is not a citation, and a
+    datum no doc writes out is a number in the footer, not a row of dots. And the
+    table stays above the verdict — the verdict is the last line a caller reads."""
+    matrix = run_json("matrix")["matrix"]
+    rows = {r["value"]: r["counts"] for r in matrix["rows"]}
+    problems = []
+    if matrix["docs"] != ["01", "02", "03"]:
+        problems.append(f"matrix: columns are {matrix['docs']}, expected the doc ids")
+    if rows.get("100s") != [2, 0, 1]:
+        problems.append(f"matrix: `100s` counted {rows.get('100s')}, expected twice "
+                        "in 01, never in 02, once in 03")
+    for value, why in (("resend-webhook", "it appears only inside a fence"),
+                       ("planned", "`kind:` is an enum, not a datum"),
+                       ("repo", "`where:` is an enum, not a datum"),
+                       ("el proxy corta antes que el origen", "no doc writes it out")):
+        if value in rows:
+            problems.append(f"matrix: `{value}` has a row — {why}")
+    if matrix["uncited"] < 1:
+        problems.append("matrix: the uncited count lost the note no doc writes out")
+
+    spec = str(FIXTURES / "matrix")
+    text = subprocess.run([sys.executable, str(AUDIT), spec, "--repo-root", spec],
+                          capture_output=True, text=True).stdout
+    if "| 100s | limits.cloudflare.timeout | 2 | · | 1 |" not in text:
+        problems.append("matrix: the text report does not print the `100s` row")
+    if "datums cited" in text.strip().splitlines()[-1]:
+        problems.append("matrix: the table is printed after the verdict line")
+    if run_json("matrix", ["--no-matrix"])["matrix"] is not None:
+        problems.append("matrix: --no-matrix still computed it")
+    return problems
+
+
+def read_line_round_trips() -> list[str]:
+    """`--read-line` prints the `**Read:**` line of a log entry. The only thing that
+    makes it worth having is that check 16 reads it back: a line in a shape the
+    check's parser skips would record nothing, and would look exactly like a line
+    that recorded everything. So the line goes into a log, the audit stays silent,
+    and then one file moves and the audit must say which."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "matrix"
+        shutil.copytree(FIXTURES / "matrix", spec)
+        base = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec)]
+
+        out = subprocess.run(base + ["--read-line"], capture_output=True, text=True)
+        line = out.stdout.strip()
+        named = ("_facts.yml", "01-master-plan.md", "02-implementation.md",
+                 "03-stakeholder.md", "_profile.fixture.yml")
+        if out.returncode != 0 or not line.startswith("**Read:** ") \
+                or any(f"`{n}` (" not in line for n in named):
+            return [f"read-line: expected one `**Read:**` line naming {named}, got "
+                    f"{out.stdout!r} {out.stderr!r}"]
+        if "opened" not in out.stderr:
+            problems.append("read-line: listing the whole set must say, on stderr, "
+                            "that `Read:` claims only what was opened")
+
+        (spec / "_log.md").write_text(
+            f"## R1 · 2026-09-30 · test · author\n{line}\n"
+            "**Log read through:** — (first entry)\n", encoding="utf-8")
+
+        def stale() -> set[str]:
+            data = json.loads(subprocess.run(base + ["--json"], capture_output=True,
+                                             text=True).stdout)
+            return {f["where"] for f in data["findings"]
+                    if f["check"].startswith("16") and "last recorded" in f["what"]}
+
+        if stale():
+            problems.append(f"read-line: check 16 rejects the line it was handed, "
+                            f"for {sorted(stale())}")
+        for name in ("01-master-plan.md", "_profile.fixture.yml"):
+            with (spec / name).open("a", encoding="utf-8") as fh:
+                fh.write("una línea más\n")
+        if stale() != {"01-master-plan.md", "_profile.fixture.yml"}:
+            problems.append("read-line: two recorded files moved and check 16 reports "
+                            f"{sorted(stale())} — the line was written in a shape the "
+                            "check does not read")
+
+        one = subprocess.run(base + ["--read-line", "03-stakeholder.md"],
+                             capture_output=True, text=True)
+        if one.stdout.count("blob ") != 1 or "03-stakeholder.md" not in one.stdout \
+                or one.stderr:
+            problems.append(f"read-line: naming one file must stamp that file and "
+                            f"nothing else, got {one.stdout!r} {one.stderr!r}")
+        gone = subprocess.run(base + ["--read-line", "nope.md"],
+                              capture_output=True, text=True)
+        if gone.returncode == 0 or gone.stdout:
+            problems.append("read-line: a file that does not exist was stamped, or "
+                            "skipped without failing")
+    return problems
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     failures, total = [], 0
 
     total += 1
     failures += accepted_risks_come_due()
+    total += 1
+    failures += matrix_is_counted()
+    total += 1
+    failures += read_line_round_trips()
     for fixture, extra, expect, reject in FLAG_CASES:
         findings = run(fixture, extra)
         for check, text in expect:
