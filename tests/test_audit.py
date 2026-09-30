@@ -894,9 +894,32 @@ def log_size_counts_bytes() -> list[str]:
     return problems
 
 
+def registry_index_spans() -> list[str]:
+    """`--index` is only worth having if a span read by offset returns exactly the
+    entry: not the comment above it, not the blank after it, not the next entry's
+    first line. Each span below was counted by hand against the fixture."""
+    out = subprocess.run([sys.executable, str(AUDIT), str(FIXTURES / "registry-index"),
+                          "--index"], capture_output=True, text=True)
+    rows = {m.group(3): (int(m.group(1)), int(m.group(2)), m.group(4).strip())
+            for m in re.finditer(r"^\s*L(\d+)-(\d+)\s+(\S+)(.*)$", out.stdout, re.M)}
+    want = {"defects": (9, 20), "defects.D1": (10, 14), "defects.D2": (17, 20),
+            "limits": (21, 25), "limits.cloudflare": (22, 22), "limits.resend": (23, 25),
+            "docs": (26, 27)}
+    problems = [f"index: `{k}` spans {rows.get(k, ('missing',))[:2]}, expected {v}"
+                for k, v in want.items() if rows.get(k, (0, 0))[:2] != v]
+    if "prose" in rows.get("defects.D2", (0, 0, ""))[2]:
+        problems.append("index: a prose `outcome:` was printed as a label")
+    if rows.get("defects.D1", (0, 0, ""))[2] != "root_cause · asserted":
+        problems.append(f"index: D1 labelled {rows.get('defects.D1')}, expected "
+                        "`root_cause · asserted`")
+    return problems
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     failures, total = [], 0
+    total += 1
+    failures += registry_index_spans()
     total += 1
     failures += log_size_counts_bytes()
 

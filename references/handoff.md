@@ -11,6 +11,8 @@ A spec set is often worked by more than one model: one drafts, a second reviews 
 
 Everything else here exists to make that rule checkable.
 
+Reading from disk does not mean reading everything whole. `python3 scripts/audit.py <dir> --index` gives the registry's line spans per entry; a round that touches three entries reads those three by offset, and records the whole file's line count and blob in `Read:` only if it read the whole file.
+
 ## Entry format
 
 One `##` block per round, appended at the end of the file. Never edit or delete a *previous* entry — the current round's own entry is opened as a stub before the work and completed after it, which is the one case where an entry is written in two passes.
