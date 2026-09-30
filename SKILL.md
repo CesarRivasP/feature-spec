@@ -5,7 +5,7 @@ description: Create, audit, and keep-in-sync multi-doc feature specs from a sing
 
 # Feature Spec — spec doc sets that never contradict
 
-A feature spec is not one file — it's a **set** (master plan + implementation/E2E + stakeholder requirements) that shares many of the same facts (dates, timeouts, contracts, endpoints, bot lists, backoff numbers…). Contradictions creep in because each fact is **copied** into 3 places and drifts.
+A feature spec is not one file — it's a **set** (master plan + implementation + tests/E2E + stakeholder requirements) that shares many of the same facts (dates, timeouts, contracts, endpoints, bot lists, backoff numbers…). Contradictions creep in because each fact is **copied** into 3 places and drifts.
 
 **Core idea: one source of truth.** Every shared datum lives once in `_facts.yml`. Docs reference it. Auditing stops being "read 3 docs and compare prose" and becomes "check no doc contradicts `_facts.yml`" — mechanical and near-deterministic.
 
@@ -16,11 +16,12 @@ docs/features/<slug>/
   _facts.yml          # single source of truth — the ONLY place shared data is authored
   _log.md             # append-only handoff log — who edited what, against which version
   01-master-plan.md   # stage 1 — `new`.       the decision: is this worth building?
-  02-implementation-and-e2e.md   # stage 2 — `implement`. the build, once the answer is yes
+  02-implementation.md           # stage 2 — `implement`. the build, once the answer is yes
+  02e-tests-and-e2e.md           # stage 2 — `implement`. how each phase is known to work, and the Definition of Done
   03-stakeholder-requirements.md # stage 2 — `implement`.
 ```
 
-**Docs 02 and 03 are not written by `new`.** They are ~75% of the set's prose and the
+**Docs 02, 02e and 03 are not written by `new`.** They are ~75% of the set's prose and the
 only part that must be rewritten whole every time the plan moves — and a plan gets
 bounced two, three, four times before anyone commits to it. `new` writes the registry
 and doc 01, which is everything you need to *decide*; `implement` writes the rest once
@@ -61,7 +62,7 @@ runs whenever the set changes hands.
 
    Every gap either lands in the registry (`limits.*`, `contracts.*.auth`, a new `changes[]` entry, an `acceptance[]` item, a `defects[].falsified_by`) or is written down as an accepted risk. **This is the single biggest source of doc rework** — a spec that passes audit can still be an unsafe thing to build, and the gaps surface as a rewrite after review instead of as registry entries before it.
 4. **Generate doc 01 only**, from its template, sourcing every shared datum from `_facts.yml`. Never hand-type a shared number/name into a doc — copy it from the registry so the wording matches char-for-char. Docs 02 and 03 belong to `implement`; writing them here is the token cost this split exists to remove, and it also creates prose that has to be re-synced against a decision still being argued.
-   - **Set `docs[].stage`** on all three entries (`01: draft`, `02: reviewed`, `03: reviewed`) even though two of the files do not exist yet. The registry lists what the set *will* hold; `stage:` is what tells audit not to complain about the gap.
+   - **Set `docs[].stage`** on all four entries (`01: draft`, `02: reviewed`, `02e: reviewed`, `03: reviewed`) even though three of the files do not exist yet. The registry lists what the set *will* hold; `stage:` is what tells audit not to complain about the gap.
    - **`new <slug> --with-build`** runs `implement` back to back for a feature whose decision is already made — a one-file fix, a change the user has already approved in conversation. It is the escape hatch, not the default: it still requires the gap sweep and it still writes the `reviewed` flip, it just does not stop to ask.
    - **Prose language is `_profile.yml prose_language:`.** The `.tpl` files carry the `es` rendering of the fixed headings; for `en`, translate the headings using the map in `references/doc-pattern.md` §Heading language and keep the numbering identical. The headings are what audit checks 4/5/6 navigate by, so they must be consistent across the set — but they are not required to be Spanish.
 5. **Lint the registry before first `sync`.** Spellcheck the prose fields (notes, acceptance items, titles) — a typo in the registry (`accionabe`) propagates verbatim to every doc. Strings containing `"` are authored as single-quoted YAML scalars, so they match the prose byte-for-byte and don't trip acceptance parity.
@@ -69,7 +70,7 @@ runs whenever the set changes hands.
 7. Run `audit <slug>` (inline) before declaring done. At stage 1 it reports `stage draft — docs 02, 03 not due yet` and lists the doc 01 checklist items under **pending downstream coverage** — that list is what `implement` has to cover later.
 
 ### `implement <slug>` — write the build docs (stage 2)
-Writes `02-implementation-and-e2e.md` and `03-stakeholder-requirements.md`: Parte A/B/C, the Definition of Done, and the external owner's ask.
+Writes `02-implementation.md`, `02e-tests-and-e2e.md` and `03-stakeholder-requirements.md`: Parte A in `02`; Parte B, Parte C and the Definition of Done in `02e`; the external owner's ask in `03`. Tests are a doc of their own because they change on a different clock — `acceptance[]` moves and `02e` is rewritten while the phases stand; a phase moves and `02e` keeps its rows — and because the builder running Fase N should not load the test plan to do it. Four real sets had already cut it out by hand (`02e-tests-and-done.md`, `02c-tests-and-e2e.md`, `02b-deploy-y-pruebas.md`, `02b-viewer-through-tests.md`). The id is fixed at `02e` so a later phase split (`02b`, `02c`, `02d`) sorts before it; it inherits `02`'s preamble like a split half, and check 13 reads it like one.
 
 Measured across four real sets, docs 02+03 are **71% / 76% / 79% / 83%** of the set's prose. They are also the only part invalidated wholesale when the plan changes — doc 01 gets edited, doc 02 gets rewritten. Deferring them means the bouncing phase costs a registry diff and a doc-01 edit instead of a 900-line regeneration, and it means ~75% less prose in existence during the window where decisions are still moving. That window is where prose goes stale: a single cancelled decision left **14 stale promises** across a set that had already been written out in full.
 
@@ -81,7 +82,7 @@ Measured across four real sets, docs 02+03 are **71% / 76% / 79% / 83%** of the 
 Refuse on any of the three, name which one, stop. Refusing costs a sentence; discovering it after 900 lines of doc 02 exist costs the 900 lines.
 
 Then:
-1. **Doc 02 per `references/implementable.md`** — paste-ready code, resolved paths, named symbols, anchors to real lines, and the repo's real test-mock preamble. Assume the builder is a smaller model with zero context on this conversation. Anchors written here are written against the tree as it is *now*, not as it was three rounds ago; that alone removes most of the `file:line` drift a set accumulates.
+1. **Doc 02 per `references/implementable.md`** — paste-ready code, resolved paths, named symbols, anchors to real lines; every `Verificación fase N:` points at the `02e` section that says how the phase is known to work. **Doc 02e** holds the repo's real test-mock preamble, one test file path per bullet, the E2E steps and the Definition of Done copied item-for-item from `acceptance[]`. Assume the builder is a smaller model with zero context on this conversation. Anchors written here are written against the tree as it is *now*, not as it was three rounds ago; that alone removes most of the `file:line` drift a set accumulates.
 2. **Doc 03 sourcing from the registry, never from doc 02.** §4 (payload) comes from `contracts.*`; §6 (how we test together) comes from `acceptance[]`. A doc that mirrors another doc is a second copy with no source of truth — the exact thing this skill exists to prevent, and the template used to instruct it.
 3. **Cover every item the last `audit` listed under *pending downstream coverage*** (protocol check 5). Those are doc 01 checklist items that had no counterpart because 02 and 03 did not exist. Now they must have one; an uncovered item at this point is a `DRIFT`.
 4. **Append the `_log.md` entry** — and write its stub *before* generating, not after. This mode produces the two largest files in the set; a round that dies partway through leaves ~1000 lines on disk that no entry accounts for. (*Real case:* a delegated subagent wrote all four docs and died before its log entry; from outside it looked like it had produced nothing.)
@@ -231,7 +232,7 @@ Contract and invariants: `references/render.md`.
 - **A doc past ~600 lines gets split, not summarized.** `audit` warns at 500 so the split happens on a planned boundary instead of mid-sentence with cross-refs already written against the old numbering. Cut on a top-level phase boundary into `02` + `02b-<what-it-holds>.md`, keep reading order, leave the preamble in `02` and have `02b` declare it inherits it, register both in `docs[]`, and qualify every cross-ref that now crosses the boundary (`` `02` §1.1 ``, `` `02b` §3.5 ``). Full procedure in `references/doc-pattern.md` §Splitting an oversized doc. Compressing instead of splitting destroys the resolved paths and paste-ready blocks that make doc 02 usable.
 
 ## References
-- `references/doc-pattern.md` — the 3-doc pattern, section skeletons, naming, cross-ref rules.
+- `references/doc-pattern.md` — the 4-doc pattern, section skeletons, naming, cross-ref rules.
 - `references/audit-protocol.md` — the exact mechanical checks + severity taxonomy + matrix format.
 - `references/gap-sweep.md` — the `review` mode checklist: does this spec add functional/security gaps? Stack layers alongside it: `gap-sweep-web-baas.md`, `gap-sweep-android-native.md`, `gap-sweep-mobile-tv.md`, `gap-sweep-payments-onprem.md`, `gap-sweep-web-3d-client.md`.
 - `references/intake.md` — the questions to ask before writing anything, batched, with what may never be guessed.

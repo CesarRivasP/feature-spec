@@ -141,7 +141,7 @@ The set is written in two stages (`SKILL.md` §Modes): `new` writes the registry
 **Log read through:** R3
 **Stage:** draft → reviewed — user confirmed after R3 dispositions; `review` findings all settled.
 **Dispositions:** R3-F1 → **confirmed**. C4 flipped to `kind: deferred` + `reopens_when:`.
-**Edits:** `02-implementation-and-e2e.md` (new, 640 lines) · `03-stakeholder-requirements.md` (new, 158 lines)
+**Edits:** `02-implementation.md` (new, 480 lines) · `02e-tests-and-e2e.md` (new, 160 lines) · `03-stakeholder-requirements.md` (new, 158 lines)
 **Still open:** —
 ```
 

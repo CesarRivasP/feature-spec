@@ -396,7 +396,7 @@ reserved_ids: {}        # OPTIONAL. Ids that must never be handed out again, wit
 acceptance: []          # Definition-of-Done items (shared across docs).
                         #   Authored by `new`, in STAGE 1: "what would make this done" is an
                         #   INPUT to deciding whether to build it, not an output of building.
-                        #   Only its rendering as doc 02's Definition of Done waits for
+                        #   Only its rendering as doc 02e's Definition of Done waits for
                         #   `implement`. Until then this list is the only home the criteria
                         #   have — which is why they carry their own state rather than
                         #   depending on a doc that does not exist yet.
@@ -458,5 +458,6 @@ acceptance: []          # Definition-of-Done items (shared across docs).
 # read from disk — asserting it is the same defect as copying a test count.
 docs:
   - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
-  - { id: "02", file: 02-implementation-and-e2e.md, role: implementation, stage: reviewed }
+  - { id: "02", file: 02-implementation.md, role: implementation, stage: reviewed }
+  - { id: "02e", file: 02e-tests-and-e2e.md, role: tests, stage: reviewed }
   - { id: "03", file: 03-stakeholder-requirements.md, role: stakeholder, stage: reviewed }

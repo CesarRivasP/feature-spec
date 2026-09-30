@@ -1,6 +1,6 @@
-# Implementación + Pruebas E2E — {{title}}
+# Implementación — {{title}}
 
-> Complementa a `01-master-plan.md`. Pasos de código (archivo por archivo) + plan de pruebas end-to-end.
+> Complementa a `01-master-plan.md`. Pasos de código, archivo por archivo. El plan de pruebas, las E2E y la Definition of Done viven en `02e-tests-and-e2e.md`.
 > Escrito por `implement` (stage 2) — después de que `review` corrió, sus hallazgos quedaron dispositionados, y el usuario confirmó con el flip a `status: reviewed`. No lo escribe `new`.
 
 - **Fecha:** {{dates.drafted}}
@@ -8,6 +8,7 @@
 
 > Datos compartidos vienen de `_facts.yml`. Cross-refs a `01-master-plan.md §N` deben resolver a secciones reales.
 > **Este doc es ejecutable, no descriptivo.** Su lector es quien construye — posiblemente un modelo más chico sin contexto de cómo se escribió. Ver `references/implementable.md`.
+> El preámbulo de este archivo gobierna también a `02e-tests-and-e2e.md`: convención de logs, notación de comandos, reglas de base.
 
 ---
 
@@ -37,28 +38,9 @@ Each phase carries all six blocks below — a missing one is a question the buil
 
 **Contratos que implementa:** `_facts.yml limits.X`, `contracts.Y` <!-- lets the builder self-check nothing was dropped -->
 
-**Verificación fase 1:** `<_profile.yml commands.* + this phase's target>` → `<expected output>` <!-- never "verificar que funciona", never a command invented here -->
+**Verificación fase 1:** `<_profile.yml commands.* + this phase's target>` → `<expected output>` <!-- never "verificar que funciona", never a command invented here. Point at the `02e` section that says how this phase is known to work. -->
 
 ---
 
-## Parte B — Plan de pruebas
-
-### B.0 — Preámbulo de mocks
-<!-- Copy this stack's mock/setup block verbatim from a REAL test in this repo; say which file it came from. -->
-
-### B.1 — Unitarias
-<!-- checklist; each bullet names its target test file path + the exact query/assertion -->
-### B.2 — Integración / contrato
-<!-- assert the JSON contracts from _facts.yml contracts.* -->
-
-**Baseline:** `{{profile.commands.tests}}` → `{{tests_baseline}}` <!-- value must contain commands.tests_expect -->
-
----
-
-## Parte C — Pruebas E2E (manual)
-<!-- C.1 happy path, C.2 continuity, C.3 error, C.4 timeout, C.5+ edge cases -->
-
----
-
-## Criterios de aceptación (Definition of Done)
-<!-- MUST match acceptance[] in _facts.yml item-for-item -->
+## Continúa en `02e-tests-and-e2e.md`
+<!-- Parte B (unitarias / integración), Parte C (E2E manual) y la Definition of Done. A doc that ends without this line reads as truncated. -->

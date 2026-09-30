@@ -7,7 +7,8 @@
 - **Owner técnico:** {{owners.technical}}
 - **Owner externo:** {{owners.external}}
 - **Documentos relacionados:**
-  - `02-implementation-and-e2e.md` — plan de implementación + pruebas E2E
+  - `02-implementation.md` — plan de implementación, fase por fase
+  - `02e-tests-and-e2e.md` — plan de pruebas, E2E y Definition of Done
   - `03-stakeholder-requirements.md` — requerimientos para {{owners.external}}
 
 > Todo dato compartido de este doc proviene de `_facts.yml`; todo comando, de `_profile.yml`. No editar números/nombres/comandos aquí a mano — cambiarlos en el registry (o el profile) y correr `sync`.
