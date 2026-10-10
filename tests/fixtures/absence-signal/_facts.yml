@@ -47,5 +47,12 @@ limits:
     evidence: { how: log, cmd: "<consulta Sentry>", date: 2026-09-15,
                 n: 1, spread: 'una sola consulta',
                 value: 'PLAYER.error bucket=4 count=312' }
+  z7_declared_false:
+    claim: 'el foco final queda en el tile 2 (siguio al ultimo cambio de canal)'
+    basis: measured
+    evidence: { how: device, cmd: "<procedimiento 4>", date: 2026-09-15,
+                n: 3, spread: 'tile 2 en las tres corridas',
+                value: 'foco final: tile 2 — 0 events de focus perdido, siguio al ultimo cambio',
+                absence: false }
 docs:
   - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

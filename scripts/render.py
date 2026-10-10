@@ -296,7 +296,7 @@ STOP_VALUES = {
     "true", "false", "open", "fixed", "dead", "chosen", "discarded", "reopened",
     "shell", "git", "device", "log", "measured", "asserted", "decided",
     "root_cause", "contributing", "symptom", "cosmetic", "master-plan",
-    "implementation", "stakeholder", "legacy", "yyyy-mm-dd",
+    "implementation", "tests", "stakeholder", "legacy", "derived", "yyyy-mm-dd",
     # contract field TYPES are schema, not values copied into prose
     "string", "number", "boolean", "integer", "float", "object", "array",
 }

@@ -1,0 +1,13 @@
+# Check 16, the half between rounds. R1 edited `_facts.yml` and left it at 10 lines,
+# blob 1111111. R2 opened with the registry at 11 lines, blob 2222222 — an edit made
+# between the two rounds, with no round. Before this check, R2's own `Read:` line
+# "legitimised" the new version and the disk comparison saw nothing. The real case
+# was a `tracking.pr` edit between R9 (634/882d1ff) and R10 (633/857ce36).
+# `01` is read at the version R1 left it (control). R2's `Edits:` names `02` with no
+# version, so R3 reading `02` at any version is unknown, not wrong (control).
+feature: log-between-rounds
+status: draft
+profile: ../_profile.fixture.yml
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation.md, role: implementation, stage: draft }
