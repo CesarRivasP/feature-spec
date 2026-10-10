@@ -162,6 +162,30 @@ def load_facts(path: Path) -> dict:
         return docs[-1]
 
 
+def yaml_error_report(path: Path, exc: Exception) -> str:
+    """One line with the position, then the offending line with a caret. PyYAML's
+    own message buries the mark under the parser's context; a missing comma after
+    `absence: true` inside a flow mapping came back as a raw `ComposerError` with
+    no usable address. The 36 checks never ran — this is what runs instead."""
+    mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
+    problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
+    if mark is None:
+        return f"{path.name}: not valid YAML — {problem}"
+    line, col = mark.line + 1, mark.column + 1
+    out = [f"{path.name}:{line}:{col}: not valid YAML — {problem}"]
+    context = getattr(exc, "context", None)
+    if context:
+        out[0] += f" ({context})"
+    try:
+        src = path.read_text(encoding="utf-8").splitlines()
+        out.append(f"    {line:>5} | {src[mark.line]}")
+        out.append(f"          | {' ' * mark.column}^")
+    except (OSError, IndexError):
+        pass
+    out.append("fix the syntax first — none of the checks ran")
+    return "\n".join(out)
+
+
 def template_keys() -> set[str]:
     if not TEMPLATE.is_file():
         return set()
@@ -352,7 +376,9 @@ def check_sibling_docs(facts: dict, spec_dir: Path, repo_root: Path,
               "on this feature's theme but named by no `_facts.yml docs[]` entry",
               "an unregistered sibling drifts in silence — nothing compares it "
               "against the registry and `sync` never reaches it. Integrate it into "
-              "the set, or register it with `role: legacy`",
+              "the set, or register it with `role: legacy` (written before the set) "
+              "or `role: derived` (generated from it — a PR body, release notes, a "
+              "runbook)",
               "9 disk -> docs[]")
 
 
@@ -1302,12 +1328,236 @@ def check_changes_decision_cascade(facts: dict, f: Findings) -> None:
                       "34 changes[] dependency on a revised decision")
 
 
+class WorkTree:
+    """The checkout as it is on disk. The default, and what every check compared
+    against until a set was audited from a checkout on another branch."""
+    label = None
+
+    def __init__(self, root: Path, spec_dir: Path | None = None) -> None:
+        self.root = root
+        self.spec_dir = spec_dir
+
+    def is_file(self, target: Path) -> bool:
+        return target.is_file()
+
+    def exists(self, target: Path) -> bool:
+        return target.exists()
+
+    def line_count(self, target: Path) -> int:
+        return sum(1 for _ in target.open(encoding="utf-8", errors="ignore"))
+
+    def read_text(self, target: Path) -> str:
+        return target.read_text(encoding="utf-8", errors="ignore")
+
+    def glob(self, pattern: str) -> set[str]:
+        """Repo-relative files `pattern` selects (check 38's `source_tree.globs`)."""
+        root = self.root.resolve()
+        files: set[str] = set()
+        for p in self.root.glob(pattern):
+            if p.is_file():
+                try:
+                    files.add(p.resolve().relative_to(root).as_posix())
+                except ValueError:
+                    continue      # a symlink out of the checkout is not ours to read
+        return files
+
+    def names(self) -> dict[str, list[str]]:
+        return name_index(self.root)
+
+
+class GitTree(WorkTree):
+    """The tree at `tracking.branch` (or `tracking.shipped_in`, once shipped) when
+    the checkout is on something else.
+
+    Real case: a set was audited from a `multiview` checkout while its code lived
+    on the branch the registry names. Checks 18 and 20 resolved every path against
+    the working tree and reported two `CONTRADICTION`s — a test file "does not
+    exist" — for the whole session. The file existed on the branch the set was
+    about. `git cat-file -e <ref>:<path>` settles it without checking out anything.
+
+    The set's own files are read from disk regardless: a spec dir is often
+    gitignored, or edited on this branch while the code sits on another, and the
+    registry being audited IS the one on disk. So is anything the checkout does
+    not track — an ignored `node_modules/` file a bare anchor points into, an
+    untracked plan — because a file no branch carries is not on one branch rather
+    than another. Only a path TRACKED here and absent from the ref is missing at
+    the ref. Measured on four real sets: the three findings this rule removes were
+    a patch directory, an untracked `docs/plans/` file and an anchor into
+    `node_modules/`, and none of them was about the branch."""
+
+    def __init__(self, root: Path, ref: str, sha: str, spec_dir: Path) -> None:
+        super().__init__(root, spec_dir)
+        self.ref, self.sha = ref, sha
+        self.label = f"{ref}@{sha[:7]}"
+        self._names: dict[str, list[str]] | None = None
+        self._paths: set[str] | None = None
+        self._dirs: set[str] | None = None
+        self._tracked: set[str] | None = None
+        self._disk: dict[str, list[str]] | None = None
+
+    def _tracked_here(self) -> set[str]:
+        if self._tracked is None:
+            out = subprocess.run(["git", "ls-files"], cwd=self.root,
+                                 capture_output=True, text=True)
+            self._tracked = set(out.stdout.splitlines()) if out.returncode == 0 else set()
+        return self._tracked
+
+    def _from_disk(self, target: Path) -> bool:
+        """A path the checkout has on disk and does not track belongs to no branch."""
+        rel = self._rel(target)
+        if rel is None or not target.exists():
+            return False
+        tracked = self._tracked_here()
+        return rel not in tracked and not any(t.startswith(rel + "/") for t in tracked)
+
+    def _rel(self, target: Path) -> str | None:
+        try:
+            return target.resolve().relative_to(self.root.resolve()).as_posix()
+        except ValueError:
+            return None
+
+    def _ours(self, target: Path) -> bool:
+        return self.spec_dir is not None and \
+            self.spec_dir.resolve() in target.resolve().parents
+
+    def _listing(self) -> set[str]:
+        if self._paths is None:
+            out = subprocess.run(["git", "ls-tree", "-r", "--name-only", self.ref],
+                                 cwd=self.root, capture_output=True, text=True)
+            self._paths = set(out.stdout.splitlines()) if out.returncode == 0 else set()
+        return self._paths
+
+    def is_file(self, target: Path) -> bool:
+        if self._ours(target) or self._from_disk(target):
+            return target.is_file()
+        rel = self._rel(target)
+        return rel is not None and rel in self._listing()
+
+    def exists(self, target: Path) -> bool:
+        """File or directory — check 20 declares both."""
+        if self._ours(target) or self._from_disk(target):
+            return target.exists()
+        rel = self._rel(target)
+        if rel is None:
+            return False
+        if self._dirs is None:
+            self._dirs = set()
+            for path in self._listing():
+                parts = path.split("/")
+                for depth in range(1, len(parts)):
+                    self._dirs.add("/".join(parts[:depth]))
+        return rel in self._listing() or rel in self._dirs
+
+    def line_count(self, target: Path) -> int:
+        if self._ours(target) or self._from_disk(target):
+            return super().line_count(target)
+        rel = self._rel(target)
+        out = subprocess.run(["git", "show", f"{self.ref}:{rel}"], cwd=self.root,
+                             capture_output=True)
+        return out.stdout.count(b"\n") if out.returncode == 0 else 0
+
+    def read_text(self, target: Path) -> str:
+        if self._ours(target) or self._from_disk(target):
+            return super().read_text(target)
+        out = subprocess.run(["git", "show", f"{self.ref}:{self._rel(target)}"],
+                             cwd=self.root, capture_output=True)
+        return out.stdout.decode("utf-8", errors="ignore") if out.returncode == 0 else ""
+
+    def glob(self, pattern: str) -> set[str]:
+        """The ref's files matching the pattern, plus the checkout's untracked ones
+        that match — a file on disk no branch carries is still a file the set may
+        have left out of `changes[]`."""
+        files = {rel for rel in self._listing() if fnmatch_path(rel, pattern)}
+        files |= {rel for rel in super().glob(pattern)
+                  if self._from_disk(self.root / rel)}
+        return files
+
+    def names(self) -> dict[str, list[str]]:
+        if self._names is None:
+            index: dict[str, list[str]] = {}
+            for rel in self._listing():
+                parts = rel.split("/")
+                for depth in range(len(parts)):
+                    index.setdefault(parts[depth], []).append(
+                        str(self.root / "/".join(parts[:depth + 1])))
+            for name in index:
+                index[name] = sorted(set(index[name]))
+            self._names = _UntrackedFallback(index, self)
+        return self._names
+
+
+class _UntrackedFallback(dict):
+    """`names()` for a GitTree: the ref's paths, and — only for a name the ref does
+    not carry at all — the checkout's untracked and ignored paths of that name. The
+    disk walk is the expensive one (2s with `node_modules`), so it runs once and
+    only if some bare anchor needs it."""
+
+    def __init__(self, index: dict[str, list[str]], tree: "GitTree") -> None:
+        super().__init__(index)
+        self._tree = tree
+
+    def get(self, name, default=None):
+        hit = super().get(name)
+        if hit:
+            return hit
+        tree = self._tree
+        if tree._disk is None:
+            tree._disk = name_index(tree.root)
+        found = [p for p in tree._disk.get(name, ())
+                 if tree._from_disk(Path(p))]
+        return found or default
+
+
+def _git(root: Path, *args: str) -> str | None:
+    out = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def spec_tree(facts: dict, spec_dir: Path, repo_root: Path,
+              root_is_real: bool) -> tuple[WorkTree, str | None]:
+    """-> (the tree checks 18 and 20 resolve against, the checkout's own label).
+
+    The registry says where its code lives: `tracking.branch` while the work is
+    open, `tracking.shipped_in` once `status: shipped`. When that ref resolves and
+    points at a commit other than HEAD's, paths are read from the ref. When it is
+    HEAD's commit, or the ref does not exist here, or there is no repo, the working
+    tree is what there is — and `check_tracking` already reports a branch that does
+    not exist."""
+    work = WorkTree(repo_root, spec_dir)
+    if not root_is_real or _git(repo_root, "rev-parse", "--git-dir") is None:
+        return work, None
+    head = _git(repo_root, "rev-parse", "HEAD")
+    branch = _git(repo_root, "rev-parse", "--abbrev-ref", "HEAD") or "HEAD"
+    here = f"{branch}@{head[:7]}" if head else branch
+    tracking = facts.get("tracking") if isinstance(facts.get("tracking"), dict) else {}
+    wanted: list[str] = []
+    if norm(facts.get("status")) == "shipped" and tracking.get("shipped_in"):
+        tag = str(tracking["shipped_in"]).strip()
+        wanted += [f"refs/tags/{tag}", tag]
+    if tracking.get("branch"):
+        b = str(tracking["branch"]).strip()
+        wanted += [f"refs/heads/{b}", f"refs/remotes/origin/{b}"]
+    for ref in wanted:
+        sha = _git(repo_root, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}")
+        if not sha:
+            continue
+        if sha == head:
+            return work, here
+        short = re.sub(r"^refs/(?:heads|tags|remotes)/", "", ref)
+        return GitTree(repo_root, short, sha, spec_dir), here
+    return work, here
+
+
 def check_file_existence(facts: dict, repo_root: Path, status_rank: int,
-                         f: Findings) -> None:
+                         f: Findings, tree: WorkTree | None = None) -> None:
     """§1.3. Registry-declared paths must resolve. Two documented exceptions:
     `where: external` (a cron job, a dashboard setting — no file here), and a
     `changes[]` file the set has not created yet, which is only a finding once the
-    set claims to be implementing."""
+    set claims to be implementing.
+
+    Paths resolve against `tree` — the working tree, or the branch the registry
+    names when the checkout is on another one (`spec_tree`)."""
+    tree = tree or WorkTree(repo_root)
     for key in ("changes", "related_docs"):
         for e in facts.get(key) or []:
             if not isinstance(e, dict):
@@ -1329,10 +1579,11 @@ def check_file_existence(facts: dict, repo_root: Path, status_rank: int,
                       "inside the checkout, or mark it `where: external`",
                       "20 declared paths exist")
                 continue
-            if target.exists():
+            if tree.exists(target):
                 continue
+            where_ = f"{repo_root.name}/" + (f" at `{tree.label}`" if tree.label else "")
             f.add(CONTRADICTION, f"{key}.{e.get('id', raw)}",
-                  f"declares `{raw}`, which does not exist under {repo_root.name}/",
+                  f"declares `{raw}`, which does not exist under {where_}",
                   "fix the path, or mark it `where: external` if it has no file in "
                   "this repo",
                   "20 declared paths exist")
@@ -1355,14 +1606,19 @@ def name_index(repo_root: Path) -> dict[str, list[str]]:
 
 
 def check_anchors(facts: dict, prose: dict[str, str], repo_root: Path,
-                  f: Findings) -> None:
+                  f: Findings, tree: WorkTree | None = None) -> None:
     """§1.1, the most frequent finding of all. Check 13 verifies an edit HAS an
     anchor; nothing verified that the anchor RESOLVES. In one set, five anchors had
     been moved by the author's own later edits inside the same session, and a sibling
     set carried eight bare `index.ts:18` with no path at all.
 
     `_log.md` is excluded: it is append-only history recording what was true then,
-    and its anchors are never corrected."""
+    and its anchors are never corrected.
+
+    Files are looked up in `tree` — the branch the registry names when the checkout
+    is on another one, else the working tree (`spec_tree`)."""
+    tree = tree or WorkTree(repo_root)
+    at = f" at `{tree.label}`" if tree.label else ""
     sources = {"_facts.yml": yaml.safe_dump(facts, allow_unicode=True)}
     sources.update(prose)
     by_name: dict[str, list[str]] | None = None
@@ -1383,7 +1639,7 @@ def check_anchors(facts: dict, prose: dict[str, str], repo_root: Path,
                     continue
             else:
                 if by_name is None:
-                    by_name = name_index(repo_root)
+                    by_name = tree.names()
                 matches = [Path(p) for p in by_name.get(path_str, ())]
                 if len(matches) != 1:
                     f.add(DRIFT, src,
@@ -1393,15 +1649,17 @@ def check_anchors(facts: dict, prose: dict[str, str], repo_root: Path,
                           "18 anchors resolve")
                     continue
                 target = matches[0]
-            if not target.is_file():
-                f.add(CONTRADICTION, src, f"anchor `{path_str}:{line}` — file missing",
+            if not tree.is_file(target):
+                f.add(CONTRADICTION, src,
+                      f"anchor `{path_str}:{line}` — file missing{at}",
                       "the file moved or was renamed; re-anchor",
                       "18 anchors resolve")
                 continue
-            total = sum(1 for _ in target.open(encoding="utf-8", errors="ignore"))
+            total = tree.line_count(target)
             if line > total:
                 f.add(CONTRADICTION, src,
-                      f"anchor `{path_str}:{line}` is past end of file ({total} lines)",
+                      f"anchor `{path_str}:{line}` is past end of file "
+                      f"({total} lines{at})",
                       "a later edit moved it — re-anchor against the current tree",
                       "18 anchors resolve")
 
@@ -1626,6 +1884,14 @@ def check_tracking(facts: dict, repo_root: Path, f: Findings) -> None:
                   "is the same defect as copying a test count",
                   "28 tracking vs reality")
     status = norm(facts.get("status"))
+    if status == "shipped" and not tracking.get("shipped_in"):
+        f.add(DRIFT, "tracking.shipped_in",
+              "`status: shipped` with no `shipped_in:`",
+              "the release tag is the one fact a shipped set is about; `shipped_on:` "
+              "and `release_url:` beside it are where the date and the release page "
+              "go, not a YAML comment. `scripts/ship.py <dir> --tag <tag>` writes "
+              "the three",
+              "28 tracking vs reality")
     if status in ("implementing", "shipped") and not (tracking.get("issues") or
                                                       tracking.get("pr")):
         f.add(DRIFT, "tracking",
@@ -1924,6 +2190,12 @@ def check_absence_of_signal(facts: dict, f: Findings) -> None:
             continue        # a git/shell absence is deterministic — check 1b's
         where = pretty_path(facts, path) or "_facts.yml"
         declared = str(ev.get("absence") or "").strip().lower() in ("true", "yes", "1")
+        if "absence" in ev and not declared:
+            # `absence: false` is the author saying the value is an observation
+            # that happens to read like an empty result — a note on where the
+            # focus ended up, a count that is legitimately zero. The regex is a
+            # heuristic over prose; an explicit declaration outranks it.
+            continue
 
         if not declared:
             value = str(ev.get("value") or "")
@@ -1933,7 +2205,9 @@ def check_absence_of_signal(facts: dict, f: Findings) -> None:
                       "— with no `absence:` declared",
                       "an empty result is not evidence of non-occurrence until the "
                       "path is known to emit: `absence: true`, `emits:` (the "
-                      "`file:line` that would have produced it) and `sample_rate:`",
+                      "`file:line` that would have produced it) and `sample_rate:` — "
+                      "or `absence: false` if the value is an observation that only "
+                      "reads like an empty result",
                       "33 absence of signal")
             continue
 
@@ -2476,13 +2750,17 @@ def check_log_stage(facts: dict, spec_dir: Path, f: Findings) -> None:
         f.add(DRIFT, "_log.md", f"`status: {status}` but the log records no `Stage:` "
               "transition",
               "a stage transition puts docs into audit scope and unlocks `implement`; "
-              "unrecorded, it is indistinguishable from a typo in the registry",
+              "unrecorded, it is indistinguishable from a typo in the registry. The "
+              "entry that flipped it carries, on its own line, exactly: "
+              f"`**Stage:** <previous status> → {status} — <who confirmed, and when>`",
               "16 handoff log")
     elif stages[-1][1].strip("`") != status:
         f.add(DRIFT, "_log.md",
               f"last recorded transition ends at `{stages[-1][1]}` but `status:` is "
               f"`{status}`",
-              "append the entry that performed the change",
+              "append the entry that performed the change, with the line "
+              f"`**Stage:** {stages[-1][1].strip('`')} → {status} — <who confirmed, "
+              "and when>`",
               "16 handoff log")
 
 
@@ -2588,9 +2866,12 @@ def check_unique_ids(facts: dict, f: Findings) -> None:
                   "37 registry ids unique")
 
 
-def source_tree_files(facts: dict, repo_root: Path, f: Findings) -> set[str] | None:
+def source_tree_files(facts: dict, repo_root: Path, f: Findings,
+                      where: WorkTree | None = None) -> set[str] | None:
     """-> repo-relative paths `source_tree.globs` selects, minus declared exclusions.
-    None when the set declares no source tree."""
+    None when the set declares no source tree. Read from `where` — the spec branch
+    when the checkout is on another one (`spec_tree`)."""
+    where = where or WorkTree(repo_root)
     tree = facts.get("source_tree")
     if not tree:
         return None
@@ -2600,7 +2881,6 @@ def source_tree_files(facts: dict, repo_root: Path, f: Findings) -> set[str] | N
               "38 source tree vs changes[]")
         return None
     files: set[str] = set()
-    root = repo_root.resolve()
     for pattern in as_list(tree.get("globs")):
         pattern = str(pattern).strip()
         if not pattern or pattern.startswith("/") or ".." in Path(pattern).parts:
@@ -2609,12 +2889,7 @@ def source_tree_files(facts: dict, repo_root: Path, f: Findings) -> set[str] | N
                   "inside the repo",
                   "38 source tree vs changes[]")
             continue
-        for p in repo_root.glob(pattern):
-            if p.is_file():
-                try:
-                    files.add(p.resolve().relative_to(root).as_posix())
-                except ValueError:
-                    continue      # a symlink out of the checkout is not ours to read
+        files |= where.glob(pattern)
     for ex in as_list(tree.get("exclude")):
         glob = ex.get("glob") if isinstance(ex, dict) else ex
         because = ex.get("because") if isinstance(ex, dict) else None
@@ -2648,7 +2923,7 @@ def change_paths(facts: dict) -> list[tuple[dict, str]]:
 
 
 def check_source_coverage(facts: dict, repo_root: Path, status_rank: int,
-                          f: Findings) -> None:
+                          f: Findings, tree: WorkTree | None = None) -> None:
     """Check 38. `changes[]` is what `review` sweeps and what `implement` writes
     phases against. A file the registry does not know is outside both: the gap
     sweep could not have found a hazard in it, and nothing said so.
@@ -2665,7 +2940,7 @@ def check_source_coverage(facts: dict, repo_root: Path, status_rank: int,
     if not facts.get("source_tree") and status_rank < STATUS_RANK["implementing"] \
             and not built:
         return        # nothing is built yet, so the tree cannot be ahead of the plan
-    files = source_tree_files(facts, repo_root, f)
+    files = source_tree_files(facts, repo_root, f, tree)
     if files is None:
         if any(norm(e.get("kind")) == "planned" for e, _ in change_paths(facts)):
             f.add(POLISH, "_facts.yml", "no `source_tree:` — nothing compares "
@@ -2679,20 +2954,23 @@ def check_source_coverage(facts: dict, repo_root: Path, status_rank: int,
     for path in sorted(files):
         if any(path == d or path.startswith(d + "/") for d in declared):
             continue
-        f.add(DRIFT, path, "exists under `source_tree:` and no `changes[]` entry "
-              "names it",
+        f.add(DRIFT, path, "exists under `source_tree:`"
+              + (f" at `{tree.label}`" if tree and tree.label else "")
+              + " and no `changes[]` entry names it",
               "register it (`kind: planned` + `built_on:`), or exclude it with a "
               "`because:` — unregistered, `review` never sweeps it",
               "38 source tree vs changes[]")
 
 
 def check_built_state(facts: dict, repo_root: Path, status_rank: int,
-                      f: Findings) -> None:
+                      f: Findings, tree: WorkTree | None = None) -> None:
     """Check 39. `kind:` is intent — planned, deferred, moved out. After thirty
     rounds a real registry could not answer "what is done?", so its author invented
     `built:` and then missed it on two entries that were built: a report counted 18
     components where there were 20. `built_on:` is the field; this check reads it
-    against the disk in the direction check 38 does not."""
+    against the tree in the direction check 38 does not — the spec branch when the
+    checkout is on another one."""
+    tree = tree or WorkTree(repo_root)
     changes = change_paths(facts)
     adopted = any(e.get("built_on") for e, _ in changes)
     unbuilt = []
@@ -2718,9 +2996,10 @@ def check_built_state(facts: dict, repo_root: Path, status_rank: int,
         # From `implementing` on, check 20 already reports the missing file.
         target = confined(repo_root, raw)
         if status_rank < STATUS_RANK["implementing"] and target is not None \
-                and not target.exists():
+                and not tree.exists(target):
             f.add(CONTRADICTION, f"changes.{cid}",
-                  f"`built_on: {built}` but `{raw}` does not exist",
+                  f"`built_on: {built}` but `{raw}` does not exist"
+                  + (f" at `{tree.label}`" if tree.label else ""),
                   "a built component has a file — fix the path, or clear `built_on:`",
                   "39 changes[] built state")
     if adopted and status_rank < STATUS_RANK["implementing"]:
@@ -2953,7 +3232,7 @@ def check_doc_freshness(facts: dict, prose: dict[str, str], status_rank: int,
 
 
 def check_contract_code(facts: dict, repo_root: Path, f: Findings,
-                        c: Candidates) -> None:
+                        c: Candidates, tree: WorkTree | None = None) -> None:
     """Check 43. Check 3 compares `contracts.*` with prose; nothing compared it with
     the code that reads the payload at runtime. A field could be added to the
     registry and to seven documents and still be missing from the validator — the
@@ -2964,6 +3243,7 @@ def check_contract_code(facts: dict, repo_root: Path, f: Findings,
     loops over a list built elsewhere names no field at all and is still correct.
     The real bridge is a contract parity test in the repo (references/
     implementable.md §Contract parity); this points at where one is missing."""
+    tree = tree or WorkTree(repo_root)
     node = facts.get("contracts")
     if not isinstance(node, dict):
         return
@@ -2978,13 +3258,14 @@ def check_contract_code(facts: dict, repo_root: Path, f: Findings,
         for raw in as_list(entry.get("validated_in")):
             raw = str(raw).split(":")[0].strip()
             target = confined(repo_root, raw)
-            if target is None or not target.is_file():
+            if target is None or not tree.is_file(target):
                 f.add(CONTRADICTION, f"contracts.{cid}",
-                      f"`validated_in: {raw}` does not resolve to a file in the repo",
+                      f"`validated_in: {raw}` does not resolve to a file in the repo"
+                      + (f" at `{tree.label}`" if tree.label else ""),
                       "point it at the validator that reads this payload at runtime",
                       "43 contract vs code")
                 continue
-            code = target.read_text(encoding="utf-8", errors="ignore")
+            code = tree.read_text(target)
             missing = sorted(k for k in fields
                              if not re.search(r"(?<![\w])%s(?![\w])" % re.escape(k),
                                               code))
@@ -3067,6 +3348,56 @@ def git_blob(data: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
+def _file_records(line: str) -> list[tuple[str, int | None, str | None]]:
+    """-> [(file, lines, blob)] named on one `**Read:**` / `**Edits:**` line."""
+    out = []
+    for m in LOG_FILE_RECORD_ANY.finditer(line):
+        inner = m.group("inner") or ""
+        lines = re.search(r"(\d+)\s*(?:lines?|líneas?)", inner)
+        blob = re.search(r"blob\s+([0-9a-f]{7,40})", inner)
+        short = re.fullmatch(r"\s*(\d+)\s*,\s*([0-9a-f]{7,40})\s*", inner)
+        if short:           # `(520, c732dbe)` — the same record, abbreviated
+            lines, blob = short, re.match(r".*?,\s*([0-9a-f]{7,40})", inner)
+        out.append((m.group("file"), int(lines.group(1)) if lines else None,
+                    blob.group(1) if blob else None))
+    return out
+
+
+def _collect_entry(entries: list[dict], n: int, line: int, rid: str, body: str) -> None:
+    """One record per round: the versions its `Read:` and `Edits:` lines claim.
+    A stub and its completion share an id and are merged into one."""
+    read = [r for m in re.finditer(r"^\*\*Read:\*\*.*$", body, re.M)
+            for r in _file_records(m.group(0))]
+    edits = [r for m in re.finditer(r"^\*\*Edits:\*\*.*$", body, re.M)
+             for r in _file_records(m.group(0))]
+    if entries and entries[-1]["n"] == n:
+        entries[-1]["read"] += read
+        entries[-1]["edits"] += edits
+        return
+    entries.append({"n": n, "id": rid, "line": line, "read": read, "edits": edits})
+
+
+def _version_differs(a: tuple[int | None, str | None],
+                     b: tuple[int | None, str | None]) -> bool:
+    """Two records disagree when a field BOTH carry differs. A record with neither
+    is unknown, and unknown contradicts nothing."""
+    (al, ab), (bl, bb) = a, b
+    if al is not None and bl is not None and al != bl:
+        return True
+    if ab and bb and not (ab.startswith(bb) or bb.startswith(ab)):
+        return True
+    return False
+
+
+def _fmt_version(nlines: int | None, blob: str | None) -> str:
+    parts = []
+    if nlines is not None:
+        parts.append(f"{nlines} lines")
+    if blob:
+        parts.append(f"blob {blob[:7]}")
+    return ", ".join(parts) or "no version"
+
+
 def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
                         f: Findings) -> None:
     """Check 16, the half that is parsing. Round ids, the three required fields,
@@ -3090,6 +3421,7 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
     heads = list(re.finditer(r"^## (R(\d+))\b(.*)$", text, re.M))
     last = 0
     incomplete: list[tuple[int, str, list[str]]] = []
+    entries: list[dict] = []     # one per round, stub and completion merged
     for i, h in enumerate(heads):
         n = int(h.group(2))
         ln = text[:h.start()].count("\n") + 1
@@ -3115,13 +3447,17 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
             ("Read:", re.search(r"^\*\*Read:\*\*", body, re.M)),
             ("Log read through:", re.search(r"^\*\*Log read through:\*\*", body, re.M)),
         ) if not ok]
+        _collect_entry(entries, n, ln, h.group(1), body)
         if missing:
             incomplete.append((ln, h.group(1), missing))
     # A log that stopped recording the fields did so for a stretch of rounds, not
     # one. Fifteen identical findings bury the rest of the report; one finding
     # naming the fifteen does not.
     why = ("without them the entry cannot be checked against anything, which is the "
-           "only thing it was for")
+           "only thing it was for. The labels are read literally, one per line: "
+           "`## R<n> · <date> · <agent> · <action>`, `**Read:** <file> (<n> lines, "
+           "blob <sha7>) · …` (printed by `audit.py <dir> --read-line`), "
+           "`**Log read through:** R<n>`")
     if len(incomplete) > 3:
         fields = sorted({m for _, _, ms in incomplete for m in ms})
         f.add(DRIFT, f"_log.md:{incomplete[0][0]}",
@@ -3132,6 +3468,42 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
         for ln, rid, missing in incomplete:
             f.add(DRIFT, f"_log.md:{ln}", f"`{rid}` has no {', '.join(missing)}",
                   why, "16 handoff log")
+
+    # A round reads a version the previous round did not leave. `Read:` of entry N
+    # against the last version any earlier entry recorded for the same file —
+    # `Edits:` of N-1 usually, `Read:` of N-1 when it did not edit. Real case: R9
+    # closed with `_facts.yml` at 634 lines, blob 882d1ff; R10 opened with 633 lines,
+    # blob 857ce36 — a `tracking.pr` edit made between rounds, with no round. The
+    # disk comparison below never saw it: R10's own stub "legitimised" the version.
+    # An `Edits:` naming the file with no version leaves it unknown, not wrong.
+    # Keyed by the file, not the spelling: one round writes `_facts.yml`, the next
+    # `docs/features/<slug>/_facts.yml`, and a comparison by name would skip the
+    # round in between — which is how a real set reported R11 against R9.
+    def key(name: str) -> str:
+        for base in (spec_dir, repo_root):
+            target = confined(base, name)
+            if target is not None and target.is_file():
+                return str(target.resolve())
+        return name
+
+    known: dict[str, tuple[str, int | None, str | None]] = {}
+    for e in entries:
+        for name, nlines, blob in e["read"]:
+            if Path(name).name == "_log.md":
+                continue    # grows by the entry being written; never compared
+            prev = known.get(key(name))
+            if prev and _version_differs(prev[1:], (nlines, blob)):
+                f.add(DRIFT, f"_log.md:{e['line']}",
+                      f"`{e['id']}` read `{name}` at {_fmt_version(nlines, blob)}; "
+                      f"`{prev[0]}` left it at {_fmt_version(prev[1], prev[2])} — "
+                      "edited between rounds",
+                      "an edit nobody logged sits between the two entries. Append "
+                      "the round that made it, or record it in this entry's "
+                      "`**Edits:**` with what changed",
+                      "16 handoff log")
+            known[key(name)] = (e["id"], nlines, blob)
+        for name, nlines, blob in e["edits"]:
+            known[key(name)] = (e["id"], nlines, blob)
 
     # Only the fields that claim a version: `**Read:**` and `**Edits:**` lines. A
     # file named in narrative is not a claim about which version was read.
@@ -3464,7 +3836,8 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
            prose, as_json: bool, declared_status: str | None = None,
            audited_as: str | None = None,
            today: datetime.date | None = None,
-           matrix: dict | None = None) -> int:
+           matrix: dict | None = None,
+           tree: tuple[str, str] | None = None) -> int:
     order = {CONTRADICTION: 0, DRIFT: 1, POLISH: 2}
     f.items.sort(key=lambda x: (order[x["severity"]], x["check"], x["where"]))
 
@@ -3476,6 +3849,8 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
                               for r in live_accepted_risks(facts, today)],
                           "candidates": cands.by_check,
                           "matrix": matrix,
+                          "tree": ({"checkout": tree[0], "spec": tree[1]} if tree
+                                   else None),
                           "deferred_docs": [d["file"] for d in deferred]},
                          indent=2, ensure_ascii=False))
         return 1 if f.count(CONTRADICTION) else 0
@@ -3486,6 +3861,9 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
     print(f"# audit — {facts.get('feature', '?')}  ({shown})\n")
     scoped = ", ".join(d["file"] for d in in_scope if d["exists"]) or "none"
     print(f"docs in scope: {scoped}")
+    if tree:
+        print(f"checkout: {tree[0]} · spec branch: {tree[1]} — checks 18, 20, 38, 39 "
+              "and 43 read paths from the spec branch")
     if deferred:
         print("not due yet: " + ", ".join(
             f"{d['file']} (stage {d['stage']})" for d in deferred))
@@ -3617,7 +3995,13 @@ def main(argv: list[str] | None = None) -> int:
     facts_path = spec_dir / "_facts.yml"
     if not facts_path.is_file():
         sys.exit(f"no _facts.yml in {spec_dir} — not a feature-spec set.")
-    facts = load_facts(facts_path)
+    try:
+        facts = load_facts(facts_path)
+    except yaml.YAMLError as exc:
+        # Its own exit code: 1 means "audited, contradictions found", and a file
+        # that could not be read was not audited.
+        print(yaml_error_report(facts_path, exc), file=sys.stderr)
+        return 2
     declared_status = str(facts.get("status") or "draft")
     if args.as_status:
         # A shallow copy, never a write: the point is to see what a flip would
@@ -3671,13 +4055,14 @@ def main(argv: list[str] | None = None) -> int:
     check_changes_defect_cascade(facts, f)
     check_defect_status_vocabulary(facts, f)
     check_unique_ids(facts, f)
-    check_source_coverage(facts, repo_root, rank, f)
-    check_built_state(facts, repo_root, rank, f)
+    tree, checkout = spec_tree(facts, spec_dir, repo_root, root_is_real)
+    check_source_coverage(facts, repo_root, rank, f, tree)
+    check_built_state(facts, repo_root, rank, f, tree)
     check_revision_order(facts, prose, f)
     check_provisional_markers(facts, prose, f)
-    check_contract_code(facts, repo_root, f, c)
-    check_file_existence(facts, repo_root, rank, f)
-    check_anchors(facts, prose, repo_root, f)
+    check_contract_code(facts, repo_root, f, c, tree)
+    check_file_existence(facts, repo_root, rank, f, tree)
+    check_anchors(facts, prose, repo_root, f, tree)
     check_orphan_and_dangling_ids(facts, prose, f)
     check_phase_numbering(prose, f)
     check_evidence_cmd_runnable(facts, f)
@@ -3710,7 +4095,8 @@ def main(argv: list[str] | None = None) -> int:
               else correspondence(facts, prose, in_scope))
     return report(f, c, facts, in_scope, deferred, prose, args.json,
                   declared_status=declared_status, audited_as=audited_as, today=today,
-                  matrix=matrix)
+                  matrix=matrix,
+                  tree=(checkout, tree.label) if tree.label else None)
 
 
 if __name__ == "__main__":

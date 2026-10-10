@@ -34,7 +34,7 @@ One `##` block per round, appended at the end of the file. Never edit or delete 
 **Still open:** D5 `basis: asserted` — no hardware. G1 blocks `status: shipped`.
 ```
 
-Required fields. A missing one is an audit finding, not a style choice:
+Required fields. A missing one is an audit finding, not a style choice. **The labels are read literally** — `**Read:**`, `**Edits:**`, `**Log read through:**`, `**Stage:**`, bold, with the colon inside, one per line at the start of the line. A renamed label (`**Edited:**`, `**Files read:**`) is not a style choice either: check 16 stops seeing that entry's versions and the next finding is about a file "nobody recorded". *Real case:* renaming `**Edits:**` broke every stamp in a set, and the audit reported the files rather than the rename.
 
 | field | what it is | why it is required |
 |---|---|---|
@@ -98,7 +98,7 @@ The shape generalizes; three is just the common case.
 
 Repeat from 2 as needed. `verify` (device/instrumented observation) is its own action and can enter at any point; it is the only one that can turn an `asserted` claim into a `measured` one.
 
-**A round that edits without appending an entry is invisible**, and the next round reviews a file matching no entry in the log. Audit check 16 catches it after the fact — it recomputes every set file's line count and blob and compares them with the last `Read:` / `Edits:` line that recorded them; appending as you go is what prevents it. That comparison only works for files recorded **with** a version: `_facts.yml (v17)` names a revision nothing can check, and is itself a finding.
+**A round that edits without appending an entry is invisible**, and the next round reviews a file matching no entry in the log. Audit check 16 catches it after the fact, twice over — it recomputes every set file's line count and blob and compares them with the last `Read:` / `Edits:` line that recorded them; and it compares each entry's `Read:` against the version the **previous** entries left, so an edit made *between* two rounds is caught even though the next round's own stub recorded the new version faithfully. *Real case:* R9 closed with `_facts.yml` at 634 lines, blob 882d1ff; R10 opened at 633 lines, blob 857ce36 — a `tracking.pr` edit with no round. The disk matched R10's stamp, so the first comparison was silent; the second says `R10 read _facts.yml at 633 lines, blob 857ce36; R9 left it at 634 lines, blob 882d1ff — edited between rounds`. Appending as you go is what prevents both. The comparisons only work for files recorded **with** a version: `_facts.yml (v17)` names a revision nothing can check, and is itself a finding; an `Edits:` naming a file with no version leaves the next round's `Read:` uncheckable, not wrong.
 
 ## Rotating the log
 

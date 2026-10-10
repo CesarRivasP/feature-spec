@@ -1,0 +1,26 @@
+# ship.py — the flip to `shipped` as one command. D1 is measured and fixed, AC1 is
+# verified, the revisions list has two entries: the gates pass and every edit the
+# flip needs is known in advance. test_ship.py also breaks D1 (asserted) and AC1
+# (written) in copies to see the refusal name them.
+feature: ship-ready
+status: implementing          # ORDERED: draft < reviewed < implementing < shipped
+profile: ../_profile.fixture.yml
+tracking:
+  issues: [12]
+  pr: 14                # the PR
+  branch: feat/ship
+  shipped_in: null      # release tag once merged
+dates:
+  drafted: 2026-09-01
+  revisions:
+    - { tag: v1, date: 2026-09-01, note: 'borrador' }
+    - { tag: v2, date: 2026-09-10, note: 'revisado' }
+defects:
+  - { id: D1, role: root_cause, basis: measured, status: fixed,
+      claim: 'el handler espera 100s',
+      evidence: { how: shell, cmd: '<commands.tests>', date: 2026-09-20, n: 3,
+                  spread: '280/280 las tres veces', value: '280/280 passing' } }
+acceptance:
+  - { id: AC1, item: 'el handler corta a 30s', status: approved, verified_on: 2026-09-20 }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

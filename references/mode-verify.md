@@ -25,6 +25,8 @@ Reconcile `_facts.yml` against observations from a device run or instrumented se
 
 `audit` asks whether the docs agree with the registry. `review` asks whether the plan is safe to build. **`verify` asks whether the registry is TRUE** — and it is the only one of the three that can fail after a clean `audit`. Run it before flipping `status: shipped`; gate G1 in `references/evidence.md` refuses that flip while a root cause is still `asserted`.
 
+**Every `status:` change this mode makes carries a `Stage:` line in its log entry** — `**Stage:** <from> → <to> — <why>`, on its own line, label spelled exactly so; check 16 reads nothing else for it. A `verify` that confirms the root cause and leaves the set at `implementing` writes none. **The flip to `shipped` itself is `ship`** (`references/mode-ship.md`): it runs the gates as if already shipped, refuses naming what blocks, and otherwise makes the six edits and prints the `Stage:` and `Edits:` lines in one command. Intake set C is this mode's, not that one's — a flip after the measurement has nothing left to ask.
+
 ---
 
 Every mode starts by reading `_log.md` from disk and opens its own entry before editing (`SKILL.md` §Modes, `references/handoff.md`). The rules every mode that writes is held to: `references/rules.md`.

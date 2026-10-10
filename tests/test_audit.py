@@ -265,7 +265,9 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
       ("33", "z3_emits_null"),           # nothing emits — so it proves nothing
       ("33", "z4_no_sample_rate")],      # at 0.2, an empty result is the expectation
      [("33", "z5_complete"),
-      ("33", "z6_positive")]),           # a real signal is not an absence
+      ("33", "z6_positive"),             # a real signal is not an absence
+      ("33", "z7_declared_false")]),     # `absence: false` — an observation that
+                                         # only reads like an empty result
 
     # §2.2 — a changes[] entry depends_on a decision revised in place. C16 was never
     # reviewed since; C19 was reviewed, but before the revision — both stale. C17
@@ -416,6 +418,14 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("16", "@02-implementation-and-e2e.md"),   # recorded blob matches the disk
       ("16", "R9"),                              # inside an HTML comment
       ("16", "`R6`")]),                          # stub + completion, one round
+
+    # §16 — the half between rounds: R2 read a version R1 did not leave.
+    ("log-between-rounds",
+     [("16", "`R2` read `_facts.yml` at 11 lines, blob 2222222; `R1` left it at "
+             "10 lines, blob 1111111")],
+     [("16", "read `01-master-plan.md`"),        # same version both rounds
+      ("16", "read `02-implementation.md`")]),   # R2's Edits: named it with no
+                                                 # version — unknown, not wrong
 ]
 
 # (fixture, extra args, expect, reject) — cases that only exist under a flag.
@@ -809,6 +819,156 @@ def matrix_is_counted() -> list[str]:
     return problems
 
 
+def git(cwd: Path, *args: str) -> str:
+    out = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                         cwd=cwd, capture_output=True, text=True)
+    if out.returncode != 0:
+        raise AssertionError(f"git {' '.join(args)} failed: {out.stderr}")
+    return out.stdout.strip()
+
+
+def paths_resolve_on_the_spec_branch() -> list[str]:
+    """Checks 18 and 20 resolve paths against the branch the registry names, not
+    the checkout. Real case: a set audited from a `multiview` checkout reported a
+    test file "does not exist" for a whole session; it existed on `tracking.branch`.
+
+    Three states, one repo: on another branch the file is read from the ref and the
+    report says so; on the same commit the working tree is used and nothing is
+    printed; once `shipped`, the tag wins over the branch."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "repo"
+        root.mkdir()
+        git(root, "init", "-q", "-b", "main")
+        (root / "README.md").write_text("# repo\n")
+        git(root, "add", "."); git(root, "commit", "-q", "-m", "init")
+        git(root, "checkout", "-q", "-b", "feat/x")
+        (root / "src").mkdir()
+        (root / "src" / "on-branch.ts").write_text("\n".join(f"l{i}" for i in range(20)) + "\n")
+        (root / "src" / "extra.ts").write_text("export const amount = 1\n")
+        git(root, "add", "."); git(root, "commit", "-q", "-m", "feat")
+        git(root, "tag", "v1.0.0")
+        git(root, "checkout", "-q", "main")
+        spec = root / "docs" / "features" / "branchy"
+        spec.mkdir(parents=True)
+        shutil.copy(FIXTURES / "_profile.fixture.yml", spec / "_profile.fixture.yml")
+        (spec / "01-master-plan.md").write_text(
+            "# plan\n\nver `src/on-branch.ts:10` y `src/on-branch.ts:50`.\n")
+
+        def facts(status: str, branch: str, tag: str | None = None) -> None:
+            (spec / "_facts.yml").write_text(
+                f"feature: branchy\nstatus: {status}\nprofile: _profile.fixture.yml\n"
+                f"tracking: {{ branch: {branch}, pr: 1, shipped_in: {tag or 'null'} }}\n"
+                "source_tree: { globs: ['src/**/*.ts'] }\n"
+                "contracts:\n  pay: { fields: [amount, currency], basis: decided, "
+                "validated_in: src/extra.ts }\n"
+                "changes:\n  - { id: C1, file: src/on-branch.ts, kind: planned, "
+                "where: repo, change: 'x', built_on: 2026-10-01 }\n"
+                "docs:\n  - { id: \"01\", file: 01-master-plan.md, role: master-plan, "
+                "stage: draft }\n")
+
+        def run_here() -> dict:
+            out = subprocess.run([sys.executable, str(AUDIT), str(spec), "--json"],
+                                 capture_output=True, text=True)
+            if out.returncode not in (0, 1):
+                raise AssertionError(f"branchy: audit.py crashed\n{out.stderr}")
+            return json.loads(out.stdout)
+
+        facts("implementing", "feat/x")
+        data = run_here()
+        fs = data["findings"]
+        if matches(fs, "20", "src/on-branch.ts"):
+            problems.append("branchy: check 20 reported a file that exists on "
+                            "`tracking.branch` as missing — it read the checkout")
+        if matches(fs, "18", ":10` — file missing"):
+            problems.append("branchy: check 18 reported `src/on-branch.ts:10` missing "
+                            "— it read the checkout, not the branch")
+        if not matches(fs, "18", ":50` is past end of file (20 lines at `feat/x@"):
+            problems.append("branchy: check 18 must count lines on the branch and say "
+                            f"which ref it read — got {[f['what'] for f in fs if '18' in f['check']]}")
+        if not data.get("tree") or data["tree"]["checkout"].split("@")[0] != "main" \
+                or not data["tree"]["spec"].startswith("feat/x@"):
+            problems.append(f"branchy: the report must name checkout and spec branch, "
+                            f"got {data.get('tree')}")
+        # 38: the globs run over the branch — `src/extra.ts` is there and unregistered,
+        # `src/on-branch.ts` is there and registered.
+        if not matches(fs, "38", "@src/extra.ts"):
+            problems.append("branchy: check 38 must glob `source_tree:` on the spec "
+                            f"branch and report `src/extra.ts` — got "
+                            f"{[f['where'] for f in fs if '38' in f['check']]}")
+        if matches(fs, "38", "@src/on-branch.ts"):
+            problems.append("branchy: check 38 reported a registered file")
+        # 43: `validated_in` resolves on the branch; the grep runs over the branch's
+        # content, so `currency` (absent there) is a candidate and `amount` is not.
+        if matches(fs, "43", "does not resolve"):
+            problems.append("branchy: check 43 read the checkout — `src/extra.ts` "
+                            "exists on the spec branch")
+        c43 = " ".join(x["what"] for x in data.get("candidates", {}).get("43", []))
+        if "`currency`" not in c43 or "`amount`" in c43:
+            problems.append(f"branchy: check 43 must grep the branch's file content, "
+                            f"got candidates {c43!r}")
+
+        # 39: `built_on:` below `implementing` checks the file exists — on the branch.
+        facts("reviewed", "feat/x")
+        fs = run_here()["findings"]
+        if matches(fs, "39", "does not exist"):
+            problems.append("branchy: check 39 said a built file does not exist — it "
+                            "read the checkout, not the branch")
+
+        facts("implementing", "main")
+        data = run_here()
+        if data.get("tree") is not None:
+            problems.append("branchy: on the same commit the working tree is the tree, "
+                            "and no header line is printed")
+        if not matches(data["findings"], "20", "src/on-branch.ts"):
+            problems.append("branchy: on `main` the file really is missing — check 20 "
+                            "must still say so")
+
+        facts("shipped", "main", "v1.0.0")
+        data = run_here()
+        if not data.get("tree") or not data["tree"]["spec"].startswith("v1.0.0@"):
+            problems.append(f"branchy: once shipped, `shipped_in` is the ref, got "
+                            f"{data.get('tree')}")
+        if matches(data["findings"], "20", "src/on-branch.ts"):
+            problems.append("branchy: the file exists at the tag; check 20 read the "
+                            "checkout")
+    return problems
+
+
+def yaml_errors_name_their_position() -> list[str]:
+    """A missing comma after `absence: true` inside a flow mapping came back as a
+    raw `ComposerError`. The 36 checks never ran, and nothing said where to look.
+    Now: `_facts.yml:<line>:<col>`, the line, a caret, and a distinct exit code."""
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "broken"
+        shutil.copytree(FIXTURES / "absence-signal", spec)
+        facts = spec / "_facts.yml"
+        text = facts.read_text(encoding="utf-8")
+        broken = text.replace("absence: true, sample_rate: 0.2 }",
+                              "absence: true sample_rate: 0.2 }", 1)
+        if broken == text:
+            return ["yaml-error: the fixture no longer has the line this test breaks"]
+        facts.write_text(broken, encoding="utf-8")
+        out = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root",
+                              str(spec)], capture_output=True, text=True)
+    problems = []
+    if out.returncode == 0 or out.returncode == 1:
+        problems.append(f"yaml-error: a syntax error must exit with its own code, "
+                        f"got {out.returncode}")
+    where = re.search(r"_facts\.yml:(\d+):(\d+): not valid YAML", out.stderr)
+    broken_at = next(i for i, l in enumerate(broken.splitlines(), 1)
+                     if "absence: true sample_rate" in l)
+    if not where:
+        problems.append(f"yaml-error: stderr must start `_facts.yml:<line>:<col>: not "
+                        f"valid YAML`, got {out.stderr[:200]!r}")
+    elif int(where.group(1)) != broken_at:
+        problems.append(f"yaml-error: reported line {where.group(1)}, the broken line "
+                        f"is {broken_at}")
+    if "^" not in out.stderr:
+        problems.append("yaml-error: the offending line is printed with a caret")
+    return problems
+
+
 def read_line_round_trips() -> list[str]:
     """`--read-line` prints the `**Read:**` line of a log entry. The only thing that
     makes it worth having is that check 16 reads it back: a line in a shape the
@@ -929,6 +1089,10 @@ def main() -> int:
     failures += matrix_is_counted()
     total += 1
     failures += read_line_round_trips()
+    total += 1
+    failures += paths_resolve_on_the_spec_branch()
+    total += 1
+    failures += yaml_errors_name_their_position()
     for fixture, extra, expect, reject in FLAG_CASES:
         findings = run(fixture, extra)
         for check, text in expect:

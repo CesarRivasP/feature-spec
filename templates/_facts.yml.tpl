@@ -41,6 +41,8 @@ tracking:
   milestone: null       # e.g. v1.4.2
   branch: null
   shipped_in: null      # release tag once merged, e.g. hotfix/v1.4.1
+  shipped_on: null      # publication date. `scripts/ship.py <dir> --tag <tag>` writes
+  release_url: null     #   these three, flips status: and appends the revision
   blocked_by: null      # external owner + their clock, if any
 
 dates:
@@ -113,6 +115,9 @@ dates:
 #                 absence: true,
 #                 emits: 'usePlayerActions.js:399 onError -> Sentry',  # null = nothing
 #                 sample_rate: 0.2 }    # at 0.2, 4 of 5 occurrences never appear
+#   `absence: false` says the opposite on purpose: a value that READS like an empty
+#   result ("foco final: tile 2 — 0 events de focus perdido") but is an observation.
+#   Check 33's heuristic is a regex over prose; the declaration outranks it.
 #
 # This is NOT only for numbers. Behavioral claims ("the framework focuses the
 # first item") and file/git-state claims ("not committed yet") are claims too.
@@ -453,6 +458,12 @@ acceptance: []          # Definition-of-Done items (shared across docs).
 # reviewer went 31 rounds untouched and carried five false claims, one contradicting a
 # measurement in its own registry. Bump it when you reread the doc, not only when
 # you rewrite it.
+#
+# `role:` — master-plan | implementation | tests | stakeholder, the four the set
+# writes; `legacy` for a doc written BEFORE the set that it now absorbs; `derived`
+# for one generated FROM it — a PR body, release notes, a runbook. Check 9 wants
+# every sibling named here; `sync` never writes into `legacy` or `derived`, and
+# `view` renders them as context. `pr-body.md` registered as `legacy` was false.
 #
 # Never add an `exists:` field here. File presence is cheap to verify, so it is
 # read from disk — asserting it is the same defect as copying a test count.
