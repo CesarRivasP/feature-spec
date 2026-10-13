@@ -30,6 +30,11 @@ acceptance:
   - id: AC2
     item: 'el fallback de red reintenta una sola vez'
     status: written
+    closes: D1
+    attempts:
+      - date: 2026-10-12
+        outcome: aborted_no_conditions
+        aborted_because: 'sin servidor mock en staging'
 changes:
   - id: C1
     file: src/cache.ts

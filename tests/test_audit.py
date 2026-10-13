@@ -1167,6 +1167,11 @@ def open_items_lists_pending_actions() -> list[str]:
         problems.append("open-items: text output must list open defect D1 with 10 days left and not fixed D2")
     if "acceptance.AC2" not in text or "acceptance.AC1" in text:
         problems.append("open-items: text output must list written criterion AC2 and not approved AC1")
+    risks_block = text.split("## Accepted risks due")[1].split("## Acceptance criteria")[0]
+    if "AC2: 1 attempt, last 2026-10-12 aborted_no_conditions — sin servidor mock en staging" not in risks_block:
+        problems.append("open-items: the risk D1 must list AC2's blocked attempt under it, as the audit does")
+    if "acceptance.AC2 — status: written · closes D1 · 1 attempt ·" not in text:
+        problems.append("open-items: the unsigned criterion AC2 must say it closes D1 and carries 1 attempt")
     if "changes.C1" not in text:
         problems.append("open-items: text output must list deferred change C1")
 
@@ -1192,6 +1197,8 @@ def open_items_lists_pending_actions() -> list[str]:
                 problems.append(f"open-items: --json defects_open != ['D1']: {data.get('defects_open')}")
             if [r["id"] for r in data.get("accepted_risks_due", [])] != ["D1"]:
                 problems.append(f"open-items: --json accepted_risks_due != ['D1']: {data.get('accepted_risks_due')}")
+            elif [c["id"] for c in data["accepted_risks_due"][0].get("closing_criteria", [])] != ["AC2"]:
+                problems.append(f"open-items: --json accepted_risks_due[0].closing_criteria != ['AC2']: {data['accepted_risks_due'][0]}")
             if [a["id"] for a in data.get("acceptance_unsigned", [])] != ["AC2"]:
                 problems.append(f"open-items: --json acceptance_unsigned != ['AC2']: {data.get('acceptance_unsigned')}")
             if [c["id"] for c in data.get("changes_deferred", [])] != ["C1"]:
