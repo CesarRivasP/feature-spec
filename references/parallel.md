@@ -122,6 +122,9 @@ log entry. Measured 2026-09-30: `-low` 7 s and `-high` 13 s for a one-line promp
 **~13k input tokens per call** before the brief — the CLI's own system prompt. That floor is
 why a subagent is not worth starting for a task smaller than a checklist file.
 
+Not yet verified, and not assumed: whether print mode reads the checkout with no write
+permission granted. Until it is, the `agy` runner passes the files the brief names inline.
+
 ### `orca` — Orca multi-agent IDE
 
 A subagent is an Orca worker started by the main session on the same checkout:
@@ -142,7 +145,7 @@ and the behaviour of a profile with no `parallel:` key.
 
 ## The inbox
 
-When multiple workers run concurrently, coordination happens through an ad hoc inbox directory on disk:
+When multiple workers run concurrently, coordination goes through the set's inbox directory on disk:
 `docs/features/<slug>/_inbox/`.
 
 The inbox is the disk the brief comes from (rule 4) and the disk the worker returns its findings to.
