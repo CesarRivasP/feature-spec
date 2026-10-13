@@ -426,6 +426,20 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("16", "read `01-master-plan.md`"),        # same version both rounds
       ("16", "read `02-implementation.md`")]),   # R2's Edits: named it with no
                                                  # version — unknown, not wrong
+
+    # §16 — disk comparison keys file records by resolved path, not literal spelling.
+    # R1 records `_facts.yml` at vA; R2 edits it and records the disk version under
+    # repo-relative `docs/features/log-spelling/_facts.yml`. Stale vA must not fire.
+    ("log-spelling/docs/features/log-spelling",
+     [],
+     [("16", "DRIFT"),
+      ("16", "_facts.yml")]),
+
+    # §16 — disk comparison negative case: a third spelling whose blob genuinely
+    # differs from disk still fires DRIFT.
+    ("log-spelling-drift/docs/features/log-spelling-drift",
+     [("16", "last recorded at _log.md:16 as 11 lines, blob 9999999; now 11 lines, blob 3ab985d")],
+     []),
 ]
 
 # (fixture, extra args, expect, reject) — cases that only exist under a flag.

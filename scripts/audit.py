@@ -3507,19 +3507,22 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
 
     # Only the fields that claim a version: `**Read:**` and `**Edits:**` lines. A
     # file named in narrative is not a claim about which version was read.
-    recorded: dict[str, tuple[int, str | None, int | None]] = {}
+    # Keyed by the resolved path, keeping the original spelling for findings, so
+    # the last record across all spellings is what is compared against disk.
+    recorded: dict[str, tuple[str, int, str | None, int | None]] = {}
     for fm in re.finditer(r"^\*\*(?:Read|Edits):\*\*.*$", text, re.M):
         base = text[:fm.start()].count("\n") + 1
         for m in LOG_FILE_RECORD_ANY.finditer(fm.group(0)):
+            raw_name = m.group("file")
             inner = m.group("inner") or ""
             lines = re.search(r"(\d+)\s*(?:lines?|líneas?)", inner)
             blob = re.search(r"blob\s+([0-9a-f]{7,40})", inner)
             short = re.fullmatch(r"\s*(\d+)\s*,\s*([0-9a-f]{7,40})\s*", inner)
             if short:           # `(520, c732dbe)` — the same record, abbreviated
                 lines, blob = short, re.match(r".*?,\s*([0-9a-f]{7,40})", inner)
-            recorded[m.group("file")] = (base, blob.group(1) if blob else None,
-                                         int(lines.group(1)) if lines else None)
-    for name, (ln, blob, nlines) in sorted(recorded.items()):
+            recorded[key(raw_name)] = (raw_name, base, blob.group(1) if blob else None,
+                                       int(lines.group(1)) if lines else None)
+    for k, (name, ln, blob, nlines) in sorted(recorded.items()):
         target = next((p for p in (confined(spec_dir, name), confined(repo_root, name))
                        if p is not None and p.is_file()), None)
         if target is None or target.name == "_log.md":
