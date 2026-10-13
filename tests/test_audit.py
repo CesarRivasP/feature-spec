@@ -1134,9 +1134,69 @@ def registry_index_spans() -> list[str]:
     return problems
 
 
+def open_items_lists_pending_actions() -> list[str]:
+    """`--open` derives what still demands action mechanically without running an audit:
+    findings without dispositions, open defects with days left on accepted risks,
+    acceptance criteria not yet signed, deferred changes, and runnable commands.
+    Asserts both the human-readable text and the --json keys and contents."""
+    problems = []
+    today = "2026-10-15"
+    base = [sys.executable, str(AUDIT), str(FIXTURES / "open-items"),
+            "--repo-root", str(FIXTURES / "open-items"), "--today", today]
+
+    out_text = subprocess.run(base + ["--open"], capture_output=True, text=True)
+    if out_text.returncode != 0:
+        problems.append(f"open-items: --open exited {out_text.returncode}: {out_text.stderr}")
+    text = out_text.stdout
+
+    if "R4-F1" not in text or "R2-F1" in text or "R2-F2" in text or "R4-F2" in text or "R4-F3" in text:
+        problems.append("open-items: text output must list exactly R4-F1 as open finding")
+    if "R2-F3: como riesgo aceptado. Needs mock server" not in text or "**" in text.split("## Defects open")[0]:
+        problems.append("open-items: text output must list R2-F3 under deferred findings with no '**' in waiting_on")
+    if "defects.D1" not in text or "10 days left" not in text or "defects.D2" in text:
+        problems.append("open-items: text output must list open defect D1 with 10 days left and not fixed D2")
+    if "acceptance.AC2" not in text or "acceptance.AC1" in text:
+        problems.append("open-items: text output must list written criterion AC2 and not approved AC1")
+    if "changes.C1" not in text:
+        problems.append("open-items: text output must list deferred change C1")
+
+    out_json = subprocess.run(base + ["--open", "--json"], capture_output=True, text=True)
+    if out_json.returncode != 0:
+        problems.append(f"open-items: --open --json exited {out_json.returncode}: {out_json.stderr}")
+    else:
+        try:
+            data = json.loads(out_json.stdout)
+            want_keys = {"status", "tracking", "findings_open", "findings_deferred",
+                         "defects_open", "accepted_risks_due", "acceptance_unsigned",
+                         "changes_deferred", "scripts"}
+            if set(data.keys()) != want_keys:
+                problems.append(f"open-items: --json keys {sorted(data.keys())} != {sorted(want_keys)}")
+            if [f["id"] for f in data.get("findings_open", [])] != ["R4-F1"]:
+                problems.append(f"open-items: --json findings_open != ['R4-F1']: {data.get('findings_open')}")
+            deferred_items = data.get("findings_deferred", [])
+            if [f["id"] for f in deferred_items] != ["R2-F3"]:
+                problems.append(f"open-items: --json findings_deferred != ['R2-F3']: {deferred_items}")
+            elif "**" in deferred_items[0].get("waiting_on", ""):
+                problems.append(f"open-items: --json R2-F3 waiting_on carries '**': {deferred_items[0].get('waiting_on')}")
+            if [d["id"] for d in data.get("defects_open", [])] != ["D1"]:
+                problems.append(f"open-items: --json defects_open != ['D1']: {data.get('defects_open')}")
+            if [r["id"] for r in data.get("accepted_risks_due", [])] != ["D1"]:
+                problems.append(f"open-items: --json accepted_risks_due != ['D1']: {data.get('accepted_risks_due')}")
+            if [a["id"] for a in data.get("acceptance_unsigned", [])] != ["AC2"]:
+                problems.append(f"open-items: --json acceptance_unsigned != ['AC2']: {data.get('acceptance_unsigned')}")
+            if [c["id"] for c in data.get("changes_deferred", [])] != ["C1"]:
+                problems.append(f"open-items: --json changes_deferred != ['C1']: {data.get('changes_deferred')}")
+        except json.JSONDecodeError as exc:
+            problems.append(f"open-items: --json did not return valid JSON: {exc}")
+
+    return problems
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     failures, total = [], 0
+    total += 1
+    failures += open_items_lists_pending_actions()
     total += 1
     failures += registry_index_spans()
     total += 1

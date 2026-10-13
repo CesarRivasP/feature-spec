@@ -2684,6 +2684,14 @@ def check_corrections(facts: dict, prose: dict[str, str], spec_dir: Path,
 EXPIRY_WARNING_DAYS = 14
 
 
+def due_accepted_risks(facts: dict, today: datetime.date | None = None
+                       ) -> list[tuple[str, str, str, int | None]]:
+    """Accepted risks due within EXPIRY_WARNING_DAYS. Factored so report() and
+    open_items() cannot drift on which risks demand action."""
+    risks = live_accepted_risks(facts, today)
+    return [r for r in risks if r[3] is not None and r[3] <= EXPIRY_WARNING_DAYS]
+
+
 def live_accepted_risks(facts: dict, today: datetime.date | None = None
                         ) -> list[tuple[str, str, str, int | None, list[dict]]]:
     """Deferrals with a deadline that has not arrived. Not findings — but not
@@ -3797,6 +3805,324 @@ def read_line(facts: dict, spec_dir: Path, repo_root: Path,
     return "**Read:** " + " · ".join(parts), missing
 
 
+def _truncate_finding_line(line: str, maxlen: int = 160) -> str:
+    s = line.strip()
+    return s[:maxlen - 1] + "…" if len(s) > maxlen else s
+
+
+def open_items(facts: dict, spec_dir: Path, repo_root: Path,
+               today: datetime.date | None = None,
+               as_json: bool = False) -> None:
+    """Print only what still demands action in a spec set, exiting without auditing.
+
+    In a long-running spec set with tens of log entries, reading _log.md and the
+    entire facts registry just to find what is open burns thousands of tokens.
+    This derives the open state mechanically: findings without dispositions, open
+    defects (with days left on accepted risks), acceptance criteria not yet
+    signed, deferred changes, and runnable commands."""
+    today = today or datetime.date.today()
+
+    # 1. status and tracking
+    status = str(facts.get("status") or "draft")
+    tracking = facts.get("tracking") if isinstance(facts.get("tracking"), dict) else {}
+    tracking_branch = tracking.get("branch")
+    tracking_shipped_in = tracking.get("shipped_in")
+
+    # 2. findings without a disposition (from _log.md)
+    log_path = spec_dir / "_log.md"
+    open_findings = []
+    deferred_findings = []
+    if log_path.is_file():
+        raw_log = log_path.read_text(encoding="utf-8")
+        clean_log = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"),
+                           raw_log, flags=re.S)
+        head_matches = list(re.finditer(r"^##\s+(R(\d+))\b(.*)$", clean_log, re.M))
+        rounds_by_id: dict[int, dict] = {}
+        for i, h in enumerate(head_matches):
+            rn = int(h.group(2))
+            start = h.end()
+            end = head_matches[i + 1].start() if i + 1 < len(head_matches) else len(clean_log)
+            body = clean_log[start:end]
+            if rn not in rounds_by_id:
+                rounds_by_id[rn] = {
+                    "id": h.group(1),
+                    "n": rn,
+                    "bodies": [body],
+                    "headers": [h.group(0)],
+                }
+            else:
+                rounds_by_id[rn]["bodies"].append(body)
+                rounds_by_id[rn]["headers"].append(h.group(0))
+
+        sorted_rounds = [rounds_by_id[k] for k in sorted(rounds_by_id.keys())]
+
+        finding_line_re = re.compile(r"^\s*-\s+(R\d+-F\d+)\b\s*(.*)$")
+        disp_re = re.compile(
+            r"(?:→|->)\s*(?:\*\*)?(confirmed|rejected|deferred|superseded)\b(?P<after>.*)$",
+            re.I
+        )
+        id_re = re.compile(r"\b(R\d+-F\d+(?:-dead)?)\b")
+
+        findings: dict[str, dict] = {}
+        carried_open: set[str] = set()
+
+        for r in sorted_rounds:
+            rn = r["n"]
+            rid = r["id"]
+            is_rotate = any("· rotate" in h or " rotate" in h for h in r["headers"])
+            for body in r["bodies"]:
+                lines = body.splitlines()
+                in_findings = False
+                in_carried = False
+                for line in lines:
+                    if re.match(r"^\s*\*\*Findings:\*\*", line):
+                        in_findings = True
+                        continue
+                    if in_findings:
+                        if re.match(r"^\s*\*\*[^*]+:\*\*", line):
+                            in_findings = False
+                        else:
+                            m = finding_line_re.match(line)
+                            if m:
+                                fid = m.group(1)
+                                text_line = _truncate_finding_line(line)
+                                if fid not in findings:
+                                    findings[fid] = {
+                                        "id": fid,
+                                        "round_id": rid,
+                                        "round_n": rn,
+                                        "line": text_line,
+                                    }
+
+                    if is_rotate:
+                        if re.match(r"^\s*\*\*Carried open:\*\*", line):
+                            in_carried = True
+                            after = re.sub(r"^\s*\*\*Carried open:\*\*\s*", "", line).strip()
+                            for fid in re.findall(r"\b(R\d+-F\d+)\b", after):
+                                carried_open.add(fid)
+                            continue
+                        if in_carried:
+                            if re.match(r"^\s*\*\*[^*]+:\*\*", line):
+                                in_carried = False
+                            else:
+                                for fid in re.findall(r"\b(R\d+-F\d+)\b", line):
+                                    carried_open.add(fid)
+
+        dispositions: dict[str, dict] = {}
+        for r in sorted_rounds:
+            rn = r["n"]
+            for body in r["bodies"]:
+                for line in body.splitlines():
+                    m = disp_re.search(line)
+                    if m:
+                        before = line[:m.start()]
+                        target_ids = id_re.findall(before)
+                        disp_status = m.group(1).lower()
+                        after = m.group("after")
+                        if "**" in after:
+                            inside_bold, _, rest_after = after.partition("**")
+                            waiting_on = (inside_bold + rest_after).strip()
+                        else:
+                            waiting_on = after.strip()
+                        waiting_on = re.sub(r"^(?:[:.]|\s*—|\s*-)\s*", "", waiting_on).strip()
+
+                        for target_id in target_ids:
+                            if target_id.endswith("-dead"):
+                                target_id = target_id[:-5]
+                            if target_id in findings and rn >= findings[target_id]["round_n"]:
+                                dispositions[target_id] = {
+                                    "status": disp_status,
+                                    "round_n": rn,
+                                    "waiting_on": waiting_on,
+                                }
+                    dead_matches = re.findall(r"\b(R\d+-F\d+)-dead\b", line)
+                    for dead_id in dead_matches:
+                        if dead_id in findings and rn >= findings[dead_id]["round_n"]:
+                            if dead_id not in dispositions:
+                                dispositions[dead_id] = {
+                                    "status": "rejected",
+                                    "round_n": rn,
+                                    "waiting_on": "",
+                                }
+
+        for fid, f_info in findings.items():
+            if fid in carried_open:
+                open_findings.append(f_info)
+                continue
+            if fid not in dispositions:
+                open_findings.append(f_info)
+            elif dispositions[fid]["status"] == "deferred":
+                deferred_findings.append({
+                    "id": f_info["id"],
+                    "round_id": f_info["round_id"],
+                    "round_n": f_info["round_n"],
+                    "line": f_info["line"],
+                    "waiting_on": dispositions[fid]["waiting_on"],
+                })
+
+    # 3. defects open
+    open_defects = []
+    for d in facts.get("defects") or []:
+        if not isinstance(d, dict):
+            continue
+        if norm(d.get("status")) == "open":
+            d_id = str(d.get("id", "?"))
+            basis = norm(d.get("basis")) or "asserted"
+            acc = d.get("accepted")
+            has_acc = isinstance(acc, dict)
+            until = None
+            days_left = None
+            if has_acc:
+                raw_until = acc.get("until")
+                if isinstance(raw_until, datetime.date):
+                    until = raw_until
+                elif raw_until:
+                    try:
+                        until = datetime.date.fromisoformat(str(raw_until).strip())
+                    except ValueError:
+                        until = None
+                if until:
+                    days_left = (until - today).days
+            open_defects.append({
+                "id": d_id,
+                "basis": basis,
+                "accepted": has_acc,
+                "until": until.isoformat() if until else None,
+                "days_left": days_left,
+            })
+
+    # 4. accepted risks due within EXPIRY_WARNING_DAYS
+    due_risks_raw = due_accepted_risks(facts, today)
+    due_risks = [
+        {"id": r[0], "detail": r[1], "because": r[2], "days_left": r[3]}
+        for r in due_risks_raw
+    ]
+
+    # 5. acceptance criteria not signed
+    acc_items = normalize_acceptance(facts)
+    unsigned_acceptance = [
+        {"id": e["id"], "item": e["item"], "status": e["status"], "verified_on": e.get("verified_on")}
+        for e in acc_items
+        if e["status"] not in ("approved", "retired")
+    ]
+
+    # 6. changes deferred
+    deferred_changes = []
+    for c in facts.get("changes") or []:
+        if not isinstance(c, dict):
+            continue
+        if norm(c.get("kind")) == "deferred":
+            deferred_changes.append({
+                "id": str(c.get("id", "?")),
+                "file": str(c.get("file", "")),
+                "change": str(c.get("change", "")).strip(),
+                "reopens_when": str(c.get("reopens_when", "")).strip(),
+            })
+
+    # 7. where the scripts are
+    prof_rel = facts.get("profile")
+    prof_file = profile_path(str(prof_rel), spec_dir, repo_root) if prof_rel else None
+    prof_display = str(prof_file) if prof_file else (str(prof_rel) if prof_rel else None)
+    command_keys = []
+    if prof_file and prof_file.is_file():
+        try:
+            prof_data = yaml.safe_load(prof_file.read_text(encoding="utf-8")) or {}
+            cmds = prof_data.get("commands")
+            if isinstance(cmds, dict):
+                command_keys = sorted([k for k, v in cmds.items() if v is not None])
+        except Exception:
+            pass
+
+    if as_json:
+        data = {
+            "status": status,
+            "tracking": {
+                "branch": tracking_branch,
+                "shipped_in": tracking_shipped_in,
+            },
+            "findings_open": open_findings,
+            "findings_deferred": deferred_findings,
+            "defects_open": open_defects,
+            "accepted_risks_due": due_risks,
+            "acceptance_unsigned": unsigned_acceptance,
+            "changes_deferred": deferred_changes,
+            "scripts": {
+                "profile": prof_display,
+                "commands": command_keys,
+            },
+        }
+        print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+        return
+
+    # Text output
+    parts = [f"status: {status}"]
+    if tracking_branch:
+        parts.append(f"tracking.branch: {tracking_branch}")
+    if tracking_shipped_in:
+        parts.append(f"shipped_in: {tracking_shipped_in}")
+    print(" · ".join(parts))
+    print()
+
+    print("## Findings without a disposition")
+    if open_findings:
+        for f_item in open_findings:
+            print(f"  {f_item['line']}")
+    else:
+        print("  none")
+    if deferred_findings:
+        print("\n  deferred, waiting on:")
+        for f_item in deferred_findings:
+            waiting = f": {f_item['waiting_on']}" if f_item["waiting_on"] else ""
+            print(f"  - {f_item['id']}{waiting}")
+    print()
+
+    print("## Defects open")
+    if open_defects:
+        for d in open_defects:
+            line = f"  defects.{d['id']} — basis: {d['basis']}"
+            if d["accepted"]:
+                days_str = f", {d['days_left']} days left" if d["days_left"] is not None else ""
+                line += f" · accepted until: {d['until']}{days_str}"
+            print(line)
+    else:
+        print("  none")
+    print()
+
+    print(f"## Accepted risks due within {EXPIRY_WARNING_DAYS} days")
+    if due_risks:
+        for r in sorted(due_risks, key=lambda x: x["days_left"] if x["days_left"] is not None else 999):
+            days = r["days_left"]
+            when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
+            print(f"  defects.{r['id']} — expires {when} ({r['detail']})")
+    else:
+        print("  none")
+    print()
+
+    print("## Acceptance criteria not signed")
+    if unsigned_acceptance:
+        for a in unsigned_acceptance:
+            v_on = f" · verified_on: {a['verified_on']}" if a.get("verified_on") else ""
+            print(f"  acceptance.{a['id']} — status: {a['status']}{v_on} · {a['item']}")
+    else:
+        print("  none")
+    print()
+
+    print("## Changes deferred")
+    if deferred_changes:
+        for c in deferred_changes:
+            print(f"  changes.{c['id']} ({c['file']}) — reopens when: {c['reopens_when']}")
+    else:
+        print("  none")
+    print()
+
+    print("## Where the scripts are")
+    print(f"  profile: {prof_display or 'none'}")
+    if command_keys:
+        print(f"  commands: {', '.join(command_keys)}")
+    else:
+        print("  commands: none")
+
+
 MATRIX_VALUE_WIDTH = 60
 
 
@@ -4029,7 +4355,7 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
         return f"{cid}: {cnt} {att_word}, last {d} {outc}{bec_suffix}"
 
     risks = live_accepted_risks(facts, today)
-    due = [r for r in risks if r[3] is not None and r[3] <= EXPIRY_WARNING_DAYS]
+    due = due_accepted_risks(facts, today)
     if risks:
         print("## Accepted risks, with their expiry\n")
         print("Recorded decisions to ship with a cause still asserted. Not findings "
@@ -4120,6 +4446,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the registry's table of contents — each top-level "
                          "key and each entry with its line span — and exit without "
                          "auditing")
+    ap.add_argument("--open", action="store_true",
+                    help="print only what still demands action in the set — open "
+                         "findings, open defects, unsigned criteria, deferred "
+                         "changes, runnable scripts — and exit without auditing")
     ap.add_argument("--read-line", nargs="*", default=None, metavar="FILE",
                     help="print the `**Read:**` line of a `_log.md` entry — line "
                          "count and blob of each FILE, or of every file of the set "
@@ -4153,6 +4483,10 @@ def main(argv: list[str] | None = None) -> int:
         facts = dict(facts)
         facts["status"] = args.as_status
     repo_root, root_is_real = repo_root_for(spec_dir, args.repo_root)
+
+    if args.open:
+        open_items(facts, spec_dir, repo_root, today=today, as_json=args.json)
+        return 0
 
     if args.index:
         text = facts_path.read_text(encoding="utf-8")
