@@ -468,7 +468,15 @@ FLAG_CASES: list[tuple[str, list[str], list[tuple[str, str]],
     ("accepted-risk-due", ["--today", "2026-10-24"],
      [("1b/14", "R1"), ("1b/14", "R3")],
      [("1b/14", "R2")]),
+
+    # T3 — `acceptance[].attempts[]` and `closes:`.
+    ("acceptance-attempts", ["--today", "2026-10-12"],
+     [("26", "AC24"),                    # dangling closes: D9
+      ("26", "AC25"),                    # attempts out of date order
+      ("26", "AC26")],                   # approved with aborted last attempt and no verified_on
+     []),
 ]
+
 
 
 # (fixture, expect[(check, text)], reject[(check, text)]) — CANDIDATES, not findings.
@@ -804,6 +812,35 @@ def accepted_risks_come_due() -> list[str]:
     return problems
 
 
+def acceptance_attempts_recorded() -> list[str]:
+    """T3 — AC23 closes D1 and has an aborted attempt recorded. The report prints
+    the attempt count and last attempt under D1, and json exports closing_criteria."""
+    problems = []
+    data = run_json("acceptance-attempts", ["--today", "2026-10-12"])
+    risks = data.get("accepted_risks", [])
+    r1 = next((r for r in risks if r["id"] == "D1"), None)
+    if not r1:
+        problems.append("acceptance-attempts: defects.D1 not found in accepted_risks")
+    elif not r1.get("closing_criteria"):
+        problems.append("acceptance-attempts: defects.D1 has no closing_criteria in JSON")
+    else:
+        crit = r1["closing_criteria"][0]
+        if crit["id"] != "AC23" or crit["attempts_count"] != 1:
+            problems.append(f"acceptance-attempts: expected AC23 with 1 attempt, got {crit}")
+
+    out = subprocess.run(
+        [sys.executable, str(AUDIT), str(FIXTURES / "acceptance-attempts"),
+         "--repo-root", str(FIXTURES / "acceptance-attempts"), "--today", "2026-10-12"],
+        capture_output=True, text=True).stdout
+
+    expected_line = "AC23: 1 attempt, last 2026-10-12 aborted_no_conditions — no live event available in the window"
+    if expected_line not in out:
+        problems.append(f"acceptance-attempts: expected {expected_line!r} in stdout, got:\n{out}")
+
+    return problems
+
+
+
 def matrix_is_counted() -> list[str]:
     """The correspondence matrix used to be the agent's to build — a grep per datum
     per doc, then the table typed out — while `render.py` already counted the same
@@ -1108,7 +1145,10 @@ def main() -> int:
     total += 1
     failures += accepted_risks_come_due()
     total += 1
+    failures += acceptance_attempts_recorded()
+    total += 1
     failures += matrix_is_counted()
+
     total += 1
     failures += read_line_round_trips()
     total += 1

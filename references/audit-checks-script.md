@@ -100,6 +100,13 @@ Every `acceptance[]` criterion carries `status: written | executed | approved | 
 - **`retired` does not block `shipped`.** It is the way out for a criterion that stopped being reachable or relevant — a trimmed scope, a question answered by design — without deleting it. It needs `retired_on:` and `retired_because:`; missing either → `DRIFT`, **at every stage**, because a retirement is a decision and one with no date and no reason cannot be revisited. Citations of a retired criterion still resolve (check 21) and are not a finding: saying "AC6 was retired" is exactly what a doc should be able to do. Check 6's parity leaves retired criteria out of the Definition of Done.
   *Real case:* to ship a research set, AC6, AC12 and AC13 had to leave `acceptance[]`. The only mechanism was deleting them from the registry and rewriting their mentions in docs 01 and 02 by hand, so check 21 would not report them dangling — history destroyed to satisfy a gate.
 - **A set where NO criterion carries a status collapses to one finding, not N.** It predates the field, and reporting each of fifteen identical misses buries the other contradictions in the same set — the wall this file's §Stage gating exists to prevent, one level down. A set where *some* criteria carry a status and others do not is the opposite case and is reported per criterion: somebody adopted the field and skipped items, and each skipped one is a specific criterion nobody verified.
+- **`attempts[]` and `closes:` validation:**
+  - `attempts[]` must be a list of dicts; each must have `date:` (ISO format) and `outcome:` in `aborted_no_conditions | failed | passed` (DRIFT otherwise).
+  - When `outcome` is `aborted_no_conditions` (or starts with `aborted`), `aborted_because:` is required (DRIFT otherwise).
+  - Attempt dates must be oldest first (`DRIFT: listed after ... but older than it`, same style as check 40).
+  - `closes:` must name an existing `defects[]` id (DRIFT if dangling). If that defect has no `accepted:` block, `POLISH` ("closes a defect that carries no accepted risk").
+  - `status: approved` with a last attempt `aborted_no_conditions` and no `verified_on` after the attempt's date → `DRIFT`.
+
 
 Two real cases, and the second is why this is a check and not a paragraph.
 

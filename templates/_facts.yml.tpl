@@ -419,6 +419,15 @@ acceptance: []          # Definition-of-Done items (shared across docs).
                         #   - { id: AC1, item: 'el cron deja rastro de cada corrida',
                         #       status: approved, verified_on: YYYY-MM-DD,
                         #       evidence: 'la corrida de las 06:00 quedó registrada' }
+                        #   - id: AC23
+                        #     item: 'la grilla abre con 4 tiles en vivo'
+                        #     status: written            # written | executed | approved | retired
+                        #     closes: D1                 # optional: defect id whose accepted risk this settles
+                        #     attempts:                  # optional, append-only, oldest first
+                        #       - date: YYYY-MM-DD
+                        #         outcome: aborted_no_conditions   # aborted_no_conditions | failed | passed
+                        #         aborted_because: 'no live event available in the window'
+                        #         env: 'production-release-1.4.3, Fire TV Cube'
                         #
                         #   A `[MANUAL]` step in doc 02 records its run HERE, on the
                         #   criterion it verifies — `status: executed`, `verified_on:`,
@@ -438,6 +447,7 @@ acceptance: []          # Definition-of-Done items (shared across docs).
                         #   them was recorded correctly in _log.md — but the log is narrative
                         #   and acceptance[] is contract. The audit passed clean because no
                         #   check compared acceptance[] against reality. Now one does.
+
 
 # --- cross-doc registry ---
 # List the docs in this set so audit knows what to check and cross-refs can resolve.
