@@ -107,7 +107,7 @@ The log outranks the context window only while it fits in one. A real set reache
 **Rotate; never summarize.** A summary is a new claim about old rounds, written by whoever is least able to tell which detail mattered — and the details that matter are exactly the ones a summary drops: a rejection's evidence, a measurement's conditions, the reasoning chain that turned a defect false. Rotation keeps every word.
 
 1. **Open the rotation round's stub** at the end of `_log.md`, as any round does, and read it back.
-2. **Move** rounds `R1…R<k>` verbatim to `_log-R1-R<k>.md` beside it, under a short header saying what the file is and that it is never edited. Keep `R<k+1>…` in `_log.md` as recent context — usually the last five to ten rounds. Before writing either file, check that header + archived rounds + kept rounds reassemble the original byte for byte; a rotation that loses a line is the summary it exists to avoid.
+2. **Move** rounds `R1…R<k>` verbatim to `_log-R1-R<k>.md` beside it, under a short header saying what the file is and that it is never edited. Keep `R<k+1>…` in `_log.md` as recent context: archive every round before the last `**Stage:**` transition (reviewed or shipped), keep the rest; when no transition exists, the last five to ten rounds. Before writing either file, check that header + archived rounds + kept rounds reassemble the original byte for byte; a rotation that loses a line is the summary it exists to avoid.
 3. **Complete the rotation entry** — `## R<n+1> · <date> · <agent> · rotate`, numbered after the last round, never reset:
    - `**Read:**` — **every** file of the set (`_facts.yml`, each file in `docs[]`, the profile) with its line count and blob. This is the new baseline check 16 compares against.
    - `**Stage:** <status> → <status>` — **carried**, when the last real transition went to the archive. Check 16 reads `Stage:` from `_log.md` only; without this line a set past `draft` reports a transition that never happened.
@@ -115,7 +115,7 @@ The log outranks the context window only while it fits in one. A real set reache
    - `**Carried open:**` — every finding without a final disposition, by id (`R12-F3`), each with one line saying what it waits on. An index, not a summary: it points into the archive and restates nothing. If the dispositions were not re-judged, say so rather than implying they were.
 4. **Run the audit.** A clean run means the baseline took.
 
-The archive is history: it is never audited for anchors (check 18 reads the registry and registered docs only), never registered in `docs[]` (check 9 skips `_`-prefixed files), never synced, and reading it is required only when a carried finding points into it.
+The archive is history: it is never audited for anchors (check 18 reads the registry and registered docs only), never registered in `docs[]` (check 9 skips `_`-prefixed files), never synced, and `audit.py <dir> --open` is what replaces reading the archive for the open items; reading it directly is required only when a carried finding points into it.
 
 ## Delegating a defect to a set of its own
 
@@ -157,3 +157,8 @@ Two rules that are not obvious:
 The validating round is often the same model that authored the plan, judging a critique of its own work. The log does not remove that bias — it makes it **visible**. Across a few features you can read the ratio directly: an agent that rejects most external findings, with thin evidence lines, is telling you something about the gate, not about the findings. Check the ratio before trusting the validate round as an approval.
 
 Nor does the log make an entry true. `agent:` is self-reported, `Read:` can be fabricated by an agent that never opened the file. What it does is make both **falsifiable**: a hash that doesn't match the file is a mismatch anyone can check in one command, and that is the whole standard this skill holds every other claim to.
+
+## Session brief
+
+`handoff <slug> --session` is `python3 scripts/audit.py docs/features/<slug>/ --open` plus two lines the registry cannot know: `git status --short` of the spec dir and the working branch vs `tracking.branch`. The incoming agent pastes the output as the opening of the next session, and only writes by hand what `--open` cannot derive. It is NOT a log entry and is never written to `_log.md`.
+

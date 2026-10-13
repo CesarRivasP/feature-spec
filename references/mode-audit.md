@@ -3,6 +3,8 @@
 
 **Read the registry by index, not whole.** `python3 scripts/audit.py docs/features/<slug>/ --index` prints every top-level key and every entry with its line span and its enum labels (`kind`, `role`, `basis`, `status`); read the entries a finding or a check points at by offset. A 142KB registry indexes in 6KB, a 307KB one in 11KB. Read the file whole only when the round means to.
 
+**Print only what demands action.** `python3 scripts/audit.py docs/features/<slug>/ --open [--today YYYY-MM-DD]` derives the open state mechanically without running an audit: findings without a disposition, open defects (and days left on accepted risks), criteria not yet signed, deferred changes, and runnable commands. In a long-running set it replaces reading the whole log and registry to discover what remains open. `--json` emits the same sections as a machine-readable dict.
+
 **Run the script, then the judgment pass — in that order.**
 
 ```
