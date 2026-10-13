@@ -207,6 +207,28 @@ evidence:
 
 Same rule from the other side in `references/gap-sweep.md` §Concluding from silence.
 
+### Attempts on an acceptance criterion: recording blocked runs and linking to accepted risks
+
+A criterion that cannot be run — because no live event was available, the environment was down, or a prerequisite failed — did not fail, but it also did not pass. Recording the attempt on the criterion keeps the history visible instead of lost in free-text fields or log entries.
+
+```yaml
+acceptance:
+  - id: AC23
+    item: '...'
+    status: written            # unchanged: written | executed | approved | retired
+    closes: D1                 # optional. The defects[] id whose `accepted:` risk this criterion settles
+    attempts:                  # optional, append-only, oldest first
+      - date: 2026-10-12
+        outcome: aborted_no_conditions   # aborted_no_conditions | failed | passed
+        aborted_because: 'no live event available in the window'   # required when aborted
+        env: 'production-release-1.4.3, Fire TV Cube'              # optional free text
+```
+
+Reuse the exact `outcome: aborted_no_conditions` and `aborted_because:` vocabulary already used for an aborted run on a measured entry above. An attempt with `outcome: passed` does not automatically flip `status:`; the author still writes `status: executed|approved` + `verified_on:` — the attempts list is history, the status is the contract.
+
+When an accepted risk in `defects[]` expires on a date, linking the criterion that would close it via `closes:` allows the audit to report both the expiry date and the blocked attempts accumulated behind it.
+
+
 ## Derived evidence — a conclusion read off measurements already here
 
 Not every `measured` is a run. Often the entry that settles a defect is the *reading*

@@ -1145,6 +1145,7 @@ def check_changes_vocabulary(facts: dict, f: Findings) -> None:
 
 # `""` is a plain-string criterion, which reads as `written`.
 ACCEPTANCE_STATUSES = {"", "written", "executed", "approved", "retired"}
+ATTEMPT_OUTCOMES = {"aborted_no_conditions", "failed", "passed"}
 
 
 def normalize_acceptance(facts: dict) -> list[dict]:
@@ -1158,10 +1159,13 @@ def normalize_acceptance(facts: dict) -> list[dict]:
                         "status": norm(e.get("status")),
                         "verified_on": e.get("verified_on"),
                         "retired_on": e.get("retired_on"),
-                        "retired_because": e.get("retired_because")})
+                        "retired_because": e.get("retired_because"),
+                        "closes": e.get("closes"),
+                        "attempts": e.get("attempts")})
         else:
             out.append({"id": f"[{i}]", "item": str(e), "status": "", "verified_on": None,
-                        "retired_on": None, "retired_because": None})
+                        "retired_on": None, "retired_because": None,
+                        "closes": None, "attempts": None})
     return out
 
 
@@ -1176,8 +1180,93 @@ def check_acceptance_state(facts: dict, status_rank: int, f: Findings) -> None:
     existed the only way to stop a dead criterion from blocking `shipped` was to
     delete it, and deleting it broke every citation of it. Real case: retiring AC6,
     AC12 and AC13 of one research set meant removing them from the registry and
-    rewriting their mentions in docs 01 and 02 by hand, so they would not dangle."""
+    rewriting their mentions in docs 01 and 02 by hand, so they would not dangle.
+
+    `attempts[]` records blocked runs on the criterion (e.g. no live event available)
+    without flipping its status, and `closes:` links it to the defect whose accepted
+    risk this criterion settles. Real case: AC23 could not run because no live event
+    was available; the author had nowhere to record the attempt and wrote
+    `limits.ac23_attempt_2026_10_12`, which nothing reads."""
     items = normalize_acceptance(facts)
+    defects_list = facts.get("defects") or []
+    defects_by_id = {str(d.get("id")): d for d in defects_list if isinstance(d, dict) and d.get("id")}
+
+    # Validate closes: and attempts[] across all criteria (even retired ones)
+    for e in items:
+        label = f"acceptance.{e['id']}"
+        closes = e.get("closes")
+        if closes is not None:
+            closes_str = str(closes).strip()
+            if closes_str not in defects_by_id:
+                f.add(DRIFT, label,
+                      f"`closes: {closes_str}` does not match any defects[] id",
+                      "`closes:` must name an existing `defects[]` id whose `accepted:` "
+                      "risk this criterion settles",
+                      "26 acceptance state")
+            else:
+                target_defect = defects_by_id[closes_str]
+                if not target_defect.get("accepted"):
+                    f.add(POLISH, label,
+                          f"`closes: {closes_str}` closes a defect that carries no accepted risk",
+                          "`closes:` is for criteria that settle an `accepted:` risk; "
+                          f"defects.{closes_str} has no `accepted:` block",
+                          "26 acceptance state")
+
+        attempts = e.get("attempts")
+        if attempts is not None:
+            if not isinstance(attempts, list):
+                f.add(DRIFT, label, "`attempts:` must be a list of dicts",
+                      "record attempts as a list of `{date, outcome, ...}` entries",
+                      "26 acceptance state")
+            else:
+                prev_date = None
+                for idx, att in enumerate(attempts):
+                    if not isinstance(att, dict):
+                        f.add(DRIFT, label, f"attempts[{idx}] must be a dict",
+                              "record each attempt as a dict with date and outcome",
+                              "26 acceptance state")
+                        continue
+                    d_val = to_date(att.get("date"))
+                    if d_val is None:
+                        f.add(DRIFT, label,
+                              f"attempts[{idx}] date `{att.get('date')}` is not a valid ISO date",
+                              "use YYYY-MM-DD for attempt date",
+                              "26 acceptance state")
+                    outcome = norm(att.get("outcome"))
+                    if outcome not in ATTEMPT_OUTCOMES:
+                        f.add(DRIFT, label,
+                              f"attempts[{idx}] outcome `{att.get('outcome')}` is not valid",
+                              "use aborted_no_conditions | failed | passed",
+                              "26 acceptance state")
+                    elif outcome == "aborted_no_conditions" or outcome.startswith("aborted"):
+                        if not att.get("aborted_because"):
+                            f.add(DRIFT, label,
+                                  f"attempts[{idx}] `outcome: {outcome}` with no `aborted_because:`",
+                                  "name the missing precondition in `aborted_because:`",
+                                  "26 acceptance state")
+
+                    if d_val is not None:
+                        if prev_date is not None and d_val < prev_date:
+                            f.add(DRIFT, label,
+                                  f"attempt on `{d_val}` listed after `{prev_date}` but older than it",
+                                  "`attempts[]` is OLDEST first — append new attempts at the end",
+                                  "26 acceptance state")
+                        prev_date = d_val
+
+                # status: approved with a last attempt aborted_no_conditions and no verified_on after it -> DRIFT
+                if norm(e.get("status")) == "approved" and attempts:
+                    last_att = attempts[-1]
+                    if isinstance(last_att, dict) and norm(last_att.get("outcome")) == "aborted_no_conditions":
+                        last_d = to_date(last_att.get("date"))
+                        ver_d = to_date(e.get("verified_on"))
+                        if ver_d is None or (last_d is not None and ver_d <= last_d):
+                            f.add(DRIFT, label,
+                                  "`status: approved` but last attempt was aborted with no verified_on after it",
+                                  "an aborted attempt leaves the criterion unverified; "
+                                  "run it and record `verified_on:` with a date after the aborted attempt, "
+                                  "or do not approve",
+                                  "26 acceptance state")
+
     # Checked at every stage: a retirement is a decision, and a decision with no
     # date and no reason is the kind nobody can revisit.
     for e in items:
@@ -1257,6 +1346,7 @@ def check_acceptance_state(facts: dict, status_rank: int, f: Findings) -> None:
                   "the boolean True and the value silently lands under a key "
                   "nothing reads.)",
                   "26 acceptance state")
+
 
 
 def check_dead_dependency_cascade(facts: dict, f: Findings) -> None:
@@ -2595,16 +2685,39 @@ EXPIRY_WARNING_DAYS = 14
 
 
 def live_accepted_risks(facts: dict, today: datetime.date | None = None
-                        ) -> list[tuple[str, str, str, int | None]]:
+                        ) -> list[tuple[str, str, str, int | None, list[dict]]]:
     """Deferrals with a deadline that has not arrived. Not findings — but not
     silence either: the audit names them and their expiry, which is the whole
     reason the field exists rather than a note in a log entry.
 
-    -> (id, detail, because, days left). Days left is what lets the report separate
-    the ones coming due: a list of four risks all printed the same way reads as
-    "handled" until the morning G1 refuses all four at once. Real case: four risks
-    of one research set, accepted together, all expire on 2026-10-23."""
+    -> (id, detail, because, days left, closing_criteria).
+    Days left is what lets the report separate the ones coming due: a list of four
+    risks all printed the same way reads as "handled" until the morning G1 refuses
+    all four at once. Real case: four risks of one research set, accepted together,
+    all expire on 2026-10-23.
+
+    `closing_criteria` lists the criteria that declare `closes: <defect_id>`, with
+    their attempt count and last attempt, so an audit can say e.g. "and AC23 has one
+    blocked attempt behind it"."""
     today = today or datetime.date.today()
+    closing_by_defect: dict[str, list[dict]] = {}
+    for crit in normalize_acceptance(facts):
+        closes = crit.get("closes")
+        if closes:
+            did = str(closes).strip()
+            attempts = crit.get("attempts") or []
+            last = None
+            if attempts and isinstance(attempts[-1], dict):
+                last = dict(attempts[-1])
+                if isinstance(last.get("date"), (datetime.date, datetime.datetime)):
+                    last["date"] = last["date"].isoformat()
+            closing_by_defect.setdefault(did, []).append({
+                "id": crit["id"],
+                "attempts_count": len(attempts),
+                "last_attempt": last
+            })
+
+
     out = []
     for d in facts.get("defects") or []:
         if not isinstance(d, dict):
@@ -2620,8 +2733,11 @@ def live_accepted_risks(facts: dict, today: datetime.date | None = None
                 except ValueError:
                     until = None
             left = (until - today).days if until else None
-            out.append((str(d.get("id", "?")), detail, because, left))
+            did = str(d.get("id", "?"))
+            crits = closing_by_defect.get(did, [])
+            out.append((did, detail, because, left, crits))
     return out
+
 
 
 def check_placeholders(facts: dict, f: Findings) -> None:
@@ -3842,11 +3958,15 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
     f.items.sort(key=lambda x: (order[x["severity"]], x["check"], x["where"]))
 
     if as_json:
+        accepted_risks_json = []
+        for r in live_accepted_risks(facts, today):
+            entry = {"id": r[0], "detail": r[1], "days_left": r[3]}
+            if r[4]:
+                entry["closing_criteria"] = r[4]
+            accepted_risks_json.append(entry)
         print(json.dumps({"status": declared_status or facts.get("status"),
                           "audited_as": audited_as, "findings": f.items,
-                          "accepted_risks": [
-                              {"id": r[0], "detail": r[1], "days_left": r[3]}
-                              for r in live_accepted_risks(facts, today)],
+                          "accepted_risks": accepted_risks_json,
                           "candidates": cands.by_check,
                           "matrix": matrix,
                           "tree": ({"checkout": tree[0], "spec": tree[1]} if tree
@@ -3892,16 +4012,31 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
                 print(f"  - {i.strip()}")
             print()
 
+    def format_closing_crit(crit: dict) -> str:
+        cid = crit["id"]
+        cnt = crit["attempts_count"]
+        att_word = "attempt" if cnt == 1 else "attempts"
+        last = crit.get("last_attempt")
+        if not last:
+            return f"{cid}: 0 attempts"
+        d = last.get("date")
+        outc = last.get("outcome")
+        bec = last.get("aborted_because")
+        bec_suffix = f" — {bec}" if bec else ""
+        return f"{cid}: {cnt} {att_word}, last {d} {outc}{bec_suffix}"
+
     risks = live_accepted_risks(facts, today)
     due = [r for r in risks if r[3] is not None and r[3] <= EXPIRY_WARNING_DAYS]
     if risks:
         print("## Accepted risks, with their expiry\n")
         print("Recorded decisions to ship with a cause still asserted. Not findings "
               "— until the date passes, and then G1 refuses again:\n")
-        for rid, detail, because, left in risks:
+        for rid, detail, because, left, closing_crits in risks:
             print(f"  defects.{rid} — {detail}")
             if because:
                 print(f"      {because}")
+            for c in closing_crits:
+                print(f"      {format_closing_crit(c)}")
         print()
     if due:
         # Apart from the list above on purpose: the ones that are about to turn
@@ -3910,11 +4045,14 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
         print("Still not findings. Each becomes a G1 CONTRADICTION the day after "
               "its `until:` — schedule the measurement, or extend `until:` with a "
               "reason a person signs:\n")
-        for rid, detail, _, left in sorted(due, key=lambda r: r[3]):
+        for rid, detail, _, left, closing_crits in sorted(due, key=lambda r: r[3]):
             when = ("today" if left == 0 else "tomorrow" if left == 1
                     else f"in {left} days")
             print(f"  defects.{rid} — expires {when} ({detail})")
+            for c in closing_crits:
+                print(f"      {format_closing_crit(c)}")
         print()
+
 
     print("## Requires a human pass\n")
     emitted = set()
