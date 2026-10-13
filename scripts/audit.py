@@ -3739,9 +3739,10 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
 
         finding_line_re = re.compile(r"^\s*-\s+(R\d+-F\d+)\b\s*(.*)$")
         disp_re = re.compile(
-            r"(R\d+-F\d+(?:-dead)?)\s*(?:→|->)\s*(?:\*\*)?(confirmed|rejected|deferred|superseded)(?:\*\*)?(?:[:.]|\s*—|\s*-)?\s*(.*)$",
+            r"(?:→|->)\s*(?:\*\*)?(confirmed|rejected|deferred|superseded)\b(?P<after>.*)$",
             re.I
         )
+        id_re = re.compile(r"\b(R\d+-F\d+(?:-dead)?)\b")
 
         findings: dict[str, dict] = {}
         carried_open: set[str] = set()
@@ -3795,20 +3796,29 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
                 for line in body.splitlines():
                     m = disp_re.search(line)
                     if m:
-                        target_id = m.group(1)
-                        if target_id.endswith("-dead"):
-                            target_id = target_id[:-5]
-                        disp_status = m.group(2).lower()
-                        rest = m.group(3).strip()
-                        if target_id in findings and rn > findings[target_id]["round_n"]:
-                            dispositions[target_id] = {
-                                "status": disp_status,
-                                "round_n": rn,
-                                "waiting_on": rest,
-                            }
+                        before = line[:m.start()]
+                        target_ids = id_re.findall(before)
+                        disp_status = m.group(1).lower()
+                        after = m.group("after")
+                        if "**" in after:
+                            inside_bold, _, rest_after = after.partition("**")
+                            waiting_on = (inside_bold + rest_after).strip()
+                        else:
+                            waiting_on = after.strip()
+                        waiting_on = re.sub(r"^(?:[:.]|\s*—|\s*-)\s*", "", waiting_on).strip()
+
+                        for target_id in target_ids:
+                            if target_id.endswith("-dead"):
+                                target_id = target_id[:-5]
+                            if target_id in findings and rn >= findings[target_id]["round_n"]:
+                                dispositions[target_id] = {
+                                    "status": disp_status,
+                                    "round_n": rn,
+                                    "waiting_on": waiting_on,
+                                }
                     dead_matches = re.findall(r"\b(R\d+-F\d+)-dead\b", line)
                     for dead_id in dead_matches:
-                        if dead_id in findings and rn > findings[dead_id]["round_n"]:
+                        if dead_id in findings and rn >= findings[dead_id]["round_n"]:
                             if dead_id not in dispositions:
                                 dispositions[dead_id] = {
                                     "status": "rejected",

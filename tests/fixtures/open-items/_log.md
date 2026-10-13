@@ -23,7 +23,7 @@
 **Dispositions:**
 - R2-F1 → **confirmed**. Added missing rate limit handling in facts.
 - R2-F2 → **rejected**. Ran tests on 2026-10-03: all passing. Kept as R2-F2-dead so R4 does not re-raise it.
-- R2-F3 → **deferred**. Needs mock server on staging cluster.
+- R2-F3 → **deferred como riesgo aceptado**. Needs mock server on staging cluster.
 **Edits:** `_facts.yml`
 **Still open:** R2-F3
 
@@ -32,5 +32,8 @@
 **Log read through:** R3
 **Findings:**
 - R4-F1 memory leak in token bucket under high concurrency — bucket table never prunes
+- R4-F2 connection reset on keep-alive timeout — socket closed prematurely
+- R4-F3 missing cache-control header in preflight response — OPTIONS cached indefinitely
+**Dispositions:** R4-F2, R4-F3 → **confirmed**. Fixed keep-alive and headers in server config.
 **Edits:** none
 **Still open:** R2-F3, R4-F1

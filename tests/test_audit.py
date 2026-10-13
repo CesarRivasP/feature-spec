@@ -1090,10 +1090,10 @@ def open_items_lists_pending_actions() -> list[str]:
         problems.append(f"open-items: --open exited {out_text.returncode}: {out_text.stderr}")
     text = out_text.stdout
 
-    if "R4-F1" not in text or "R2-F1" in text or "R2-F2" in text:
+    if "R4-F1" not in text or "R2-F1" in text or "R2-F2" in text or "R4-F2" in text or "R4-F3" in text:
         problems.append("open-items: text output must list exactly R4-F1 as open finding")
-    if "R2-F3: Needs mock server" not in text:
-        problems.append("open-items: text output must list R2-F3 under deferred findings")
+    if "R2-F3: como riesgo aceptado. Needs mock server" not in text or "**" in text.split("## Defects open")[0]:
+        problems.append("open-items: text output must list R2-F3 under deferred findings with no '**' in waiting_on")
     if "defects.D1" not in text or "10 days left" not in text or "defects.D2" in text:
         problems.append("open-items: text output must list open defect D1 with 10 days left and not fixed D2")
     if "acceptance.AC2" not in text or "acceptance.AC1" in text:
@@ -1114,8 +1114,11 @@ def open_items_lists_pending_actions() -> list[str]:
                 problems.append(f"open-items: --json keys {sorted(data.keys())} != {sorted(want_keys)}")
             if [f["id"] for f in data.get("findings_open", [])] != ["R4-F1"]:
                 problems.append(f"open-items: --json findings_open != ['R4-F1']: {data.get('findings_open')}")
-            if [f["id"] for f in data.get("findings_deferred", [])] != ["R2-F3"]:
-                problems.append(f"open-items: --json findings_deferred != ['R2-F3']: {data.get('findings_deferred')}")
+            deferred_items = data.get("findings_deferred", [])
+            if [f["id"] for f in deferred_items] != ["R2-F3"]:
+                problems.append(f"open-items: --json findings_deferred != ['R2-F3']: {deferred_items}")
+            elif "**" in deferred_items[0].get("waiting_on", ""):
+                problems.append(f"open-items: --json R2-F3 waiting_on carries '**': {deferred_items[0].get('waiting_on')}")
             if [d["id"] for d in data.get("defects_open", [])] != ["D1"]:
                 problems.append(f"open-items: --json defects_open != ['D1']: {data.get('defects_open')}")
             if [r["id"] for r in data.get("accepted_risks_due", [])] != ["D1"]:
