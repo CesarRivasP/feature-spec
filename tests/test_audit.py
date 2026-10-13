@@ -195,6 +195,14 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
       ("9", "legacy-notes.md"),              # named by `related_docs[]`
       ("9", "_log.md")]),                    # set machinery, never a docs[] member
 
+    # §9 — _inbox/ coordination files: check 9 ignores _-prefixed machinery.
+    ("inbox-ignored",
+     [],
+     [("9", "BRIEF-1-x.md"),
+      ("9", "R-1-x.md"),
+      ("9", "_inbox")]),
+
+
     # §15 — a spec folder copied between projects, profile travelling along. Both
     # halves are pure string comparison and both were left to the human pass.
     ("foreign-profile",

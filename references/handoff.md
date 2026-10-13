@@ -126,7 +126,7 @@ This is **not a mode.** It was used three times in five days, and the expensive 
 Five pieces, in order:
 
 1. **Write the log stub first**, in the *originating* set, before anything else exists — `action: delegate`, the defect id, the agent you are handing to. A delegation that dies partway then leaves a trace instead of silence.
-2. **The brief.** From the registry, not from memory: the defect itself, its related `limits.*`, the constraints, and — the part that pays for itself — **what has already been measured**, so the new set does not re-measure it. Anything omitted here gets re-derived, usually differently.
+2. **The brief.** From the registry, not from memory: the defect itself, its related `limits.*`, the constraints, and — the part that pays for itself — **what has already been measured**, so the new set does not re-measure it. Anything omitted here gets re-derived, usually differently. When running across worker sessions or runners, place the brief in the set's inbox (`_inbox/BRIEF-<n>-<task>.md`, following `templates/_inbox-brief.md.tpl`) so the delegated agent reads it from disk rather than conversation memory.
 3. **Mark the originating entry.** `kind: moved_out` + `moved_to:` for a `changes[]` entry; for a defect the originating set still tracks, `owned_by:` + `note_ownership:` and it stays `open` on purpose — closing it would be a lie.
 4. **The issue**, so the work has an address outside both registries.
 5. **The backlink.** The new set carries `owned_by:` pointing back, with **the same id as in the owning set**. Never a mirror id: a `D4_ajeno` invented to make a sibling's defect locally referenceable had to be renamed across four files the moment the owner changed.
