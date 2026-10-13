@@ -4235,14 +4235,19 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
     # 4. accepted risks due within EXPIRY_WARNING_DAYS
     due_risks_raw = due_accepted_risks(facts, today)
     due_risks = [
-        {"id": r[0], "detail": r[1], "because": r[2], "days_left": r[3]}
+        {"id": r[0], "detail": r[1], "because": r[2], "days_left": r[3],
+         "closing_criteria": r[4]}
         for r in due_risks_raw
     ]
 
     # 5. acceptance criteria not signed
     acc_items = normalize_acceptance(facts)
     unsigned_acceptance = [
-        {"id": e["id"], "item": e["item"], "status": e["status"], "verified_on": e.get("verified_on")}
+        {"id": e["id"], "item": e["item"], "status": e["status"],
+         "verified_on": e.get("verified_on"),
+         "closes": (str(e["closes"]).strip() if e.get("closes") else None),
+         "attempts_count": len(e.get("attempts") or [])
+         if isinstance(e.get("attempts"), list) else 0}
         for e in acc_items
         if e["status"] not in ("approved", "retired")
     ]
@@ -4335,6 +4340,8 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
             days = r["days_left"]
             when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
             print(f"  defects.{r['id']} — expires {when} ({r['detail']})")
+            for c in r.get("closing_criteria") or []:
+                print(f"      {format_closing_criterion(c)}")
     else:
         print("  none")
     print()
@@ -4343,7 +4350,10 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
     if unsigned_acceptance:
         for a in unsigned_acceptance:
             v_on = f" · verified_on: {a['verified_on']}" if a.get("verified_on") else ""
-            print(f"  acceptance.{a['id']} — status: {a['status']}{v_on} · {a['item']}")
+            closes = f" · closes {a['closes']}" if a.get("closes") else ""
+            n = a.get("attempts_count") or 0
+            tries = f" · {n} attempt{'s' if n != 1 else ''}" if n else ""
+            print(f"  acceptance.{a['id']} — status: {a['status']}{v_on}{closes}{tries} · {a['item']}")
     else:
         print("  none")
     print()
@@ -4362,6 +4372,24 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
         print(f"  commands: {', '.join(command_keys)}")
     else:
         print("  commands: none")
+
+
+def format_closing_criterion(crit: dict) -> str:
+    """One line for a criterion that `closes:` an accepted risk: its attempt count and
+    last attempt. Shared by `report()` and `--open`, so the two cannot say different
+    things about the same criterion — the real case was `--open` printing `D1 —
+    expires in 11 days` with nothing under it while the audit printed AC23's attempt."""
+    cid = crit["id"]
+    cnt = crit["attempts_count"]
+    att_word = "attempt" if cnt == 1 else "attempts"
+    last = crit.get("last_attempt")
+    if not last:
+        return f"{cid}: 0 attempts"
+    d = last.get("date")
+    outc = last.get("outcome")
+    bec = last.get("aborted_because")
+    bec_suffix = f" — {bec}" if bec else ""
+    return f"{cid}: {cnt} {att_word}, last {d} {outc}{bec_suffix}"
 
 
 MATRIX_VALUE_WIDTH = 60
@@ -4582,19 +4610,6 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
                 print(f"  - {i.strip()}")
             print()
 
-    def format_closing_crit(crit: dict) -> str:
-        cid = crit["id"]
-        cnt = crit["attempts_count"]
-        att_word = "attempt" if cnt == 1 else "attempts"
-        last = crit.get("last_attempt")
-        if not last:
-            return f"{cid}: 0 attempts"
-        d = last.get("date")
-        outc = last.get("outcome")
-        bec = last.get("aborted_because")
-        bec_suffix = f" — {bec}" if bec else ""
-        return f"{cid}: {cnt} {att_word}, last {d} {outc}{bec_suffix}"
-
     risks = live_accepted_risks(facts, today)
     due = due_accepted_risks(facts, today)
     if risks:
@@ -4606,7 +4621,7 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
             if because:
                 print(f"      {because}")
             for c in closing_crits:
-                print(f"      {format_closing_crit(c)}")
+                print(f"      {format_closing_criterion(c)}")
         print()
     if due:
         # Apart from the list above on purpose: the ones that are about to turn
@@ -4620,7 +4635,7 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
                     else f"in {left} days")
             print(f"  defects.{rid} — expires {when} ({detail})")
             for c in closing_crits:
-                print(f"      {format_closing_crit(c)}")
+                print(f"      {format_closing_criterion(c)}")
         print()
 
 
