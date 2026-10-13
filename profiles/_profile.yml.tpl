@@ -62,8 +62,8 @@ deep_review_agent: null
 # A tier is whatever the runner can start: a Claude model or agent name, an AGY model id.
 # parallel:
 #   review_layers: true         # base sweep in `strong`, each gap_sweep_layers entry in `mid`
-#   runner: claude              # claude | agy | inline
+#   runner: claude              # claude | agy | orca | inline
 #   tiers:
 #     strong: spec-strong       # claude: agents/spec-*.md copied to .claude/agents/, or a bare model
 #     mid:    spec-mid          # agy:    gemini-3.8-flash-high / -medium / -low
-#     cheap:  spec-cheap
+#     cheap:  spec-cheap        # orca:   agent/model passed to worker-start

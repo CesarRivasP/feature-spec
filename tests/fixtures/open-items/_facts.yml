@@ -1,0 +1,43 @@
+# Fixture for --open: 4 rounds of log, open/deferred findings, open defects with accepted.until,
+# fixed defects, written & approved acceptance criteria, deferred changes.
+feature: open-items
+status: draft
+profile: ../_profile.fixture.yml
+tracking:
+  branch: feat/open-items
+  shipped_in: null
+defects:
+  - id: D1
+    role: contributing
+    basis: asserted
+    status: open
+    claim: 'el timeout de sesion no cancela el retry'
+    accepted:
+      by: 'Cesar Rivas'
+      decided_on: 2026-10-01
+      until: 2026-10-25
+      because: 'se mide con la suite e2e del siguiente sprint'
+  - id: D2
+    role: contributing
+    basis: measured
+    status: fixed
+    claim: 'el buffer rebalsa con 4 tiles'
+acceptance:
+  - id: AC1
+    item: 'el handler responde en menos de 50ms'
+    status: approved
+    verified_on: 2026-10-05
+  - id: AC2
+    item: 'el fallback de red reintenta una sola vez'
+    status: written
+changes:
+  - id: C1
+    file: src/cache.ts
+    kind: deferred
+    change: 'cache en memoria para tokens revocados'
+    reopens_when: 'cuando el volumen supere 1000 req/s'
+docs:
+  - id: "01"
+    file: 01-master-plan.md
+    role: master-plan
+    stage: draft

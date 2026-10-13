@@ -1,0 +1,8 @@
+# Check 9 ignores _inbox/*.md as set machinery.
+feature: inbox-ignored
+status: draft
+profile: ../_profile.fixture.yml
+defects: []
+acceptance: []
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

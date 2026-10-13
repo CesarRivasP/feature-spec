@@ -195,6 +195,14 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
       ("9", "legacy-notes.md"),              # named by `related_docs[]`
       ("9", "_log.md")]),                    # set machinery, never a docs[] member
 
+    # §9 — _inbox/ coordination files: check 9 ignores _-prefixed machinery.
+    ("inbox-ignored",
+     [],
+     [("9", "BRIEF-1-x.md"),
+      ("9", "R-1-x.md"),
+      ("9", "_inbox")]),
+
+
     # §15 — a spec folder copied between projects, profile travelling along. Both
     # halves are pure string comparison and both were left to the human pass.
     ("foreign-profile",
@@ -426,6 +434,30 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("16", "read `01-master-plan.md`"),        # same version both rounds
       ("16", "read `02-implementation.md`")]),   # R2's Edits: named it with no
                                                  # version — unknown, not wrong
+
+    # §16 — disk comparison keys file records by resolved path, not literal spelling.
+    # R1 records `_facts.yml` at vA; R2 edits it and records the disk version under
+    # repo-relative `docs/features/log-spelling/_facts.yml`. Stale vA must not fire.
+    ("log-spelling/docs/features/log-spelling",
+     [],
+     [("16", "DRIFT"),
+      ("16", "_facts.yml")]),
+
+    # §16 — disk comparison negative case: a third spelling whose blob genuinely
+    # differs from disk still fires DRIFT.
+    ("log-spelling-drift/docs/features/log-spelling-drift",
+     [("16", "last recorded at _log.md:16 as 11 lines, blob 9999999; now 11 lines, blob 3ab985d")],
+     []),
+
+    # §44 — cross-set value parity: two sibling sets cite the same measurements.
+    # The child cites parent's `limits.fps_per_tile`: clean with 24, DRIFT with 30,
+    # DRIFT when citing an undefined key, and child's registry inherits via derived_from.
+    ("cross-set-value/docs/features/child-rails",
+     [("44", "01-master-plan.md:7"),            # value 30 does not match current 24
+      ("44", "01-master-plan.md:10")],          # limits.nonexistent does not exist
+     [("44", "01-master-plan.md:4"),            # clean: carries verbatim 24
+      ("35", "rail_budget"),                    # derived_from inherits, clean for 35
+      ("30", "rail_budget")]),                  # parent has n: 3 and spread, clean for 30
 ]
 
 # (fixture, extra args, expect, reject) — cases that only exist under a flag.
@@ -446,7 +478,15 @@ FLAG_CASES: list[tuple[str, list[str], list[tuple[str, str]],
     ("accepted-risk-due", ["--today", "2026-10-24"],
      [("1b/14", "R1"), ("1b/14", "R3")],
      [("1b/14", "R2")]),
+
+    # T3 — `acceptance[].attempts[]` and `closes:`.
+    ("acceptance-attempts", ["--today", "2026-10-12"],
+     [("26", "AC24"),                    # dangling closes: D9
+      ("26", "AC25"),                    # attempts out of date order
+      ("26", "AC26")],                   # approved with aborted last attempt and no verified_on
+     []),
 ]
+
 
 
 # (fixture, expect[(check, text)], reject[(check, text)]) — CANDIDATES, not findings.
@@ -782,6 +822,35 @@ def accepted_risks_come_due() -> list[str]:
     return problems
 
 
+def acceptance_attempts_recorded() -> list[str]:
+    """T3 — AC23 closes D1 and has an aborted attempt recorded. The report prints
+    the attempt count and last attempt under D1, and json exports closing_criteria."""
+    problems = []
+    data = run_json("acceptance-attempts", ["--today", "2026-10-12"])
+    risks = data.get("accepted_risks", [])
+    r1 = next((r for r in risks if r["id"] == "D1"), None)
+    if not r1:
+        problems.append("acceptance-attempts: defects.D1 not found in accepted_risks")
+    elif not r1.get("closing_criteria"):
+        problems.append("acceptance-attempts: defects.D1 has no closing_criteria in JSON")
+    else:
+        crit = r1["closing_criteria"][0]
+        if crit["id"] != "AC23" or crit["attempts_count"] != 1:
+            problems.append(f"acceptance-attempts: expected AC23 with 1 attempt, got {crit}")
+
+    out = subprocess.run(
+        [sys.executable, str(AUDIT), str(FIXTURES / "acceptance-attempts"),
+         "--repo-root", str(FIXTURES / "acceptance-attempts"), "--today", "2026-10-12"],
+        capture_output=True, text=True).stdout
+
+    expected_line = "AC23: 1 attempt, last 2026-10-12 aborted_no_conditions — no live event available in the window"
+    if expected_line not in out:
+        problems.append(f"acceptance-attempts: expected {expected_line!r} in stdout, got:\n{out}")
+
+    return problems
+
+
+
 def matrix_is_counted() -> list[str]:
     """The correspondence matrix used to be the agent's to build — a grep per datum
     per doc, then the table typed out — while `render.py` already counted the same
@@ -1075,9 +1144,69 @@ def registry_index_spans() -> list[str]:
     return problems
 
 
+def open_items_lists_pending_actions() -> list[str]:
+    """`--open` derives what still demands action mechanically without running an audit:
+    findings without dispositions, open defects with days left on accepted risks,
+    acceptance criteria not yet signed, deferred changes, and runnable commands.
+    Asserts both the human-readable text and the --json keys and contents."""
+    problems = []
+    today = "2026-10-15"
+    base = [sys.executable, str(AUDIT), str(FIXTURES / "open-items"),
+            "--repo-root", str(FIXTURES / "open-items"), "--today", today]
+
+    out_text = subprocess.run(base + ["--open"], capture_output=True, text=True)
+    if out_text.returncode != 0:
+        problems.append(f"open-items: --open exited {out_text.returncode}: {out_text.stderr}")
+    text = out_text.stdout
+
+    if "R4-F1" not in text or "R2-F1" in text or "R2-F2" in text or "R4-F2" in text or "R4-F3" in text:
+        problems.append("open-items: text output must list exactly R4-F1 as open finding")
+    if "R2-F3: como riesgo aceptado. Needs mock server" not in text or "**" in text.split("## Defects open")[0]:
+        problems.append("open-items: text output must list R2-F3 under deferred findings with no '**' in waiting_on")
+    if "defects.D1" not in text or "10 days left" not in text or "defects.D2" in text:
+        problems.append("open-items: text output must list open defect D1 with 10 days left and not fixed D2")
+    if "acceptance.AC2" not in text or "acceptance.AC1" in text:
+        problems.append("open-items: text output must list written criterion AC2 and not approved AC1")
+    if "changes.C1" not in text:
+        problems.append("open-items: text output must list deferred change C1")
+
+    out_json = subprocess.run(base + ["--open", "--json"], capture_output=True, text=True)
+    if out_json.returncode != 0:
+        problems.append(f"open-items: --open --json exited {out_json.returncode}: {out_json.stderr}")
+    else:
+        try:
+            data = json.loads(out_json.stdout)
+            want_keys = {"status", "tracking", "findings_open", "findings_deferred",
+                         "defects_open", "accepted_risks_due", "acceptance_unsigned",
+                         "changes_deferred", "scripts"}
+            if set(data.keys()) != want_keys:
+                problems.append(f"open-items: --json keys {sorted(data.keys())} != {sorted(want_keys)}")
+            if [f["id"] for f in data.get("findings_open", [])] != ["R4-F1"]:
+                problems.append(f"open-items: --json findings_open != ['R4-F1']: {data.get('findings_open')}")
+            deferred_items = data.get("findings_deferred", [])
+            if [f["id"] for f in deferred_items] != ["R2-F3"]:
+                problems.append(f"open-items: --json findings_deferred != ['R2-F3']: {deferred_items}")
+            elif "**" in deferred_items[0].get("waiting_on", ""):
+                problems.append(f"open-items: --json R2-F3 waiting_on carries '**': {deferred_items[0].get('waiting_on')}")
+            if [d["id"] for d in data.get("defects_open", [])] != ["D1"]:
+                problems.append(f"open-items: --json defects_open != ['D1']: {data.get('defects_open')}")
+            if [r["id"] for r in data.get("accepted_risks_due", [])] != ["D1"]:
+                problems.append(f"open-items: --json accepted_risks_due != ['D1']: {data.get('accepted_risks_due')}")
+            if [a["id"] for a in data.get("acceptance_unsigned", [])] != ["AC2"]:
+                problems.append(f"open-items: --json acceptance_unsigned != ['AC2']: {data.get('acceptance_unsigned')}")
+            if [c["id"] for c in data.get("changes_deferred", [])] != ["C1"]:
+                problems.append(f"open-items: --json changes_deferred != ['C1']: {data.get('changes_deferred')}")
+        except json.JSONDecodeError as exc:
+            problems.append(f"open-items: --json did not return valid JSON: {exc}")
+
+    return problems
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     failures, total = [], 0
+    total += 1
+    failures += open_items_lists_pending_actions()
     total += 1
     failures += registry_index_spans()
     total += 1
@@ -1086,7 +1215,10 @@ def main() -> int:
     total += 1
     failures += accepted_risks_come_due()
     total += 1
+    failures += acceptance_attempts_recorded()
+    total += 1
     failures += matrix_is_counted()
+
     total += 1
     failures += read_line_round_trips()
     total += 1

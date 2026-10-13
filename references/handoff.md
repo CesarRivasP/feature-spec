@@ -98,7 +98,7 @@ The shape generalizes; three is just the common case.
 
 Repeat from 2 as needed. `verify` (device/instrumented observation) is its own action and can enter at any point; it is the only one that can turn an `asserted` claim into a `measured` one.
 
-**A round that edits without appending an entry is invisible**, and the next round reviews a file matching no entry in the log. Audit check 16 catches it after the fact, twice over — it recomputes every set file's line count and blob and compares them with the last `Read:` / `Edits:` line that recorded them; and it compares each entry's `Read:` against the version the **previous** entries left, so an edit made *between* two rounds is caught even though the next round's own stub recorded the new version faithfully. *Real case:* R9 closed with `_facts.yml` at 634 lines, blob 882d1ff; R10 opened at 633 lines, blob 857ce36 — a `tracking.pr` edit with no round. The disk matched R10's stamp, so the first comparison was silent; the second says `R10 read _facts.yml at 633 lines, blob 857ce36; R9 left it at 634 lines, blob 882d1ff — edited between rounds`. Appending as you go is what prevents both. The comparisons only work for files recorded **with** a version: `_facts.yml (v17)` names a revision nothing can check, and is itself a finding; an `Edits:` naming a file with no version leaves the next round's `Read:` uncheckable, not wrong.
+**A round that edits without appending an entry is invisible**, and the next round reviews a file matching no entry in the log. Audit check 16 catches it after the fact, twice over — it recomputes every set file's line count and blob and compares them with the last `Read:` / `Edits:` line that recorded them; and it compares each entry's `Read:` against the version the **previous** entries left, so an edit made *between* two rounds is caught even though the next round's own stub recorded the new version faithfully. Both comparisons match files by what they resolve to, so one spelling per line is enough. *Real case:* R9 closed with `_facts.yml` at 634 lines, blob 882d1ff; R10 opened at 633 lines, blob 857ce36 — a `tracking.pr` edit with no round. The disk matched R10's stamp, so the first comparison was silent; the second says `R10 read _facts.yml at 633 lines, blob 857ce36; R9 left it at 634 lines, blob 882d1ff — edited between rounds`. Appending as you go is what prevents both. The comparisons only work for files recorded **with** a version: `_facts.yml (v17)` names a revision nothing can check, and is itself a finding; an `Edits:` naming a file with no version leaves the next round's `Read:` uncheckable, not wrong.
 
 ## Rotating the log
 
@@ -107,7 +107,7 @@ The log outranks the context window only while it fits in one. A real set reache
 **Rotate; never summarize.** A summary is a new claim about old rounds, written by whoever is least able to tell which detail mattered — and the details that matter are exactly the ones a summary drops: a rejection's evidence, a measurement's conditions, the reasoning chain that turned a defect false. Rotation keeps every word.
 
 1. **Open the rotation round's stub** at the end of `_log.md`, as any round does, and read it back.
-2. **Move** rounds `R1…R<k>` verbatim to `_log-R1-R<k>.md` beside it, under a short header saying what the file is and that it is never edited. Keep `R<k+1>…` in `_log.md` as recent context — usually the last five to ten rounds. Before writing either file, check that header + archived rounds + kept rounds reassemble the original byte for byte; a rotation that loses a line is the summary it exists to avoid.
+2. **Move** rounds `R1…R<k>` verbatim to `_log-R1-R<k>.md` beside it, under a short header saying what the file is and that it is never edited. Keep `R<k+1>…` in `_log.md` as recent context: archive every round before the last `**Stage:**` transition (reviewed or shipped), keep the rest; when no transition exists, the last five to ten rounds. Before writing either file, check that header + archived rounds + kept rounds reassemble the original byte for byte; a rotation that loses a line is the summary it exists to avoid.
 3. **Complete the rotation entry** — `## R<n+1> · <date> · <agent> · rotate`, numbered after the last round, never reset:
    - `**Read:**` — **every** file of the set (`_facts.yml`, each file in `docs[]`, the profile) with its line count and blob. This is the new baseline check 16 compares against.
    - `**Stage:** <status> → <status>` — **carried**, when the last real transition went to the archive. Check 16 reads `Stage:` from `_log.md` only; without this line a set past `draft` reports a transition that never happened.
@@ -115,7 +115,7 @@ The log outranks the context window only while it fits in one. A real set reache
    - `**Carried open:**` — every finding without a final disposition, by id (`R12-F3`), each with one line saying what it waits on. An index, not a summary: it points into the archive and restates nothing. If the dispositions were not re-judged, say so rather than implying they were.
 4. **Run the audit.** A clean run means the baseline took.
 
-The archive is history: it is never audited for anchors (check 18 reads the registry and registered docs only), never registered in `docs[]` (check 9 skips `_`-prefixed files), never synced, and reading it is required only when a carried finding points into it.
+The archive is history: it is never audited for anchors (check 18 reads the registry and registered docs only), never registered in `docs[]` (check 9 skips `_`-prefixed files), never synced, and `audit.py <dir> --open` is what replaces reading the archive for the open items; reading it directly is required only when a carried finding points into it.
 
 ## Delegating a defect to a set of its own
 
@@ -126,7 +126,7 @@ This is **not a mode.** It was used three times in five days, and the expensive 
 Five pieces, in order:
 
 1. **Write the log stub first**, in the *originating* set, before anything else exists — `action: delegate`, the defect id, the agent you are handing to. A delegation that dies partway then leaves a trace instead of silence.
-2. **The brief.** From the registry, not from memory: the defect itself, its related `limits.*`, the constraints, and — the part that pays for itself — **what has already been measured**, so the new set does not re-measure it. Anything omitted here gets re-derived, usually differently.
+2. **The brief.** From the registry, not from memory: the defect itself, its related `limits.*`, the constraints, and — the part that pays for itself — **what has already been measured**, so the new set does not re-measure it. Anything omitted here gets re-derived, usually differently. When running across worker sessions or runners, place the brief in the set's inbox (`_inbox/BRIEF-<n>-<task>.md`, following `templates/_inbox-brief.md.tpl`) so the delegated agent reads it from disk rather than conversation memory.
 3. **Mark the originating entry.** `kind: moved_out` + `moved_to:` for a `changes[]` entry; for a defect the originating set still tracks, `owned_by:` + `note_ownership:` and it stays `open` on purpose — closing it would be a lie.
 4. **The issue**, so the work has an address outside both registries.
 5. **The backlink.** The new set carries `owned_by:` pointing back, with **the same id as in the owning set**. Never a mirror id: a `D4_ajeno` invented to make a sibling's defect locally referenceable had to be renamed across four files the moment the owner changed.
@@ -157,3 +157,8 @@ Two rules that are not obvious:
 The validating round is often the same model that authored the plan, judging a critique of its own work. The log does not remove that bias — it makes it **visible**. Across a few features you can read the ratio directly: an agent that rejects most external findings, with thin evidence lines, is telling you something about the gate, not about the findings. Check the ratio before trusting the validate round as an approval.
 
 Nor does the log make an entry true. `agent:` is self-reported, `Read:` can be fabricated by an agent that never opened the file. What it does is make both **falsifiable**: a hash that doesn't match the file is a mismatch anyone can check in one command, and that is the whole standard this skill holds every other claim to.
+
+## Session brief
+
+`handoff <slug> --session` is `python3 scripts/audit.py docs/features/<slug>/ --open` plus two lines the registry cannot know: `git status --short` of the spec dir and the working branch vs `tracking.branch`. The incoming agent pastes the output as the opening of the next session, and only writes by hand what `--open` cannot derive. It is NOT a log entry and is never written to `_log.md`.
+

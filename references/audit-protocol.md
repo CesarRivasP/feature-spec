@@ -213,7 +213,7 @@ Rationale in `references/implementable.md`. Each of these is a question the buil
 Contract in `references/handoff.md`. Only applies once `_log.md` exists — a single-agent set never needs one, and its absence is not a finding.
 
 **[script]** settles every bullet below except the two about dispositions — round order, the three required fields, the `Stage:` line, the log's size, and each file's version. Only `**Read:**` and `**Edits:**` lines are read for versions, and HTML comments (the template's commented example) are skipped.
-- **A file's current `wc -l` + `git hash-object` differ from what the last entry naming it recorded → `DRIFT`.** Someone edited without appending. The next round is about to review a version no entry describes, and every disposition it writes will be against the wrong text. The blob is computed the way git computes it, so a gitignored spec needs no git at all.
+- **A file's current `wc -l` + `git hash-object` differ from what the last entry naming it recorded → `DRIFT`.** Someone edited without appending. The next round is about to review a version no entry describes, and every disposition it writes will be against the wrong text. The blob is computed the way git computes it, so a gitignored spec needs no git at all. Both comparisons match files by what they resolve to, so one spelling per line is enough.
   *Real case, and why this left the human list:* the command that opened a round's stub failed with a shell error (`unmatched "`); its author read the next line of output instead and worked a whole round with nothing on disk. It surfaced only at the end, when the closing edit found no anchor. From the next round it is exactly this finding.
 - **An entry's `Read:` records a version the previous entries did not leave → `DRIFT`, "edited between rounds".** Entry N's `Read:` of a file is compared against the last version any earlier entry recorded for it — its `Edits:` when it edited, its `Read:` when it did not. Files are matched by what they resolve to, not by spelling: `_facts.yml` and `docs/features/<slug>/_facts.yml` are one file. `_log.md` is never compared — it grows by the entry being written. The disk comparison above cannot see this one: the new round's own stub records the new version faithfully, and the disk matches it. *Real case:* R9 closed with `_facts.yml` at 634 lines, blob 882d1ff; R10 opened at 633 lines, blob 857ce36; a `tracking.pr` edit sat between them with no round. An `Edits:` naming the file with no version leaves it unknown, and unknown contradicts nothing.
 - **A set's own file (`_facts.yml`, a doc, the profile) last named in `Read:` / `Edits:` with no line count and no blob → `DRIFT`.** `_facts.yml (v17)` names a revision the log cannot check against the disk. A code file named in `Edits:` is exempt — its version is git's business.
@@ -310,6 +310,7 @@ from one of them needs explaining, disputing or changing, and not otherwise.
 | 39 | `changes[]` built state |
 | 40 | Revision order |
 | 41 | Provisional prose |
+| 44 | Cross-set value parity |
 
 ## Enum fields are read lowercased — always
 

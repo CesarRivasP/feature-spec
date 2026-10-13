@@ -1145,6 +1145,7 @@ def check_changes_vocabulary(facts: dict, f: Findings) -> None:
 
 # `""` is a plain-string criterion, which reads as `written`.
 ACCEPTANCE_STATUSES = {"", "written", "executed", "approved", "retired"}
+ATTEMPT_OUTCOMES = {"aborted_no_conditions", "failed", "passed"}
 
 
 def normalize_acceptance(facts: dict) -> list[dict]:
@@ -1158,10 +1159,13 @@ def normalize_acceptance(facts: dict) -> list[dict]:
                         "status": norm(e.get("status")),
                         "verified_on": e.get("verified_on"),
                         "retired_on": e.get("retired_on"),
-                        "retired_because": e.get("retired_because")})
+                        "retired_because": e.get("retired_because"),
+                        "closes": e.get("closes"),
+                        "attempts": e.get("attempts")})
         else:
             out.append({"id": f"[{i}]", "item": str(e), "status": "", "verified_on": None,
-                        "retired_on": None, "retired_because": None})
+                        "retired_on": None, "retired_because": None,
+                        "closes": None, "attempts": None})
     return out
 
 
@@ -1176,8 +1180,93 @@ def check_acceptance_state(facts: dict, status_rank: int, f: Findings) -> None:
     existed the only way to stop a dead criterion from blocking `shipped` was to
     delete it, and deleting it broke every citation of it. Real case: retiring AC6,
     AC12 and AC13 of one research set meant removing them from the registry and
-    rewriting their mentions in docs 01 and 02 by hand, so they would not dangle."""
+    rewriting their mentions in docs 01 and 02 by hand, so they would not dangle.
+
+    `attempts[]` records blocked runs on the criterion (e.g. no live event available)
+    without flipping its status, and `closes:` links it to the defect whose accepted
+    risk this criterion settles. Real case: AC23 could not run because no live event
+    was available; the author had nowhere to record the attempt and wrote
+    `limits.ac23_attempt_2026_10_12`, which nothing reads."""
     items = normalize_acceptance(facts)
+    defects_list = facts.get("defects") or []
+    defects_by_id = {str(d.get("id")): d for d in defects_list if isinstance(d, dict) and d.get("id")}
+
+    # Validate closes: and attempts[] across all criteria (even retired ones)
+    for e in items:
+        label = f"acceptance.{e['id']}"
+        closes = e.get("closes")
+        if closes is not None:
+            closes_str = str(closes).strip()
+            if closes_str not in defects_by_id:
+                f.add(DRIFT, label,
+                      f"`closes: {closes_str}` does not match any defects[] id",
+                      "`closes:` must name an existing `defects[]` id whose `accepted:` "
+                      "risk this criterion settles",
+                      "26 acceptance state")
+            else:
+                target_defect = defects_by_id[closes_str]
+                if not target_defect.get("accepted"):
+                    f.add(POLISH, label,
+                          f"`closes: {closes_str}` closes a defect that carries no accepted risk",
+                          "`closes:` is for criteria that settle an `accepted:` risk; "
+                          f"defects.{closes_str} has no `accepted:` block",
+                          "26 acceptance state")
+
+        attempts = e.get("attempts")
+        if attempts is not None:
+            if not isinstance(attempts, list):
+                f.add(DRIFT, label, "`attempts:` must be a list of dicts",
+                      "record attempts as a list of `{date, outcome, ...}` entries",
+                      "26 acceptance state")
+            else:
+                prev_date = None
+                for idx, att in enumerate(attempts):
+                    if not isinstance(att, dict):
+                        f.add(DRIFT, label, f"attempts[{idx}] must be a dict",
+                              "record each attempt as a dict with date and outcome",
+                              "26 acceptance state")
+                        continue
+                    d_val = to_date(att.get("date"))
+                    if d_val is None:
+                        f.add(DRIFT, label,
+                              f"attempts[{idx}] date `{att.get('date')}` is not a valid ISO date",
+                              "use YYYY-MM-DD for attempt date",
+                              "26 acceptance state")
+                    outcome = norm(att.get("outcome"))
+                    if outcome not in ATTEMPT_OUTCOMES:
+                        f.add(DRIFT, label,
+                              f"attempts[{idx}] outcome `{att.get('outcome')}` is not valid",
+                              "use aborted_no_conditions | failed | passed",
+                              "26 acceptance state")
+                    elif outcome == "aborted_no_conditions" or outcome.startswith("aborted"):
+                        if not att.get("aborted_because"):
+                            f.add(DRIFT, label,
+                                  f"attempts[{idx}] `outcome: {outcome}` with no `aborted_because:`",
+                                  "name the missing precondition in `aborted_because:`",
+                                  "26 acceptance state")
+
+                    if d_val is not None:
+                        if prev_date is not None and d_val < prev_date:
+                            f.add(DRIFT, label,
+                                  f"attempt on `{d_val}` listed after `{prev_date}` but older than it",
+                                  "`attempts[]` is OLDEST first — append new attempts at the end",
+                                  "26 acceptance state")
+                        prev_date = d_val
+
+                # status: approved with a last attempt aborted_no_conditions and no verified_on after it -> DRIFT
+                if norm(e.get("status")) == "approved" and attempts:
+                    last_att = attempts[-1]
+                    if isinstance(last_att, dict) and norm(last_att.get("outcome")) == "aborted_no_conditions":
+                        last_d = to_date(last_att.get("date"))
+                        ver_d = to_date(e.get("verified_on"))
+                        if ver_d is None or (last_d is not None and ver_d <= last_d):
+                            f.add(DRIFT, label,
+                                  "`status: approved` but last attempt was aborted with no verified_on after it",
+                                  "an aborted attempt leaves the criterion unverified; "
+                                  "run it and record `verified_on:` with a date after the aborted attempt, "
+                                  "or do not approve",
+                                  "26 acceptance state")
+
     # Checked at every stage: a retirement is a decision, and a decision with no
     # date and no reason is the kind nobody can revisit.
     for e in items:
@@ -1257,6 +1346,7 @@ def check_acceptance_state(facts: dict, status_rank: int, f: Findings) -> None:
                   "the boolean True and the value silently lands under a key "
                   "nothing reads.)",
                   "26 acceptance state")
+
 
 
 def check_dead_dependency_cascade(facts: dict, f: Findings) -> None:
@@ -1981,6 +2071,46 @@ def registry_entry(facts: dict, container: str, name: str):
     return None
 
 
+def resolve_sibling_entry(rel: str, container: str, name: str,
+                          spec_dir: Path, repo_root: Path,
+                          cache: dict[Path, dict | None] | None = None
+                          ) -> tuple[dict | None, Path | None]:
+    """Resolve a qualified cross-set entry (`rel container.name`) against sibling facts.
+
+    Paths resolve through (repo_root, spec_dir, spec_dir.parent); any path climbing
+    out of the checkout or pointing back at the spec's own registry is skipped.
+    Returns (entry, resolved_facts_path) or (None, None).
+    """
+    own = (spec_dir / "_facts.yml").resolve()
+    repo_res = repo_root.resolve()
+    path = None
+    for base in (repo_root, spec_dir, spec_dir.parent):
+        try:
+            cand = (base / rel).resolve()
+        except (OSError, ValueError):
+            continue
+        if repo_res not in cand.parents and cand != repo_res:
+            continue
+        if cand.is_file() and cand != own:
+            path = cand
+            break
+    if path is None:
+        return None, None
+    sibling: dict | None = None
+    if cache is not None and path in cache:
+        sibling = cache[path]
+    else:
+        try:
+            sibling = load_facts(path)
+        except (yaml.YAMLError, OSError):
+            sibling = None
+        if cache is not None:
+            cache[path] = sibling
+    if not isinstance(sibling, dict):
+        return None, path
+    return registry_entry(sibling, norm(container), name), path
+
+
 def load_profile(facts: dict, spec_dir: Path, repo_root: Path) -> dict:
     prof = facts.get("profile")
     if not prof:
@@ -2053,22 +2183,17 @@ def check_sample_size(facts: dict, prose: dict[str, str], spec_dir: Path,
                       "observed extremes, verbatim (`'0..308 fallas'`)",
                       "30 sample size and spread")
 
-    own = (spec_dir / "_facts.yml").resolve()
+    siblings_cache: dict[Path, dict | None] = {}
     for doc, text in prose.items():
         for lineno, line in enumerate(text.splitlines(), 1):
             for rel, container, name in CROSS_SET_RE.findall(line):
-                path = next((b / rel for b in (repo_root, spec_dir, spec_dir.parent)
-                             if (b / rel).is_file()), None)
-                if path is None or path.resolve() == own:
+                entry, path = resolve_sibling_entry(rel, container, name, spec_dir,
+                                                    repo_root, siblings_cache)
+                if not isinstance(entry, dict) or path is None:
                     continue
-                try:
-                    sibling = load_facts(path)
-                except (yaml.YAMLError, OSError):
-                    continue
-                entry = registry_entry(sibling, norm(container), name)
-                if not isinstance(entry, dict):
-                    continue
-                single = single_runs_behind(sibling, entry)
+                sibling = siblings_cache.get(path) or {}
+                single = single_runs_behind(sibling, entry, spec_dir=path.parent,
+                                            repo_root=repo_root, cache=siblings_cache)
                 if not single:
                     continue
                 via = ("" if single == [f"{norm(container)}.{name}"]
@@ -2080,6 +2205,39 @@ def check_sample_size(facts: dict, prose: dict[str, str], spec_dir: Path,
                       "a number, a path and an id, and not that the owner looked once "
                       "— re-measure in the owning set, or carry the caveat here",
                       "30 sample size and spread")
+
+    # In addition to prose citations, a qualified derived_from reference to an n: 1
+    # source with no spread is reported by check 30 as well.
+    for path, node in walk(facts):
+        if not isinstance(node, dict):
+            continue
+        ev = node.get("evidence")
+        if not isinstance(ev, dict) or not ev.get("derived_from"):
+            continue
+        where = pretty_path(facts, path) or "_facts.yml"
+        for ref in as_list(ev.get("derived_from")):
+            q_parsed = parse_qualified_ref(ref)
+            if not q_parsed:
+                continue
+            rel, container, name = q_parsed
+            entry, sib_path = resolve_sibling_entry(rel, container, name, spec_dir,
+                                                    repo_root, siblings_cache)
+            if not isinstance(entry, dict) or sib_path is None:
+                continue
+            sibling = siblings_cache.get(sib_path) or {}
+            single = single_runs_behind(sibling, entry, spec_dir=sib_path.parent,
+                                        repo_root=repo_root, cache=siblings_cache)
+            if not single:
+                continue
+            via = ("" if single == [f"{norm(container)}.{name}"]
+                   else f" (derived from {', '.join(f'`{r}`' for r in single)})")
+            f.add(DRIFT, where,
+                  f"cites `{container}.{name}` from `{rel}`, which was measured "
+                  f"once (`n: 1`) with no `spread:`{via}",
+                  "this is where one run becomes a constant: the citing set sees "
+                  "a number, a path and an id, and not that the owner looked once "
+                  "— re-measure in the owning set, or carry the caveat here",
+                  "30 sample size and spread")
 
 
 def check_run_conditions(facts: dict, spec_dir: Path, repo_root: Path,
@@ -2247,6 +2405,18 @@ def parse_ref(ref) -> tuple[str, str] | None:
     return (norm(m.group(1)), m.group(2)) if m else None
 
 
+def parse_qualified_ref(ref) -> tuple[str, str, str] | None:
+    """Parse a cross-set qualified ref: `path/_facts.yml limits.key`.
+
+    Accepts optional backticks or quotes around the path or entire ref.
+    Returns (rel, container, name) or None.
+    """
+    m = re.fullmatch(
+        r"\s*`?([\w./-]*_facts\.yml)`?[\s`]+\b(%s)\.([A-Za-z0-9_]+)`?\s*"
+        % "|".join(ID_CONTAINERS), str(ref), re.I)
+    return (m.group(1), norm(m.group(2)), m.group(3)) if m else None
+
+
 def as_list(value) -> list:
     if value is None:
         return []
@@ -2254,12 +2424,18 @@ def as_list(value) -> list:
 
 
 def single_runs_behind(facts: dict, entry: dict, seen: set | None = None,
-                       label: str = "") -> list[str]:
+                       label: str = "",
+                       spec_dir: Path | None = None,
+                       repo_root: Path | None = None,
+                       cache: dict[Path, dict | None] | None = None) -> list[str]:
     """The `n: 1`, spread-less runs a value ultimately rests on.
 
     A measured entry answers for itself. A derived one inherits its sources' bar —
     that is the whole point of deriving instead of re-typing `n` and `spread` — so
-    it is exactly as single-run as the weakest thing it names."""
+    it is exactly as single-run as the weakest thing it names.
+    Cross-set `derived_from` references are resolved against sibling facts when
+    spec_dir and repo_root are provided.
+    """
     ev = entry.get("evidence")
     ev = ev if isinstance(ev, dict) else {}
     refs = as_list(ev.get("derived_from"))
@@ -2269,13 +2445,35 @@ def single_runs_behind(facts: dict, entry: dict, seen: set | None = None,
     seen = seen if seen is not None else set()
     out: list[str] = []
     for ref in refs:
+        q_parsed = parse_qualified_ref(ref)
+        if q_parsed:
+            rel, c, k = q_parsed
+            token = f"{rel} {c}.{k}"
+            if token in seen:
+                continue
+            seen.add(token)
+            if spec_dir and repo_root:
+                parent, _ = resolve_sibling_entry(rel, c, k, spec_dir, repo_root, cache)
+                if isinstance(parent, dict):
+                    # For sibling entries, resolve their sources within the sibling facts
+                    path_key = next((b / rel for b in (repo_root, spec_dir, spec_dir.parent)
+                                     if (b / rel).is_file()), None)
+                    parent_spec_dir = path_key.parent if path_key else spec_dir
+                    out += single_runs_behind(facts, parent, seen, f"{c}.{k}",
+                                              spec_dir=parent_spec_dir,
+                                              repo_root=repo_root,
+                                              cache=cache)
+            continue
+
         parsed = parse_ref(ref)
         if not parsed or parsed in seen:
             continue
         seen.add(parsed)
         parent = registry_entry(facts, *parsed)
         if isinstance(parent, dict):
-            out += single_runs_behind(facts, parent, seen, ".".join(parsed))
+            out += single_runs_behind(facts, parent, seen, ".".join(parsed),
+                                      spec_dir=spec_dir, repo_root=repo_root,
+                                      cache=cache)
     return out
 
 
@@ -2326,7 +2524,8 @@ def correction_state(entry: dict) -> str:
         f" ({', '.join(superseding_refs(entry))})" if superseding_refs(entry) else "")
 
 
-def check_derived_evidence(facts: dict, f: Findings) -> None:
+def check_derived_evidence(facts: dict, spec_dir: Path, repo_root: Path,
+                           f: Findings) -> None:
     """Check 35. `evidence: { derived_from: [limits.x, limits.y], date, value }`.
 
     A conclusion read off measurements that already live in the registry is not a
@@ -2340,8 +2539,10 @@ def check_derived_evidence(facts: dict, f: Findings) -> None:
     `asserted`, `decided`, retracted or missing makes the derived value a claim the
     registry cannot back — CONTRADICTION, the same severity as a `measured` whose
     `cmd` cannot be re-run (check 24). A corrected source is DRIFT unless the entry
-    says it took the correction into account."""
+    says it took the correction into account. Sibling sets may be named via qualified
+    references `path/_facts.yml container.key`."""
     graph: dict[str, list[tuple[str, str]]] = {}
+    sibling_cache: dict[Path, dict | None] = {}
     for path, node in walk(facts):
         if not isinstance(node, dict):
             continue
@@ -2352,6 +2553,43 @@ def check_derived_evidence(facts: dict, f: Findings) -> None:
         text = yaml.safe_dump(node, allow_unicode=True)
         edges = []
         for ref in as_list(ev.get("derived_from")):
+            q_parsed = parse_qualified_ref(ref)
+            if q_parsed:
+                rel, container, name = q_parsed
+                target, sib_path = resolve_sibling_entry(rel, container, name,
+                                                         spec_dir, repo_root,
+                                                         sibling_cache)
+                label = f"{container}.{name}"
+                if sib_path is None or not isinstance(target, dict):
+                    f.add(CONTRADICTION, where,
+                          f"`derived_from` names `{ref}`, which this registry does not "
+                          "define",
+                          "a derived value is only as real as its sources — fix the "
+                          "reference, or drop to `basis: asserted`",
+                          "35 derived evidence")
+                    continue
+                if is_retracted(target):
+                    f.add(CONTRADICTION, where,
+                          f"derived from `{label}`, {correction_state(target)}",
+                          "a retracted measurement backs nothing: re-derive from what "
+                          "replaced it, or drop to `basis: asserted`",
+                          "35 derived evidence")
+                elif norm(target.get("basis")) != "measured":
+                    f.add(CONTRADICTION, where,
+                          f"derived from `{label}`, which is `basis: "
+                          f"{norm(target.get('basis')) or 'absent'}`",
+                          "derived evidence counts as `measured` only while every source "
+                          "is — measure the source, or drop this to `basis: asserted`",
+                          "35 derived evidence")
+                elif is_corrected(target) and not mentions_correction(text, target):
+                    f.add(DRIFT, where,
+                          f"derived from `{label}`, {correction_state(target)}, and "
+                          "the entry does not mention the correction",
+                          "re-read the source against its `correction:` and say in this "
+                          "entry that the derivation still holds",
+                          "35 derived evidence")
+                continue
+
             parsed = parse_ref(ref)
             target = registry_entry(facts, *parsed) if parsed else None
             if not isinstance(target, dict):
@@ -2407,10 +2645,10 @@ def check_derived_evidence(facts: dict, f: Findings) -> None:
             if any(reaches(p, me, set())
                    for p in map(parse_ref, as_list(ev["derived_from"])) if p):
                 f.add(CONTRADICTION, f"{container}.{name}",
-                      "`derived_from` is circular — following it leads back here",
-                      "at least one link in the chain has to be a run somebody "
-                      "performed",
-                      "35 derived evidence")
+                       "`derived_from` is circular — following it leads back here",
+                       "at least one link in the chain has to be a run somebody "
+                       "performed",
+                       "35 derived evidence")
 
 
 def registry_scopes(facts: dict):
@@ -2508,21 +2746,11 @@ def check_corrections(facts: dict, prose: dict[str, str], spec_dir: Path,
                       "36 retractions and corrections")
 
     siblings: dict[Path, dict | None] = {}
-    own = (spec_dir / "_facts.yml").resolve()
 
     def sibling_entry(rel: str, container: str, name: str):
-        path = next((b / rel for b in (repo_root, spec_dir, spec_dir.parent)
-                     if (b / rel).is_file()), None)
-        if path is None or path.resolve() == own:
-            return None
-        key = path.resolve()
-        if key not in siblings:
-            try:
-                siblings[key] = load_facts(path)
-            except (yaml.YAMLError, OSError):
-                siblings[key] = None
-        sib = siblings[key]
-        return registry_entry(sib, norm(container), name) if sib else None
+        entry, _ = resolve_sibling_entry(rel, container, name, spec_dir, repo_root,
+                                         cache=siblings)
+        return entry
 
     containers = "|".join(ID_CONTAINERS)
     local_re = re.compile(rf"\b({containers})\.([A-Za-z0-9_]+)", re.I)
@@ -2589,22 +2817,156 @@ def check_corrections(facts: dict, prose: dict[str, str], spec_dir: Path,
                 report_one(f"{doc}:{lineno}", cited, target, origin)
 
 
+def check_cross_set_value_parity(facts: dict, prose: dict[str, str],
+                                 spec_dir: Path, repo_root: Path,
+                                 f: Findings) -> None:
+    """Check 44. A qualified citation carries the owner's current value.
+
+    Real case: two sibling sets (a parent "tiles" research set and a child "multiview
+    grid" set) cite the same measurements — fps per tile, CPU per tile. Inside one
+    set the registry stops copies drifting; across sets the same copying happens
+    again and nothing checks it: when the parent re-measured and changed the value,
+    the child's prose kept the old number and audited clean.
+
+    Every qualified citation in a registered doc's prose (not `_log.md`, not inside
+    code fences) and in the registry's own prose fields (`note:`, `because:`, … via
+    `registry_scopes`) is checked:
+      - resolve the sibling entry; if the file resolves but the entry does not
+        exist -> DRIFT "cites `<container>.<id>` from `<rel>`, which that registry does not define".
+      - take the entry's citable value: `value:` if present, else the entry's scalar
+        when the entry itself is a scalar under `limits`/`constants`, else skip
+        (an entry with no single value has nothing to compare; say so in a comment).
+      - the value, as a string, must appear verbatim in the same paragraph as the
+        citation; otherwise DRIFT "cites `<container>.<id>` from `<rel>` (now `<value>`)
+        and this paragraph does not carry that value — the owner changed it, or it was copied by hand".
+    """
+    cache: dict[Path, dict | None] = {}
+
+    def citable_value(container: str, entry: dict | str | int | float | bool | None):
+        if isinstance(entry, dict):
+            val = entry.get("value")
+            if val is not None:
+                return val
+            ev = entry.get("evidence")
+            if isinstance(ev, dict) and ev.get("value") is not None:
+                return ev["value"]
+            return None
+        if container in ("limits", "constants") and isinstance(entry, (str, int, float, bool)):
+            return entry
+        # An entry with no single value has nothing to compare; say so in a comment.
+        return None
+
+    # Check registry scopes (registry's own prose fields)
+    for label, _, text in registry_scopes(facts):
+        for rel, container, name in CROSS_SET_RE.findall(text):
+            entry, path = resolve_sibling_entry(rel, container, name, spec_dir,
+                                                repo_root, cache)
+            if path is None:
+                continue
+            if entry is None:
+                f.add(DRIFT, label,
+                      f"cites `{container}.{name}` from `{rel}`, which that "
+                      "registry does not define",
+                      "fix the id or the path — the citing entry points at a datum "
+                      "that does not exist in the owning set",
+                      "44 cross-set value parity")
+                continue
+            val = citable_value(container, entry)
+            if val is None:
+                # An entry with no single value has nothing to compare: skip
+                continue
+            if str(val) not in text:
+                f.add(DRIFT, label,
+                      f"cites `{container}.{name}` from `{rel}` (now `{val}`) and "
+                      "this paragraph does not carry that value — the owner changed "
+                      "it, or it was copied by hand",
+                      "update the cited number to match the owner, or explain the "
+                      "divergence",
+                      "44 cross-set value parity")
+
+    # Check prose documents
+    for doc, body in prose.items():
+        if doc == "_log.md":
+            continue
+        for block in prose_paragraphs(body):
+            text = "\n".join(line for _, line in block)
+            for rel, container, name in CROSS_SET_RE.findall(text):
+                entry, path = resolve_sibling_entry(rel, container, name, spec_dir,
+                                                    repo_root, cache)
+                if path is None:
+                    continue
+                lineno = next((n for n, line in block if rel in line and name in line),
+                              next((n for n, line in block if name in line), block[0][0]))
+                where = f"{doc}:{lineno}"
+                if entry is None:
+                    f.add(DRIFT, where,
+                          f"cites `{container}.{name}` from `{rel}`, which that "
+                          "registry does not define",
+                          "fix the id or the path — the citing paragraph points at a "
+                          "datum that does not exist in the owning set",
+                          "44 cross-set value parity")
+                    continue
+                val = citable_value(container, entry)
+                if val is None:
+                    # An entry with no single value has nothing to compare: skip
+                    continue
+                if str(val) not in text:
+                    f.add(DRIFT, where,
+                          f"cites `{container}.{name}` from `{rel}` (now `{val}`) and "
+                          "this paragraph does not carry that value — the owner changed "
+                          "it, or it was copied by hand",
+                          "update the cited number to match the owner, or explain the "
+                          "divergence",
+                          "44 cross-set value parity")
+
+
 # How far ahead an `accepted.until:` is announced as coming due. Two weeks is the
 # lead a measurement needs to be scheduled rather than improvised the day G1 bites.
 EXPIRY_WARNING_DAYS = 14
 
 
+def due_accepted_risks(facts: dict, today: datetime.date | None = None
+                       ) -> list[tuple[str, str, str, int | None]]:
+    """Accepted risks due within EXPIRY_WARNING_DAYS. Factored so report() and
+    open_items() cannot drift on which risks demand action."""
+    risks = live_accepted_risks(facts, today)
+    return [r for r in risks if r[3] is not None and r[3] <= EXPIRY_WARNING_DAYS]
+
+
 def live_accepted_risks(facts: dict, today: datetime.date | None = None
-                        ) -> list[tuple[str, str, str, int | None]]:
+                        ) -> list[tuple[str, str, str, int | None, list[dict]]]:
     """Deferrals with a deadline that has not arrived. Not findings — but not
     silence either: the audit names them and their expiry, which is the whole
     reason the field exists rather than a note in a log entry.
 
-    -> (id, detail, because, days left). Days left is what lets the report separate
-    the ones coming due: a list of four risks all printed the same way reads as
-    "handled" until the morning G1 refuses all four at once. Real case: four risks
-    of one research set, accepted together, all expire on 2026-10-23."""
+    -> (id, detail, because, days left, closing_criteria).
+    Days left is what lets the report separate the ones coming due: a list of four
+    risks all printed the same way reads as "handled" until the morning G1 refuses
+    all four at once. Real case: four risks of one research set, accepted together,
+    all expire on 2026-10-23.
+
+    `closing_criteria` lists the criteria that declare `closes: <defect_id>`, with
+    their attempt count and last attempt, so an audit can say e.g. "and AC23 has one
+    blocked attempt behind it"."""
     today = today or datetime.date.today()
+    closing_by_defect: dict[str, list[dict]] = {}
+    for crit in normalize_acceptance(facts):
+        closes = crit.get("closes")
+        if closes:
+            did = str(closes).strip()
+            attempts = crit.get("attempts") or []
+            last = None
+            if attempts and isinstance(attempts[-1], dict):
+                last = dict(attempts[-1])
+                if isinstance(last.get("date"), (datetime.date, datetime.datetime)):
+                    last["date"] = last["date"].isoformat()
+            closing_by_defect.setdefault(did, []).append({
+                "id": crit["id"],
+                "attempts_count": len(attempts),
+                "last_attempt": last
+            })
+
+
     out = []
     for d in facts.get("defects") or []:
         if not isinstance(d, dict):
@@ -2620,8 +2982,11 @@ def live_accepted_risks(facts: dict, today: datetime.date | None = None
                 except ValueError:
                     until = None
             left = (until - today).days if until else None
-            out.append((str(d.get("id", "?")), detail, because, left))
+            did = str(d.get("id", "?"))
+            crits = closing_by_defect.get(did, [])
+            out.append((did, detail, because, left, crits))
     return out
+
 
 
 def check_placeholders(facts: dict, f: Findings) -> None:
@@ -3507,19 +3872,22 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
 
     # Only the fields that claim a version: `**Read:**` and `**Edits:**` lines. A
     # file named in narrative is not a claim about which version was read.
-    recorded: dict[str, tuple[int, str | None, int | None]] = {}
+    # Keyed by the resolved path, keeping the original spelling for findings, so
+    # the last record across all spellings is what is compared against disk.
+    recorded: dict[str, tuple[str, int, str | None, int | None]] = {}
     for fm in re.finditer(r"^\*\*(?:Read|Edits):\*\*.*$", text, re.M):
         base = text[:fm.start()].count("\n") + 1
         for m in LOG_FILE_RECORD_ANY.finditer(fm.group(0)):
+            raw_name = m.group("file")
             inner = m.group("inner") or ""
             lines = re.search(r"(\d+)\s*(?:lines?|líneas?)", inner)
             blob = re.search(r"blob\s+([0-9a-f]{7,40})", inner)
             short = re.fullmatch(r"\s*(\d+)\s*,\s*([0-9a-f]{7,40})\s*", inner)
             if short:           # `(520, c732dbe)` — the same record, abbreviated
                 lines, blob = short, re.match(r".*?,\s*([0-9a-f]{7,40})", inner)
-            recorded[m.group("file")] = (base, blob.group(1) if blob else None,
-                                         int(lines.group(1)) if lines else None)
-    for name, (ln, blob, nlines) in sorted(recorded.items()):
+            recorded[key(raw_name)] = (raw_name, base, blob.group(1) if blob else None,
+                                       int(lines.group(1)) if lines else None)
+    for k, (name, ln, blob, nlines) in sorted(recorded.items()):
         target = next((p for p in (confined(spec_dir, name), confined(repo_root, name))
                        if p is not None and p.is_file()), None)
         if target is None or target.name == "_log.md":
@@ -3676,6 +4044,324 @@ def read_line(facts: dict, spec_dir: Path, repo_root: Path,
         lines = data.count(b"\n")
         parts.append(f"`{name}` ({lines} lines, blob {git_blob(data)[:7]})")
     return "**Read:** " + " · ".join(parts), missing
+
+
+def _truncate_finding_line(line: str, maxlen: int = 160) -> str:
+    s = line.strip()
+    return s[:maxlen - 1] + "…" if len(s) > maxlen else s
+
+
+def open_items(facts: dict, spec_dir: Path, repo_root: Path,
+               today: datetime.date | None = None,
+               as_json: bool = False) -> None:
+    """Print only what still demands action in a spec set, exiting without auditing.
+
+    In a long-running spec set with tens of log entries, reading _log.md and the
+    entire facts registry just to find what is open burns thousands of tokens.
+    This derives the open state mechanically: findings without dispositions, open
+    defects (with days left on accepted risks), acceptance criteria not yet
+    signed, deferred changes, and runnable commands."""
+    today = today or datetime.date.today()
+
+    # 1. status and tracking
+    status = str(facts.get("status") or "draft")
+    tracking = facts.get("tracking") if isinstance(facts.get("tracking"), dict) else {}
+    tracking_branch = tracking.get("branch")
+    tracking_shipped_in = tracking.get("shipped_in")
+
+    # 2. findings without a disposition (from _log.md)
+    log_path = spec_dir / "_log.md"
+    open_findings = []
+    deferred_findings = []
+    if log_path.is_file():
+        raw_log = log_path.read_text(encoding="utf-8")
+        clean_log = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"),
+                           raw_log, flags=re.S)
+        head_matches = list(re.finditer(r"^##\s+(R(\d+))\b(.*)$", clean_log, re.M))
+        rounds_by_id: dict[int, dict] = {}
+        for i, h in enumerate(head_matches):
+            rn = int(h.group(2))
+            start = h.end()
+            end = head_matches[i + 1].start() if i + 1 < len(head_matches) else len(clean_log)
+            body = clean_log[start:end]
+            if rn not in rounds_by_id:
+                rounds_by_id[rn] = {
+                    "id": h.group(1),
+                    "n": rn,
+                    "bodies": [body],
+                    "headers": [h.group(0)],
+                }
+            else:
+                rounds_by_id[rn]["bodies"].append(body)
+                rounds_by_id[rn]["headers"].append(h.group(0))
+
+        sorted_rounds = [rounds_by_id[k] for k in sorted(rounds_by_id.keys())]
+
+        finding_line_re = re.compile(r"^\s*-\s+(R\d+-F\d+)\b\s*(.*)$")
+        disp_re = re.compile(
+            r"(?:→|->)\s*(?:\*\*)?(confirmed|rejected|deferred|superseded)\b(?P<after>.*)$",
+            re.I
+        )
+        id_re = re.compile(r"\b(R\d+-F\d+(?:-dead)?)\b")
+
+        findings: dict[str, dict] = {}
+        carried_open: set[str] = set()
+
+        for r in sorted_rounds:
+            rn = r["n"]
+            rid = r["id"]
+            is_rotate = any("· rotate" in h or " rotate" in h for h in r["headers"])
+            for body in r["bodies"]:
+                lines = body.splitlines()
+                in_findings = False
+                in_carried = False
+                for line in lines:
+                    if re.match(r"^\s*\*\*Findings:\*\*", line):
+                        in_findings = True
+                        continue
+                    if in_findings:
+                        if re.match(r"^\s*\*\*[^*]+:\*\*", line):
+                            in_findings = False
+                        else:
+                            m = finding_line_re.match(line)
+                            if m:
+                                fid = m.group(1)
+                                text_line = _truncate_finding_line(line)
+                                if fid not in findings:
+                                    findings[fid] = {
+                                        "id": fid,
+                                        "round_id": rid,
+                                        "round_n": rn,
+                                        "line": text_line,
+                                    }
+
+                    if is_rotate:
+                        if re.match(r"^\s*\*\*Carried open:\*\*", line):
+                            in_carried = True
+                            after = re.sub(r"^\s*\*\*Carried open:\*\*\s*", "", line).strip()
+                            for fid in re.findall(r"\b(R\d+-F\d+)\b", after):
+                                carried_open.add(fid)
+                            continue
+                        if in_carried:
+                            if re.match(r"^\s*\*\*[^*]+:\*\*", line):
+                                in_carried = False
+                            else:
+                                for fid in re.findall(r"\b(R\d+-F\d+)\b", line):
+                                    carried_open.add(fid)
+
+        dispositions: dict[str, dict] = {}
+        for r in sorted_rounds:
+            rn = r["n"]
+            for body in r["bodies"]:
+                for line in body.splitlines():
+                    m = disp_re.search(line)
+                    if m:
+                        before = line[:m.start()]
+                        target_ids = id_re.findall(before)
+                        disp_status = m.group(1).lower()
+                        after = m.group("after")
+                        if "**" in after:
+                            inside_bold, _, rest_after = after.partition("**")
+                            waiting_on = (inside_bold + rest_after).strip()
+                        else:
+                            waiting_on = after.strip()
+                        waiting_on = re.sub(r"^(?:[:.]|\s*—|\s*-)\s*", "", waiting_on).strip()
+
+                        for target_id in target_ids:
+                            if target_id.endswith("-dead"):
+                                target_id = target_id[:-5]
+                            if target_id in findings and rn >= findings[target_id]["round_n"]:
+                                dispositions[target_id] = {
+                                    "status": disp_status,
+                                    "round_n": rn,
+                                    "waiting_on": waiting_on,
+                                }
+                    dead_matches = re.findall(r"\b(R\d+-F\d+)-dead\b", line)
+                    for dead_id in dead_matches:
+                        if dead_id in findings and rn >= findings[dead_id]["round_n"]:
+                            if dead_id not in dispositions:
+                                dispositions[dead_id] = {
+                                    "status": "rejected",
+                                    "round_n": rn,
+                                    "waiting_on": "",
+                                }
+
+        for fid, f_info in findings.items():
+            if fid in carried_open:
+                open_findings.append(f_info)
+                continue
+            if fid not in dispositions:
+                open_findings.append(f_info)
+            elif dispositions[fid]["status"] == "deferred":
+                deferred_findings.append({
+                    "id": f_info["id"],
+                    "round_id": f_info["round_id"],
+                    "round_n": f_info["round_n"],
+                    "line": f_info["line"],
+                    "waiting_on": dispositions[fid]["waiting_on"],
+                })
+
+    # 3. defects open
+    open_defects = []
+    for d in facts.get("defects") or []:
+        if not isinstance(d, dict):
+            continue
+        if norm(d.get("status")) == "open":
+            d_id = str(d.get("id", "?"))
+            basis = norm(d.get("basis")) or "asserted"
+            acc = d.get("accepted")
+            has_acc = isinstance(acc, dict)
+            until = None
+            days_left = None
+            if has_acc:
+                raw_until = acc.get("until")
+                if isinstance(raw_until, datetime.date):
+                    until = raw_until
+                elif raw_until:
+                    try:
+                        until = datetime.date.fromisoformat(str(raw_until).strip())
+                    except ValueError:
+                        until = None
+                if until:
+                    days_left = (until - today).days
+            open_defects.append({
+                "id": d_id,
+                "basis": basis,
+                "accepted": has_acc,
+                "until": until.isoformat() if until else None,
+                "days_left": days_left,
+            })
+
+    # 4. accepted risks due within EXPIRY_WARNING_DAYS
+    due_risks_raw = due_accepted_risks(facts, today)
+    due_risks = [
+        {"id": r[0], "detail": r[1], "because": r[2], "days_left": r[3]}
+        for r in due_risks_raw
+    ]
+
+    # 5. acceptance criteria not signed
+    acc_items = normalize_acceptance(facts)
+    unsigned_acceptance = [
+        {"id": e["id"], "item": e["item"], "status": e["status"], "verified_on": e.get("verified_on")}
+        for e in acc_items
+        if e["status"] not in ("approved", "retired")
+    ]
+
+    # 6. changes deferred
+    deferred_changes = []
+    for c in facts.get("changes") or []:
+        if not isinstance(c, dict):
+            continue
+        if norm(c.get("kind")) == "deferred":
+            deferred_changes.append({
+                "id": str(c.get("id", "?")),
+                "file": str(c.get("file", "")),
+                "change": str(c.get("change", "")).strip(),
+                "reopens_when": str(c.get("reopens_when", "")).strip(),
+            })
+
+    # 7. where the scripts are
+    prof_rel = facts.get("profile")
+    prof_file = profile_path(str(prof_rel), spec_dir, repo_root) if prof_rel else None
+    prof_display = str(prof_file) if prof_file else (str(prof_rel) if prof_rel else None)
+    command_keys = []
+    if prof_file and prof_file.is_file():
+        try:
+            prof_data = yaml.safe_load(prof_file.read_text(encoding="utf-8")) or {}
+            cmds = prof_data.get("commands")
+            if isinstance(cmds, dict):
+                command_keys = sorted([k for k, v in cmds.items() if v is not None])
+        except Exception:
+            pass
+
+    if as_json:
+        data = {
+            "status": status,
+            "tracking": {
+                "branch": tracking_branch,
+                "shipped_in": tracking_shipped_in,
+            },
+            "findings_open": open_findings,
+            "findings_deferred": deferred_findings,
+            "defects_open": open_defects,
+            "accepted_risks_due": due_risks,
+            "acceptance_unsigned": unsigned_acceptance,
+            "changes_deferred": deferred_changes,
+            "scripts": {
+                "profile": prof_display,
+                "commands": command_keys,
+            },
+        }
+        print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
+        return
+
+    # Text output
+    parts = [f"status: {status}"]
+    if tracking_branch:
+        parts.append(f"tracking.branch: {tracking_branch}")
+    if tracking_shipped_in:
+        parts.append(f"shipped_in: {tracking_shipped_in}")
+    print(" · ".join(parts))
+    print()
+
+    print("## Findings without a disposition")
+    if open_findings:
+        for f_item in open_findings:
+            print(f"  {f_item['line']}")
+    else:
+        print("  none")
+    if deferred_findings:
+        print("\n  deferred, waiting on:")
+        for f_item in deferred_findings:
+            waiting = f": {f_item['waiting_on']}" if f_item["waiting_on"] else ""
+            print(f"  - {f_item['id']}{waiting}")
+    print()
+
+    print("## Defects open")
+    if open_defects:
+        for d in open_defects:
+            line = f"  defects.{d['id']} — basis: {d['basis']}"
+            if d["accepted"]:
+                days_str = f", {d['days_left']} days left" if d["days_left"] is not None else ""
+                line += f" · accepted until: {d['until']}{days_str}"
+            print(line)
+    else:
+        print("  none")
+    print()
+
+    print(f"## Accepted risks due within {EXPIRY_WARNING_DAYS} days")
+    if due_risks:
+        for r in sorted(due_risks, key=lambda x: x["days_left"] if x["days_left"] is not None else 999):
+            days = r["days_left"]
+            when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
+            print(f"  defects.{r['id']} — expires {when} ({r['detail']})")
+    else:
+        print("  none")
+    print()
+
+    print("## Acceptance criteria not signed")
+    if unsigned_acceptance:
+        for a in unsigned_acceptance:
+            v_on = f" · verified_on: {a['verified_on']}" if a.get("verified_on") else ""
+            print(f"  acceptance.{a['id']} — status: {a['status']}{v_on} · {a['item']}")
+    else:
+        print("  none")
+    print()
+
+    print("## Changes deferred")
+    if deferred_changes:
+        for c in deferred_changes:
+            print(f"  changes.{c['id']} ({c['file']}) — reopens when: {c['reopens_when']}")
+    else:
+        print("  none")
+    print()
+
+    print("## Where the scripts are")
+    print(f"  profile: {prof_display or 'none'}")
+    if command_keys:
+        print(f"  commands: {', '.join(command_keys)}")
+    else:
+        print("  commands: none")
 
 
 MATRIX_VALUE_WIDTH = 60
@@ -3842,11 +4528,15 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
     f.items.sort(key=lambda x: (order[x["severity"]], x["check"], x["where"]))
 
     if as_json:
+        accepted_risks_json = []
+        for r in live_accepted_risks(facts, today):
+            entry = {"id": r[0], "detail": r[1], "days_left": r[3]}
+            if r[4]:
+                entry["closing_criteria"] = r[4]
+            accepted_risks_json.append(entry)
         print(json.dumps({"status": declared_status or facts.get("status"),
                           "audited_as": audited_as, "findings": f.items,
-                          "accepted_risks": [
-                              {"id": r[0], "detail": r[1], "days_left": r[3]}
-                              for r in live_accepted_risks(facts, today)],
+                          "accepted_risks": accepted_risks_json,
                           "candidates": cands.by_check,
                           "matrix": matrix,
                           "tree": ({"checkout": tree[0], "spec": tree[1]} if tree
@@ -3892,16 +4582,31 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
                 print(f"  - {i.strip()}")
             print()
 
+    def format_closing_crit(crit: dict) -> str:
+        cid = crit["id"]
+        cnt = crit["attempts_count"]
+        att_word = "attempt" if cnt == 1 else "attempts"
+        last = crit.get("last_attempt")
+        if not last:
+            return f"{cid}: 0 attempts"
+        d = last.get("date")
+        outc = last.get("outcome")
+        bec = last.get("aborted_because")
+        bec_suffix = f" — {bec}" if bec else ""
+        return f"{cid}: {cnt} {att_word}, last {d} {outc}{bec_suffix}"
+
     risks = live_accepted_risks(facts, today)
-    due = [r for r in risks if r[3] is not None and r[3] <= EXPIRY_WARNING_DAYS]
+    due = due_accepted_risks(facts, today)
     if risks:
         print("## Accepted risks, with their expiry\n")
         print("Recorded decisions to ship with a cause still asserted. Not findings "
               "— until the date passes, and then G1 refuses again:\n")
-        for rid, detail, because, left in risks:
+        for rid, detail, because, left, closing_crits in risks:
             print(f"  defects.{rid} — {detail}")
             if because:
                 print(f"      {because}")
+            for c in closing_crits:
+                print(f"      {format_closing_crit(c)}")
         print()
     if due:
         # Apart from the list above on purpose: the ones that are about to turn
@@ -3910,11 +4615,14 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
         print("Still not findings. Each becomes a G1 CONTRADICTION the day after "
               "its `until:` — schedule the measurement, or extend `until:` with a "
               "reason a person signs:\n")
-        for rid, detail, _, left in sorted(due, key=lambda r: r[3]):
+        for rid, detail, _, left, closing_crits in sorted(due, key=lambda r: r[3]):
             when = ("today" if left == 0 else "tomorrow" if left == 1
                     else f"in {left} days")
             print(f"  defects.{rid} — expires {when} ({detail})")
+            for c in closing_crits:
+                print(f"      {format_closing_crit(c)}")
         print()
+
 
     print("## Requires a human pass\n")
     emitted = set()
@@ -3979,6 +4687,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the registry's table of contents — each top-level "
                          "key and each entry with its line span — and exit without "
                          "auditing")
+    ap.add_argument("--open", action="store_true",
+                    help="print only what still demands action in the set — open "
+                         "findings, open defects, unsigned criteria, deferred "
+                         "changes, runnable scripts — and exit without auditing")
     ap.add_argument("--read-line", nargs="*", default=None, metavar="FILE",
                     help="print the `**Read:**` line of a `_log.md` entry — line "
                          "count and blob of each FILE, or of every file of the set "
@@ -4012,6 +4724,10 @@ def main(argv: list[str] | None = None) -> int:
         facts = dict(facts)
         facts["status"] = args.as_status
     repo_root, root_is_real = repo_root_for(spec_dir, args.repo_root)
+
+    if args.open:
+        open_items(facts, spec_dir, repo_root, today=today, as_json=args.json)
+        return 0
 
     if args.index:
         text = facts_path.read_text(encoding="utf-8")
@@ -4073,8 +4789,9 @@ def main(argv: list[str] | None = None) -> int:
     check_run_conditions(facts, spec_dir, repo_root, f)
     check_aborted_runs(facts, f)
     check_absence_of_signal(facts, f)
-    check_derived_evidence(facts, f)
+    check_derived_evidence(facts, spec_dir, repo_root, f)
     check_corrections(facts, prose, spec_dir, repo_root, f, c)
+    check_cross_set_value_parity(facts, prose, spec_dir, repo_root, f)
     check_doc_size(in_scope, f)
     check_profile_and_log(facts, spec_dir, repo_root, root_is_real, f)
     if not args.as_status or norm(args.as_status) == norm(declared_status):

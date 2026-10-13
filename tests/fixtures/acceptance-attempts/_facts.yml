@@ -1,0 +1,53 @@
+# Real case: AC23 of a real set did not fail — it could not run, because no live
+# event was available. The author had nowhere to record the attempt and wrote
+# limits.ac23_attempt_2026_10_12, which nothing reads. The accepted risk D1 that
+# AC23 would close expires on a date; the audit says "D1 due in 11 days" and
+# cannot say "and AC23 has one blocked attempt behind it".
+feature: acceptance-attempts
+status: shipped
+profile: ../_profile.fixture.yml
+defects:
+  - id: D1
+    role: root_cause
+    basis: asserted
+    status: open
+    claim: 'el stream corta por buffer starvation'
+    falsified_by: 'un evento en vivo sin buffer starvation'
+    log_line: null
+    outcome: 'queda abierta como riesgo aceptado'
+    accepted:
+      by: 'Cesar Rivas'
+      decided_on: 2026-09-23
+      until: 2026-10-23
+      because: 'no hay eventos en vivo en la ventana'
+acceptance:
+  - id: AC23
+    item: 'la grilla sostiene cuatro tiles durante 20 minutos'
+    status: written
+    closes: D1
+    attempts:
+      - date: 2026-10-12
+        outcome: aborted_no_conditions
+        aborted_because: 'no live event available in the window'
+        env: 'production-release-1.4.3, Fire TV Cube'
+  - id: AC24
+    item: 'el stream reconecta en menos de 2s'
+    status: written
+    closes: D9
+  - id: AC25
+    item: 'el bitrate se estabiliza'
+    status: written
+    attempts:
+      - date: 2026-10-12
+        outcome: failed
+      - date: 2026-10-10
+        outcome: failed
+  - id: AC26
+    item: 'no hay frames descartados'
+    status: approved
+    attempts:
+      - date: 2026-10-12
+        outcome: aborted_no_conditions
+        aborted_because: 'no live event available in the window'
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
