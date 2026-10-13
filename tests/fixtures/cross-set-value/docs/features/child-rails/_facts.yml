@@ -1,0 +1,14 @@
+feature: child-rails
+status: draft
+profile: _profile.fixture.yml
+changes:
+  - { id: C1, file: docs/features/child-rails/01-master-plan.md, kind: planned,
+      change: 'dimensiona sobre el rendimiento del padre' }
+limits:
+  rail_budget:
+    claim: 'el presupuesto sale del rendimiento del padre'
+    basis: measured
+    evidence: { derived_from: ['docs/features/parent-tiles/_facts.yml limits.fps_per_tile'],
+                date: 2026-09-16, value: 24 }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

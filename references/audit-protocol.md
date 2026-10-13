@@ -310,6 +310,7 @@ from one of them needs explaining, disputing or changing, and not otherwise.
 | 39 | `changes[]` built state |
 | 40 | Revision order |
 | 41 | Provisional prose |
+| 44 | Cross-set value parity |
 
 ## Enum fields are read lowercased — always
 

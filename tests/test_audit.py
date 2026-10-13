@@ -448,6 +448,16 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
     ("log-spelling-drift/docs/features/log-spelling-drift",
      [("16", "last recorded at _log.md:16 as 11 lines, blob 9999999; now 11 lines, blob 3ab985d")],
      []),
+
+    # §44 — cross-set value parity: two sibling sets cite the same measurements.
+    # The child cites parent's `limits.fps_per_tile`: clean with 24, DRIFT with 30,
+    # DRIFT when citing an undefined key, and child's registry inherits via derived_from.
+    ("cross-set-value/docs/features/child-rails",
+     [("44", "01-master-plan.md:7"),            # value 30 does not match current 24
+      ("44", "01-master-plan.md:10")],          # limits.nonexistent does not exist
+     [("44", "01-master-plan.md:4"),            # clean: carries verbatim 24
+      ("35", "rail_budget"),                    # derived_from inherits, clean for 35
+      ("30", "rail_budget")]),                  # parent has n: 3 and spread, clean for 30
 ]
 
 # (fixture, extra args, expect, reject) — cases that only exist under a flag.

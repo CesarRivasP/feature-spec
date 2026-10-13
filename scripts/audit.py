@@ -2071,6 +2071,46 @@ def registry_entry(facts: dict, container: str, name: str):
     return None
 
 
+def resolve_sibling_entry(rel: str, container: str, name: str,
+                          spec_dir: Path, repo_root: Path,
+                          cache: dict[Path, dict | None] | None = None
+                          ) -> tuple[dict | None, Path | None]:
+    """Resolve a qualified cross-set entry (`rel container.name`) against sibling facts.
+
+    Paths resolve through (repo_root, spec_dir, spec_dir.parent); any path climbing
+    out of the checkout or pointing back at the spec's own registry is skipped.
+    Returns (entry, resolved_facts_path) or (None, None).
+    """
+    own = (spec_dir / "_facts.yml").resolve()
+    repo_res = repo_root.resolve()
+    path = None
+    for base in (repo_root, spec_dir, spec_dir.parent):
+        try:
+            cand = (base / rel).resolve()
+        except (OSError, ValueError):
+            continue
+        if repo_res not in cand.parents and cand != repo_res:
+            continue
+        if cand.is_file() and cand != own:
+            path = cand
+            break
+    if path is None:
+        return None, None
+    sibling: dict | None = None
+    if cache is not None and path in cache:
+        sibling = cache[path]
+    else:
+        try:
+            sibling = load_facts(path)
+        except (yaml.YAMLError, OSError):
+            sibling = None
+        if cache is not None:
+            cache[path] = sibling
+    if not isinstance(sibling, dict):
+        return None, path
+    return registry_entry(sibling, norm(container), name), path
+
+
 def load_profile(facts: dict, spec_dir: Path, repo_root: Path) -> dict:
     prof = facts.get("profile")
     if not prof:
@@ -2143,22 +2183,17 @@ def check_sample_size(facts: dict, prose: dict[str, str], spec_dir: Path,
                       "observed extremes, verbatim (`'0..308 fallas'`)",
                       "30 sample size and spread")
 
-    own = (spec_dir / "_facts.yml").resolve()
+    siblings_cache: dict[Path, dict | None] = {}
     for doc, text in prose.items():
         for lineno, line in enumerate(text.splitlines(), 1):
             for rel, container, name in CROSS_SET_RE.findall(line):
-                path = next((b / rel for b in (repo_root, spec_dir, spec_dir.parent)
-                             if (b / rel).is_file()), None)
-                if path is None or path.resolve() == own:
+                entry, path = resolve_sibling_entry(rel, container, name, spec_dir,
+                                                    repo_root, siblings_cache)
+                if not isinstance(entry, dict) or path is None:
                     continue
-                try:
-                    sibling = load_facts(path)
-                except (yaml.YAMLError, OSError):
-                    continue
-                entry = registry_entry(sibling, norm(container), name)
-                if not isinstance(entry, dict):
-                    continue
-                single = single_runs_behind(sibling, entry)
+                sibling = siblings_cache.get(path) or {}
+                single = single_runs_behind(sibling, entry, spec_dir=path.parent,
+                                            repo_root=repo_root, cache=siblings_cache)
                 if not single:
                     continue
                 via = ("" if single == [f"{norm(container)}.{name}"]
@@ -2170,6 +2205,39 @@ def check_sample_size(facts: dict, prose: dict[str, str], spec_dir: Path,
                       "a number, a path and an id, and not that the owner looked once "
                       "— re-measure in the owning set, or carry the caveat here",
                       "30 sample size and spread")
+
+    # In addition to prose citations, a qualified derived_from reference to an n: 1
+    # source with no spread is reported by check 30 as well.
+    for path, node in walk(facts):
+        if not isinstance(node, dict):
+            continue
+        ev = node.get("evidence")
+        if not isinstance(ev, dict) or not ev.get("derived_from"):
+            continue
+        where = pretty_path(facts, path) or "_facts.yml"
+        for ref in as_list(ev.get("derived_from")):
+            q_parsed = parse_qualified_ref(ref)
+            if not q_parsed:
+                continue
+            rel, container, name = q_parsed
+            entry, sib_path = resolve_sibling_entry(rel, container, name, spec_dir,
+                                                    repo_root, siblings_cache)
+            if not isinstance(entry, dict) or sib_path is None:
+                continue
+            sibling = siblings_cache.get(sib_path) or {}
+            single = single_runs_behind(sibling, entry, spec_dir=sib_path.parent,
+                                        repo_root=repo_root, cache=siblings_cache)
+            if not single:
+                continue
+            via = ("" if single == [f"{norm(container)}.{name}"]
+                   else f" (derived from {', '.join(f'`{r}`' for r in single)})")
+            f.add(DRIFT, where,
+                  f"cites `{container}.{name}` from `{rel}`, which was measured "
+                  f"once (`n: 1`) with no `spread:`{via}",
+                  "this is where one run becomes a constant: the citing set sees "
+                  "a number, a path and an id, and not that the owner looked once "
+                  "— re-measure in the owning set, or carry the caveat here",
+                  "30 sample size and spread")
 
 
 def check_run_conditions(facts: dict, spec_dir: Path, repo_root: Path,
@@ -2337,6 +2405,18 @@ def parse_ref(ref) -> tuple[str, str] | None:
     return (norm(m.group(1)), m.group(2)) if m else None
 
 
+def parse_qualified_ref(ref) -> tuple[str, str, str] | None:
+    """Parse a cross-set qualified ref: `path/_facts.yml limits.key`.
+
+    Accepts optional backticks or quotes around the path or entire ref.
+    Returns (rel, container, name) or None.
+    """
+    m = re.fullmatch(
+        r"\s*`?([\w./-]*_facts\.yml)`?[\s`]+\b(%s)\.([A-Za-z0-9_]+)`?\s*"
+        % "|".join(ID_CONTAINERS), str(ref), re.I)
+    return (m.group(1), norm(m.group(2)), m.group(3)) if m else None
+
+
 def as_list(value) -> list:
     if value is None:
         return []
@@ -2344,12 +2424,18 @@ def as_list(value) -> list:
 
 
 def single_runs_behind(facts: dict, entry: dict, seen: set | None = None,
-                       label: str = "") -> list[str]:
+                       label: str = "",
+                       spec_dir: Path | None = None,
+                       repo_root: Path | None = None,
+                       cache: dict[Path, dict | None] | None = None) -> list[str]:
     """The `n: 1`, spread-less runs a value ultimately rests on.
 
     A measured entry answers for itself. A derived one inherits its sources' bar —
     that is the whole point of deriving instead of re-typing `n` and `spread` — so
-    it is exactly as single-run as the weakest thing it names."""
+    it is exactly as single-run as the weakest thing it names.
+    Cross-set `derived_from` references are resolved against sibling facts when
+    spec_dir and repo_root are provided.
+    """
     ev = entry.get("evidence")
     ev = ev if isinstance(ev, dict) else {}
     refs = as_list(ev.get("derived_from"))
@@ -2359,13 +2445,35 @@ def single_runs_behind(facts: dict, entry: dict, seen: set | None = None,
     seen = seen if seen is not None else set()
     out: list[str] = []
     for ref in refs:
+        q_parsed = parse_qualified_ref(ref)
+        if q_parsed:
+            rel, c, k = q_parsed
+            token = f"{rel} {c}.{k}"
+            if token in seen:
+                continue
+            seen.add(token)
+            if spec_dir and repo_root:
+                parent, _ = resolve_sibling_entry(rel, c, k, spec_dir, repo_root, cache)
+                if isinstance(parent, dict):
+                    # For sibling entries, resolve their sources within the sibling facts
+                    path_key = next((b / rel for b in (repo_root, spec_dir, spec_dir.parent)
+                                     if (b / rel).is_file()), None)
+                    parent_spec_dir = path_key.parent if path_key else spec_dir
+                    out += single_runs_behind(facts, parent, seen, f"{c}.{k}",
+                                              spec_dir=parent_spec_dir,
+                                              repo_root=repo_root,
+                                              cache=cache)
+            continue
+
         parsed = parse_ref(ref)
         if not parsed or parsed in seen:
             continue
         seen.add(parsed)
         parent = registry_entry(facts, *parsed)
         if isinstance(parent, dict):
-            out += single_runs_behind(facts, parent, seen, ".".join(parsed))
+            out += single_runs_behind(facts, parent, seen, ".".join(parsed),
+                                      spec_dir=spec_dir, repo_root=repo_root,
+                                      cache=cache)
     return out
 
 
@@ -2416,7 +2524,8 @@ def correction_state(entry: dict) -> str:
         f" ({', '.join(superseding_refs(entry))})" if superseding_refs(entry) else "")
 
 
-def check_derived_evidence(facts: dict, f: Findings) -> None:
+def check_derived_evidence(facts: dict, spec_dir: Path, repo_root: Path,
+                           f: Findings) -> None:
     """Check 35. `evidence: { derived_from: [limits.x, limits.y], date, value }`.
 
     A conclusion read off measurements that already live in the registry is not a
@@ -2430,8 +2539,10 @@ def check_derived_evidence(facts: dict, f: Findings) -> None:
     `asserted`, `decided`, retracted or missing makes the derived value a claim the
     registry cannot back — CONTRADICTION, the same severity as a `measured` whose
     `cmd` cannot be re-run (check 24). A corrected source is DRIFT unless the entry
-    says it took the correction into account."""
+    says it took the correction into account. Sibling sets may be named via qualified
+    references `path/_facts.yml container.key`."""
     graph: dict[str, list[tuple[str, str]]] = {}
+    sibling_cache: dict[Path, dict | None] = {}
     for path, node in walk(facts):
         if not isinstance(node, dict):
             continue
@@ -2442,6 +2553,43 @@ def check_derived_evidence(facts: dict, f: Findings) -> None:
         text = yaml.safe_dump(node, allow_unicode=True)
         edges = []
         for ref in as_list(ev.get("derived_from")):
+            q_parsed = parse_qualified_ref(ref)
+            if q_parsed:
+                rel, container, name = q_parsed
+                target, sib_path = resolve_sibling_entry(rel, container, name,
+                                                         spec_dir, repo_root,
+                                                         sibling_cache)
+                label = f"{container}.{name}"
+                if sib_path is None or not isinstance(target, dict):
+                    f.add(CONTRADICTION, where,
+                          f"`derived_from` names `{ref}`, which this registry does not "
+                          "define",
+                          "a derived value is only as real as its sources — fix the "
+                          "reference, or drop to `basis: asserted`",
+                          "35 derived evidence")
+                    continue
+                if is_retracted(target):
+                    f.add(CONTRADICTION, where,
+                          f"derived from `{label}`, {correction_state(target)}",
+                          "a retracted measurement backs nothing: re-derive from what "
+                          "replaced it, or drop to `basis: asserted`",
+                          "35 derived evidence")
+                elif norm(target.get("basis")) != "measured":
+                    f.add(CONTRADICTION, where,
+                          f"derived from `{label}`, which is `basis: "
+                          f"{norm(target.get('basis')) or 'absent'}`",
+                          "derived evidence counts as `measured` only while every source "
+                          "is — measure the source, or drop this to `basis: asserted`",
+                          "35 derived evidence")
+                elif is_corrected(target) and not mentions_correction(text, target):
+                    f.add(DRIFT, where,
+                          f"derived from `{label}`, {correction_state(target)}, and "
+                          "the entry does not mention the correction",
+                          "re-read the source against its `correction:` and say in this "
+                          "entry that the derivation still holds",
+                          "35 derived evidence")
+                continue
+
             parsed = parse_ref(ref)
             target = registry_entry(facts, *parsed) if parsed else None
             if not isinstance(target, dict):
@@ -2497,10 +2645,10 @@ def check_derived_evidence(facts: dict, f: Findings) -> None:
             if any(reaches(p, me, set())
                    for p in map(parse_ref, as_list(ev["derived_from"])) if p):
                 f.add(CONTRADICTION, f"{container}.{name}",
-                      "`derived_from` is circular — following it leads back here",
-                      "at least one link in the chain has to be a run somebody "
-                      "performed",
-                      "35 derived evidence")
+                       "`derived_from` is circular — following it leads back here",
+                       "at least one link in the chain has to be a run somebody "
+                       "performed",
+                       "35 derived evidence")
 
 
 def registry_scopes(facts: dict):
@@ -2598,21 +2746,11 @@ def check_corrections(facts: dict, prose: dict[str, str], spec_dir: Path,
                       "36 retractions and corrections")
 
     siblings: dict[Path, dict | None] = {}
-    own = (spec_dir / "_facts.yml").resolve()
 
     def sibling_entry(rel: str, container: str, name: str):
-        path = next((b / rel for b in (repo_root, spec_dir, spec_dir.parent)
-                     if (b / rel).is_file()), None)
-        if path is None or path.resolve() == own:
-            return None
-        key = path.resolve()
-        if key not in siblings:
-            try:
-                siblings[key] = load_facts(path)
-            except (yaml.YAMLError, OSError):
-                siblings[key] = None
-        sib = siblings[key]
-        return registry_entry(sib, norm(container), name) if sib else None
+        entry, _ = resolve_sibling_entry(rel, container, name, spec_dir, repo_root,
+                                         cache=siblings)
+        return entry
 
     containers = "|".join(ID_CONTAINERS)
     local_re = re.compile(rf"\b({containers})\.([A-Za-z0-9_]+)", re.I)
@@ -2677,6 +2815,109 @@ def check_corrections(facts: dict, prose: dict[str, str], spec_dir: Path,
                 lineno = next((n for n, line in block if cited in line
                                or cited.split(".", 1)[1] in line), block[0][0])
                 report_one(f"{doc}:{lineno}", cited, target, origin)
+
+
+def check_cross_set_value_parity(facts: dict, prose: dict[str, str],
+                                 spec_dir: Path, repo_root: Path,
+                                 f: Findings) -> None:
+    """Check 44. A qualified citation carries the owner's current value.
+
+    Real case: two sibling sets (a parent "tiles" research set and a child "multiview
+    grid" set) cite the same measurements — fps per tile, CPU per tile. Inside one
+    set the registry stops copies drifting; across sets the same copying happens
+    again and nothing checks it: when the parent re-measured and changed the value,
+    the child's prose kept the old number and audited clean.
+
+    Every qualified citation in a registered doc's prose (not `_log.md`, not inside
+    code fences) and in the registry's own prose fields (`note:`, `because:`, … via
+    `registry_scopes`) is checked:
+      - resolve the sibling entry; if the file resolves but the entry does not
+        exist -> DRIFT "cites `<container>.<id>` from `<rel>`, which that registry does not define".
+      - take the entry's citable value: `value:` if present, else the entry's scalar
+        when the entry itself is a scalar under `limits`/`constants`, else skip
+        (an entry with no single value has nothing to compare; say so in a comment).
+      - the value, as a string, must appear verbatim in the same paragraph as the
+        citation; otherwise DRIFT "cites `<container>.<id>` from `<rel>` (now `<value>`)
+        and this paragraph does not carry that value — the owner changed it, or it was copied by hand".
+    """
+    cache: dict[Path, dict | None] = {}
+
+    def citable_value(container: str, entry: dict | str | int | float | bool | None):
+        if isinstance(entry, dict):
+            val = entry.get("value")
+            if val is not None:
+                return val
+            ev = entry.get("evidence")
+            if isinstance(ev, dict) and ev.get("value") is not None:
+                return ev["value"]
+            return None
+        if container in ("limits", "constants") and isinstance(entry, (str, int, float, bool)):
+            return entry
+        # An entry with no single value has nothing to compare; say so in a comment.
+        return None
+
+    # Check registry scopes (registry's own prose fields)
+    for label, _, text in registry_scopes(facts):
+        for rel, container, name in CROSS_SET_RE.findall(text):
+            entry, path = resolve_sibling_entry(rel, container, name, spec_dir,
+                                                repo_root, cache)
+            if path is None:
+                continue
+            if entry is None:
+                f.add(DRIFT, label,
+                      f"cites `{container}.{name}` from `{rel}`, which that "
+                      "registry does not define",
+                      "fix the id or the path — the citing entry points at a datum "
+                      "that does not exist in the owning set",
+                      "44 cross-set value parity")
+                continue
+            val = citable_value(container, entry)
+            if val is None:
+                # An entry with no single value has nothing to compare: skip
+                continue
+            if str(val) not in text:
+                f.add(DRIFT, label,
+                      f"cites `{container}.{name}` from `{rel}` (now `{val}`) and "
+                      "this paragraph does not carry that value — the owner changed "
+                      "it, or it was copied by hand",
+                      "update the cited number to match the owner, or explain the "
+                      "divergence",
+                      "44 cross-set value parity")
+
+    # Check prose documents
+    for doc, body in prose.items():
+        if doc == "_log.md":
+            continue
+        for block in prose_paragraphs(body):
+            text = "\n".join(line for _, line in block)
+            for rel, container, name in CROSS_SET_RE.findall(text):
+                entry, path = resolve_sibling_entry(rel, container, name, spec_dir,
+                                                    repo_root, cache)
+                if path is None:
+                    continue
+                lineno = next((n for n, line in block if rel in line and name in line),
+                              next((n for n, line in block if name in line), block[0][0]))
+                where = f"{doc}:{lineno}"
+                if entry is None:
+                    f.add(DRIFT, where,
+                          f"cites `{container}.{name}` from `{rel}`, which that "
+                          "registry does not define",
+                          "fix the id or the path — the citing paragraph points at a "
+                          "datum that does not exist in the owning set",
+                          "44 cross-set value parity")
+                    continue
+                val = citable_value(container, entry)
+                if val is None:
+                    # An entry with no single value has nothing to compare: skip
+                    continue
+                if str(val) not in text:
+                    f.add(DRIFT, where,
+                          f"cites `{container}.{name}` from `{rel}` (now `{val}`) and "
+                          "this paragraph does not carry that value — the owner changed "
+                          "it, or it was copied by hand",
+                          "update the cited number to match the owner, or explain the "
+                          "divergence",
+                          "44 cross-set value parity")
 
 
 # How far ahead an `accepted.until:` is announced as coming due. Two weeks is the
@@ -4548,8 +4789,9 @@ def main(argv: list[str] | None = None) -> int:
     check_run_conditions(facts, spec_dir, repo_root, f)
     check_aborted_runs(facts, f)
     check_absence_of_signal(facts, f)
-    check_derived_evidence(facts, f)
+    check_derived_evidence(facts, spec_dir, repo_root, f)
     check_corrections(facts, prose, spec_dir, repo_root, f, c)
+    check_cross_set_value_parity(facts, prose, spec_dir, repo_root, f)
     check_doc_size(in_scope, f)
     check_profile_and_log(facts, spec_dir, repo_root, root_is_real, f)
     if not args.as_status or norm(args.as_status) == norm(declared_status):
