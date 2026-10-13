@@ -104,8 +104,10 @@ gets cited.
   did.
 - **Cited from another set with `n: 1` → `DRIFT`.** That is where it turns into a
   constant. The citing set sees a number, a path and an id; it does not see that the
-  parent measured it once. *Real case:* `limits.degradation_threshold_tiles` in a
-  parent set — one run, no bar, and half a spec hanging off it.
+  parent measured it once (`evidence.derived_from` may name a qualified sibling entry,
+  and check 30 reports it identically if that source rests on an `n: 1` run with no spread).
+  *Real case:* `limits.degradation_threshold_tiles` in a parent set — one run, no bar, and
+  half a spec hanging off it.
 - `n:` above 1 with no `spread:` → `DRIFT`. You observed a range and reported its
   midpoint. The range is the finding; the midpoint is a summary of it.
 - `spread:` is the observed **extremes**, written as they came out —

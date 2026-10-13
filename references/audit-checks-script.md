@@ -244,3 +244,14 @@ A sentence written against a state its author knows will change says so, inline:
 Fenced blocks are not read: a marker inside a code sample is an example.
 
 *Real case:* the mock preamble of a test doc opened with *"the repository contains no application code"* and *"no test has run here"* for **fifteen rounds**, while 133 tests existed, and described a fake with a signature the interface no longer had. `references/implementable.md` allowed writing it against an empty repo and did not ask for it to be marked.
+
+### 44. Cross-set value parity — [script]
+Inside one set the registry stops copies drifting; across sets the same copying happens again when a doc cites an entry from a sibling set. A qualified citation carries the owning set's current value.
+
+Every qualified citation in a registered doc's prose (not `_log.md`, not inside code fences) and in the registry's own prose fields (`note:`, `because:`, …):
+- **Resolves the sibling entry.** If the file resolves but the entry does not exist → `DRIFT` ("cites `<container>.<id>` from `<rel>`, which that registry does not define").
+- **Takes the entry's citable value:** `value:` if present, else the entry's scalar when the entry itself is a scalar under `limits`/`constants`, else skipped (an entry with no single value has nothing to compare).
+- **The value, as a string, must appear verbatim in the same paragraph as the citation.** Otherwise → `DRIFT` ("cites `<container>.<id>` from `<rel>` (now `<value>`) and this paragraph does not carry that value — the owner changed it, or it was copied by hand").
+
+*Real case:* two sibling sets (a parent "tiles" research set and a child "multiview grid" set) cite the same measurements — fps per tile, CPU per tile. Inside one set the registry stops copies drifting; across sets the same copying happens again and nothing checks it: when the parent re-measured and changed the value, the child's prose kept the old number and audited clean.
+
