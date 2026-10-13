@@ -122,13 +122,64 @@ log entry. Measured 2026-09-30: `-low` 7 s and `-high` 13 s for a one-line promp
 **~13k input tokens per call** before the brief — the CLI's own system prompt. That floor is
 why a subagent is not worth starting for a task smaller than a checklist file.
 
-Not yet verified, and not assumed: whether print mode reads the checkout with no write
-permission granted. Until it is, the `agy` runner passes the files the brief names inline.
+### `orca` — Orca multi-agent IDE
+
+A subagent is an Orca worker started by the main session on the same checkout:
+
+```bash
+orca orchestration worker-start --spec "<brief file path>" --worktree current --agent antigravity|claude|codex
+```
+
+The tier maps to the agent's model via `--model` / `--effort` where the agent accepts it.
+The worker is read-only on the set by contract (rule 1): it writes no file in the set, neither `_facts.yml`, `_log.md`, nor any doc. Instead, the worker returns its delivery as a file on disk (an inbox delivery file, `_inbox/R-<n>-<task>.md`), not as a message, so it survives the session. The main session coordinates and awaits results via `check --wait`. When a worker completes its task, it signals completion with `worker_done`.
+
+The log entry records the worker in the same shape as the others: `<task> → <tier> → <agent/model> (orca)`.
 
 ### `inline` — no subagents
 
 Every task runs in the main session, in order. The fallback for any runner that cannot start,
 and the behaviour of a profile with no `parallel:` key.
+
+## The inbox
+
+When multiple workers run concurrently, coordination happens through an ad hoc inbox directory on disk:
+`docs/features/<slug>/_inbox/`.
+
+The inbox is the disk the brief comes from (rule 4) and the disk the worker returns its findings to.
+
+### Layout and naming
+
+- `docs/features/<slug>/_inbox/BRIEF-<n>-<task>.md` — written by the orchestrating session before launching the worker.
+- `docs/features/<slug>/_inbox/R-<n>-<task>.md` — delivered by each worker upon completion.
+
+The folder is `_`-prefixed so check 9 treats it as set machinery: it is never listed in `docs[]`, never synced by `sync`, and never audited for anchors (check 18).
+
+### Brief template (`templates/_inbox-brief.md.tpl`)
+
+The brief holds everything the worker needs and nothing it does not:
+- Spec dir path (`docs/features/<slug>/`)
+- Profile path (`docs/features/_profile.yml`)
+- The checklist file it runs (e.g. `references/gap-sweep.md` or a layer)
+- The registry spans: `audit.py <dir> --index` lines pasted, not paraphrased
+- What to return: the output delivery file path
+- The output shape from §Output shape
+- The invariant rule that the worker edits nothing in the set
+
+### Delivery template (`templates/_inbox-delivery.md.tpl`)
+
+The worker records:
+- The worker's identity: agent + model (e.g. `antigravity · gemini-3.8-flash-high`)
+- `**Read:**` line from `python3 scripts/audit.py <dir> --read-line` for each file it opened
+- Findings formatted in the exact output shape from §Output shape
+- `clean for <file>` when no gaps are found, naming the kinds covered
+
+### How a delivery becomes a round
+
+1. The main session opens its stub in `_log.md` naming every worker (`<task> → <tier> → <agent/model> (orca)`).
+2. As workers finish, the main session merges the deliveries according to rule 5 (dedupe by `changes[]` id / doc § and failure scenario).
+3. The main session writes the round's `**Findings:**` in `_log.md`.
+4. The main session names each `R-<n>` file in the entry's prose text — **never in `**Read:**` or `**Edits:**`** (check 16 would ask it for a version).
+5. A delivery is never edited after it is folded; a correction is a new file (e.g. `R-<n>b-<task>.md` or a new round).
 
 ## What the log records
 

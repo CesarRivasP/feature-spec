@@ -66,7 +66,7 @@ The full list is `references/rules.md` — every mode that writes is held to it,
 - **Prose is written once, against a plan that stopped moving.** Docs 02/02e/03 exist only after `review` and the user's confirmation.
 
 ## References
-- `references/parallel.md` — splitting a mode across subagents by tier (`strong` / `mid` / `cheap`), the runners (`claude`, `agy`, `inline`), and the rules that keep one writer per file. `agents/spec-*.md` — the three read-only tier definitions to copy into `.claude/agents/`.
+- `references/parallel.md` — splitting a mode across subagents by tier (`strong` / `mid` / `cheap`), the runners (`claude`, `agy`, `orca`, `inline`), the `_inbox/` disk coordination, and the rules that keep one writer per file. `agents/spec-*.md` — the three read-only tier definitions to copy into `.claude/agents/`.
 - `references/mode-<name>.md` — one per mode, the full procedure; `references/rules.md` — the rules every writing mode is held to.
 - `references/doc-pattern.md` — the 4-doc pattern, section skeletons, naming, cross-ref rules.
 - `references/audit-protocol.md` — the checks that need a human pass, the index of the ones the script settles, severity taxonomy, matrix format. `references/audit-checks-script.md` — the full text of every `[script]` check, read only when one of its findings needs explaining.
