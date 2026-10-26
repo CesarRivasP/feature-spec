@@ -36,6 +36,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -4368,6 +4369,8 @@ def rotate_plan(facts: dict, spec_dir: Path,
     first_arch_n = groups[0].num
     last_arch_n = groups[cut_group_idx - 1].num
     archive_name = f"_log-R{first_arch_n}-R{last_arch_n}.md"
+    # quoted where it enters the printed commands; the plan is pasted into a shell
+    archive_q = shlex.quote(archive_name)
 
     # - the archive name already exists
     if (spec_dir / archive_name).exists():
@@ -4451,17 +4454,17 @@ def rotate_plan(facts: dict, spec_dir: Path,
     )
 
     if preamble_lines > 0:
-        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}' '' {fixed_header_lines} '' '---' ''; sed -n '{arch_start},{arch_end}p' _log.md; }} > {archive_name} && \\"
+        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}' '' {fixed_header_lines} '' '---' ''; sed -n '{arch_start},{arch_end}p' _log.md; }} > {archive_q} && \\"
         cmd_kept = f"{{ sed -n '1,{preamble_lines}p' _log.md; sed -n '{cut_line},$p' _log.md; }} > _log.md.kept && \\"
-        cmd_cmp = f"{{ sed -n '1,{preamble_lines}p' _log.md.kept; sed '1,8d' {archive_name}; sed '1,{preamble_lines}d' _log.md.kept; }} | cmp - _log.md && \\"
+        cmd_cmp = f"{{ sed -n '1,{preamble_lines}p' _log.md.kept; sed '1,8d' {archive_q}; sed '1,{preamble_lines}d' _log.md.kept; }} | cmp - _log.md && \\"
     else:
-        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}' '' {fixed_header_lines} '' '---' ''; sed -n '1,{arch_end}p' _log.md; }} > {archive_name} && \\"
+        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}' '' {fixed_header_lines} '' '---' ''; sed -n '1,{arch_end}p' _log.md; }} > {archive_q} && \\"
         cmd_kept = f"{{ sed -n '{cut_line},$p' _log.md; }} > _log.md.kept && \\"
-        cmd_cmp = f"{{ sed '1,8d' {archive_name}; cat _log.md.kept; }} | cmp - _log.md && \\"
+        cmd_cmp = f"{{ sed '1,8d' {archive_q}; cat _log.md.kept; }} | cmp - _log.md && \\"
 
     sh_commands = [
         "```sh",
-        f"cd {spec_dir} && \\",
+        f"cd {shlex.quote(str(spec_dir))} && \\",
         f"test \"$(head -n {arch_end} _log.md | git hash-object --stdin | cut -c1-7)\" = {prefix_sha7} && \\",
         cmd_printf_sed,
         cmd_kept,

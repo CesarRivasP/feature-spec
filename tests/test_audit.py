@@ -460,8 +460,8 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
       ("30", "rail_budget")]),                  # parent has n: 3 and spread, clean for 30
 
     # §16 — a file owned by another set (its directory holds _facts.yml and _log.md)
-    # is accounted for by that set's log. Real case: e2e-harness R13/R15/R16 were empty
-    # rounds appended only to copy interstice's _facts.yml blob.
+    # is accounted for by that set's log. Real case: a harness set had three empty
+    # rounds appended only to copy its sibling app set's _facts.yml blob.
     ("cross-set-log/docs/features/citer-b",
      [("16", "owned by docs/features/owner-a, whose _log.md does not account for it"),  # 01 edited in A, unlogged
       ("16", "@docs/features/owner-c/_facts.yml")],         # owner with no log: today's rule
@@ -1025,15 +1025,15 @@ def profile_identity_survives_worktrees() -> list[str]:
     problems = []
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp = Path(tmp_dir)
-        repo = tmp / "Hackathon"
+        repo = tmp / "app-repo"
         repo.mkdir()
         git(repo, "init", "-q", "-b", "main")
-        (repo / "README.md").write_text("# Hackathon\n")
+        (repo / "README.md").write_text("# app-repo\n")
 
         docs_feat = repo / "docs" / "features"
         docs_feat.mkdir(parents=True)
         prof = docs_feat / "_profile.yml"
-        prof.write_text("repo: Hackathon\ncommands:\n  tests: pytest\n")
+        prof.write_text("repo: app-repo\ncommands:\n  tests: pytest\n")
 
         spec = docs_feat / "x"
         spec.mkdir()
@@ -1077,12 +1077,12 @@ def profile_identity_survives_worktrees() -> list[str]:
         if not matches(fs3, "15", "but this checkout is `copied-elsewhere`"):
             problems.append("worktree: copytree to copied-elsewhere did not report check 15 with 'but this checkout is `copied-elsewhere`'")
 
-        # 4. En worktree profile repo: some-other-checkout -> finding con '(a worktree of `Hackathon`)'
+        # 4. En worktree profile repo: some-other-checkout -> finding con '(a worktree of `app-repo`)'
         wt_prof = tmp / "fresh-clone-assets" / "docs" / "features" / "_profile.yml"
         wt_prof.write_text("repo: some-other-checkout\ncommands:\n  tests: pytest\n")
         fs4 = run_spec(wt_spec)
-        if not matches(fs4, "15", "(a worktree of `Hackathon`)"):
-            problems.append("worktree: profile mismatch in worktree did not report '(a worktree of `Hackathon`)'")
+        if not matches(fs4, "15", "(a worktree of `app-repo`)"):
+            problems.append("worktree: profile mismatch in worktree did not report '(a worktree of `app-repo`)'")
 
     return problems
 
@@ -1544,9 +1544,9 @@ def baseline_normalization_pairs() -> list[str]:
         problems.append("normalization: check 16 log size variance should have matched")
 
     f3a = {"severity": "DRIFT", "check": "44 cross-set value parity", "where": "01-master-plan.md:73",
-           "what": "cites `defects.D4` from `docs/features/interstice/_facts.yml` (now `ValidationException — … `bedrock list-foundation-models` … 11996 bytes …`) and this paragraph does not carry that value"}
+           "what": "cites `defects.D4` from `docs/features/app-set/_facts.yml` (now `ValidationException — … `list-models` … 11996 bytes …`) and this paragraph does not carry that value"}
     f3b = {"severity": "DRIFT", "check": "44 cross-set value parity", "where": "01-master-plan.md:80",
-           "what": "cites `defects.D4` from `docs/features/interstice/_facts.yml` (now `other value without backticks`) and this paragraph does not carry that value"}
+           "what": "cites `defects.D4` from `docs/features/app-set/_facts.yml` (now `other value without backticks`) and this paragraph does not carry that value"}
     if audit.finding_fingerprint(f3a) != audit.finding_fingerprint(f3b):
         problems.append("normalization: check 44 value and line variance should have matched")
 
@@ -1564,9 +1564,9 @@ def baseline_normalization_pairs() -> list[str]:
         problems.append("normalization: R10 vs R11 round ids should NOT match")
 
     f6a = {"severity": "DRIFT", "check": "44 cross-set value parity", "where": "01-master-plan.md",
-           "what": "cites `defects.D4` from `docs/features/interstice/_facts.yml` (now `val`) and this paragraph does not carry that value"}
+           "what": "cites `defects.D4` from `docs/features/app-set/_facts.yml` (now `val`) and this paragraph does not carry that value"}
     f6b = {"severity": "DRIFT", "check": "44 cross-set value parity", "where": "01-master-plan.md",
-           "what": "cites `defects.D5` from `docs/features/interstice/_facts.yml` (now `val`) and this paragraph does not carry that value"}
+           "what": "cites `defects.D5` from `docs/features/app-set/_facts.yml` (now `val`) and this paragraph does not carry that value"}
     if audit.finding_fingerprint(f6a) == audit.finding_fingerprint(f6b):
         problems.append("normalization: defects.D4 vs defects.D5 should NOT match")
 
@@ -1825,6 +1825,44 @@ def rotate_plan_round_trips() -> list[str]:
     return problems
 
 
+def rotate_plan_quotes_paths() -> list[str]:
+    """The printed `sh` block is pasted into a shell, so the spec dir must be quoted.
+    Real case: iCloud vault paths carry spaces (`Mobile Documents`), and a folder
+    name holding `$(…)` would run when the plan is pasted (security review of v1.21.0)."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "has space $(touch PWNED)" / "matrix"
+        shutil.copytree(FIXTURES / "matrix", spec)
+        entries = "".join(
+            f"## R{i} · 2026-09-30 · test · review\n**Read:** none\n"
+            f"**Log read through:** R{i - 1}\n" + "x" * 1500 + "\n\n"
+            for i in range(37, 97))
+        log = spec / "_log.md"
+        log.write_text("# Handoff log — matrix\n\nAppend-only log.\n" + entries,
+                       encoding="utf-8")
+        original = log.read_bytes()
+        res = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root",
+                              str(spec), "--rotate-plan"], capture_output=True, text=True)
+        block = re.search(r"^```sh\n(.*?)^```$", res.stdout, re.S | re.M)
+        if res.returncode != 0 or not block:
+            return [f"rotate_plan_quotes_paths: no plan (exit {res.returncode}): {res.stderr[:200]}"]
+        run_ = subprocess.run(["sh", "-c", block.group(1)], capture_output=True,
+                              text=True, cwd=tmp)
+        if "rotated" not in run_.stdout:
+            problems.append(f"rotate_plan_quotes_paths: commands failed: {run_.stderr[:200]}")
+        if any(Path(tmp).rglob("PWNED")):
+            problems.append("rotate_plan_quotes_paths: `$(…)` in the path was executed")
+        archive = next(spec.glob("_log-R*.md"), None)
+        if archive is None:
+            problems.append("rotate_plan_quotes_paths: no archive written")
+        else:
+            kept = log.read_bytes().splitlines(keepends=True)
+            body = archive.read_bytes().splitlines(keepends=True)[8:]
+            if b"".join(kept[:3] + body + kept[3:]) != original:
+                problems.append("rotate_plan_quotes_paths: reassembly != original bytes")
+    return problems
+
+
 def rotate_plan_cut_rule() -> list[str]:
     """`--rotate-plan` cut rule: keeps from last real Stage transition when it fits
     the budget, and exits 0 with nothing to rotate when under both limits."""
@@ -1920,6 +1958,8 @@ def main() -> int:
     failures += rotate_plan_round_trips()
     total += 1
     failures += rotate_plan_cut_rule()
+    total += 1
+    failures += rotate_plan_quotes_paths()
     total += 1
     failures += paths_resolve_on_the_spec_branch()
     total += 1

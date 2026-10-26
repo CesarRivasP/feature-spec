@@ -1,6 +1,6 @@
 # FS-3 — baseline and write-baseline for sets with pre-existing drift.
 #
-# Real case: e2e-harness (Hackathon) has 7 pre-existing DRIFT findings. A change
+# Real case: a harness set carried 7 pre-existing DRIFT findings. A change
 # that adds an 8th was indistinguishable from one that adds none: same exit code (0),
 # same list. With --baseline FILE, CI exits 1 only on new CONTRADICTION or DRIFT.
 #
