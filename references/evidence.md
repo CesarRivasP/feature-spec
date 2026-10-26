@@ -221,10 +221,14 @@ acceptance:
     closes: D1                 # optional. The defects[] id whose `accepted:` risk this criterion settles
     attempts:                  # optional, append-only, oldest first
       - date: 2026-10-12
+        round: R57             # optional, the round that ran it
         outcome: aborted_no_conditions   # aborted_no_conditions | failed | passed
         aborted_because: 'no live event available in the window'   # required when aborted
         env: 'production-release-1.4.3, Fire TV Cube'              # optional free text
+        note: '...'            # optional free text
 ```
+
+Append with `python3 scripts/facts.py add-attempt docs/features/<slug>/ <AC-id> --date YYYY-MM-DD --outcome <outcome> [--round R<n>] [--env TEXT] [--note TEXT] [--aborted-because TEXT] [--status {executed,approved}]`.
 
 Reuse the exact `outcome: aborted_no_conditions` and `aborted_because:` vocabulary already used for an aborted run on a measured entry above. An attempt with `outcome: passed` does not automatically flip `status:`; the author still writes `status: executed|approved` + `verified_on:` — the attempts list is history, the status is the contract.
 

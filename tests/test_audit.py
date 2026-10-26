@@ -458,6 +458,18 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("44", "01-master-plan.md:4"),            # clean: carries verbatim 24
       ("35", "rail_budget"),                    # derived_from inherits, clean for 35
       ("30", "rail_budget")]),                  # parent has n: 3 and spread, clean for 30
+
+    # §16 — a file owned by another set (its directory holds _facts.yml and _log.md)
+    # is accounted for by that set's log. Real case: e2e-harness R13/R15/R16 were empty
+    # rounds appended only to copy interstice's _facts.yml blob.
+    ("cross-set-log/docs/features/citer-b",
+     [("16", "owned by docs/features/owner-a, whose _log.md does not account for it"),  # 01 edited in A, unlogged
+      ("16", "@docs/features/owner-c/_facts.yml")],         # owner with no log: today's rule
+     [("16", "@docs/features/owner-a/_facts.yml"),          # A logged vA2; B carries nothing
+      ("16", "edited between rounds")]),                     # R2 read vA2 after R1 left vA1
+    ("cross-set-log/docs/features/owner-a",
+     [("16", "@01-master-plan.md")],                         # the owner reports its own unlogged edit
+     [("16", "@_facts.yml")]),
 ]
 
 # (fixture, extra args, expect, reject) — cases that only exist under a flag.
@@ -1004,6 +1016,77 @@ def paths_resolve_on_the_spec_branch() -> list[str]:
     return problems
 
 
+def profile_identity_survives_worktrees() -> list[str]:
+    """Check 15 compares `repo:` against the checkout's basename. In a linked
+    worktree, the checkout is named for the worktree, not the repo, which raised a
+    false CONTRADICTION. Resolving the main checkout's name keeps worktrees clean,
+    flags genuine foreign profiles with both names, and still fires when a repo is
+    copied to a new directory."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        repo = tmp / "Hackathon"
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        (repo / "README.md").write_text("# Hackathon\n")
+
+        docs_feat = repo / "docs" / "features"
+        docs_feat.mkdir(parents=True)
+        prof = docs_feat / "_profile.yml"
+        prof.write_text("repo: Hackathon\ncommands:\n  tests: pytest\n")
+
+        spec = docs_feat / "x"
+        spec.mkdir()
+        (spec / "_facts.yml").write_text(
+            "feature: x\n"
+            "status: draft\n"
+            "profile: _profile.yml\n"
+            "defects: []\n"
+            "acceptance: []\n"
+            "docs:\n"
+            "  - { id: \"01\", file: 01-master-plan.md, role: master-plan, stage: draft }\n"
+        )
+        (spec / "01-master-plan.md").write_text("# Master Plan\n\nSome plan.\n")
+
+        git(repo, "add", ".")
+        git(repo, "commit", "-q", "-m", "init")
+
+        def run_spec(target_spec: Path) -> list[dict]:
+            out = subprocess.run([sys.executable, str(AUDIT), str(target_spec), "--json"],
+                                 capture_output=True, text=True)
+            if out.returncode not in (0, 1):
+                raise AssertionError(f"worktree test: audit.py crashed\n{out.stderr}")
+            return json.loads(out.stdout).get("findings", [])
+
+        # 1. Main checkout: sin finding 15 'but this checkout is'
+        fs1 = run_spec(spec)
+        if matches(fs1, "15", "but this checkout is"):
+            problems.append("worktree: main checkout unexpectedly reported check 15 'but this checkout is'")
+
+        # 2. Linked worktree: sin ese finding
+        git(repo, "worktree", "add", "-b", "wt", str(tmp / "fresh-clone-assets"))
+        wt_spec = tmp / "fresh-clone-assets" / "docs" / "features" / "x"
+        fs2 = run_spec(wt_spec)
+        if matches(fs2, "15", "but this checkout is"):
+            problems.append("worktree: linked worktree falsely reported check 15 'but this checkout is'")
+
+        # 3. Copytree a tmp/copied-elsewhere -> finding 15 con 'but this checkout is `copied-elsewhere`'
+        shutil.copytree(repo, tmp / "copied-elsewhere")
+        cp_spec = tmp / "copied-elsewhere" / "docs" / "features" / "x"
+        fs3 = run_spec(cp_spec)
+        if not matches(fs3, "15", "but this checkout is `copied-elsewhere`"):
+            problems.append("worktree: copytree to copied-elsewhere did not report check 15 with 'but this checkout is `copied-elsewhere`'")
+
+        # 4. En worktree profile repo: some-other-checkout -> finding con '(a worktree of `Hackathon`)'
+        wt_prof = tmp / "fresh-clone-assets" / "docs" / "features" / "_profile.yml"
+        wt_prof.write_text("repo: some-other-checkout\ncommands:\n  tests: pytest\n")
+        fs4 = run_spec(wt_spec)
+        if not matches(fs4, "15", "(a worktree of `Hackathon`)"):
+            problems.append("worktree: profile mismatch in worktree did not report '(a worktree of `Hackathon`)'")
+
+    return problems
+
+
 def yaml_errors_name_their_position() -> list[str]:
     """A missing comma after `absence: true` inside a flow mapping came back as a
     raw `ComposerError`. The 36 checks never ran, and nothing said where to look.
@@ -1097,6 +1180,134 @@ def read_line_round_trips() -> list[str]:
     return problems
 
 
+def edits_line_round_trips() -> list[str]:
+    """`--edits-line` prints the `**Edits:**` line of a log entry. Check 16 reads it
+    back: an Edits record becomes the version compared against disk (no "last recorded"
+    drift) and against the next round's Read: (no "edited between rounds" drift)."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "matrix"
+        shutil.copytree(FIXTURES / "matrix", spec)
+        base = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec)]
+
+        out = subprocess.run(base + ["--read-line"], capture_output=True, text=True)
+        line = out.stdout.strip()
+        (spec / "_log.md").write_text(
+            f"## R1 · 2026-09-30 · test · author\n{line}\n"
+            "**Log read through:** — (first entry)\n", encoding="utf-8")
+
+        with (spec / "01-master-plan.md").open("a", encoding="utf-8") as fh:
+            fh.write("una línea más\n")
+
+        ed = subprocess.run(base + ["--edits-line", "01-master-plan.md=one line"],
+                            capture_output=True, text=True)
+        if ed.returncode != 0 or not ed.stdout.startswith("**Edits:** "):
+            problems.append(f"edits-line: expected `**Edits:**` line, got {ed.stdout!r} {ed.stderr!r}")
+        ed_line = ed.stdout.strip()
+
+        with (spec / "_log.md").open("a", encoding="utf-8") as fh:
+            fh.write(f"{ed_line}\n")
+
+        def check16_findings() -> list[dict]:
+            data = json.loads(subprocess.run(base + ["--json"], capture_output=True,
+                                             text=True).stdout)
+            return [f for f in data["findings"] if f["check"].startswith("16")]
+
+        # (a) Check 16 has no "last recorded" finding for 01-master-plan.md
+        last_rec = {f["where"] for f in check16_findings() if "last recorded" in f["what"]}
+        if "01-master-plan.md" in last_rec:
+            problems.append("edits-line: (a) check 16 reports last recorded drift for 01-master-plan.md")
+
+        # (b) After R2 with --read-line 01-master-plan.md is appended, no "edited between rounds" finding
+        r2_out = subprocess.run(base + ["--read-line", "01-master-plan.md"],
+                                capture_output=True, text=True).stdout.strip()
+        with (spec / "_log.md").open("a", encoding="utf-8") as fh:
+            fh.write(f"## R2 · 2026-10-01 · test · implement\n{r2_out}\n"
+                     "**Log read through:** R1\n")
+
+        between_rounds = {f["where"] for f in check16_findings() if "edited between rounds" in f["what"]}
+        if "01-master-plan.md" in between_rounds:
+            problems.append("edits-line: (b) check 16 reports edited between rounds for 01-master-plan.md")
+
+        # (c) After one more line is appended to the file, check 16 reports exactly 01-master-plan.md
+        with (spec / "01-master-plan.md").open("a", encoding="utf-8") as fh:
+            fh.write("segunda línea extra\n")
+
+        stale_after = {f["where"] for f in check16_findings() if "last recorded" in f["what"]}
+        if stale_after != {"01-master-plan.md"}:
+            problems.append(f"edits-line: (c) expected last recorded drift for only 01-master-plan.md, got {sorted(stale_after)}")
+
+        # 5. Edge cases:
+        paren = subprocess.run(base + ["--edits-line", "01-master-plan.md=has (paren)"],
+                               capture_output=True, text=True)
+        if paren.returncode == 0 or paren.stdout:
+            problems.append("edits-line: description with parens must exit non-zero with nothing on stdout")
+
+        nope = subprocess.run(base + ["--edits-line", "nope.md"],
+                              capture_output=True, text=True)
+        if nope.returncode == 0 or nope.stdout:
+            problems.append("edits-line: missing file must exit non-zero with nothing on stdout")
+
+        no_arg = subprocess.run(base + ["--edits-line"],
+                                capture_output=True, text=True)
+        if no_arg.returncode == 0:
+            problems.append("edits-line: missing argument must fail (argparse error)")
+
+    return problems
+
+
+def entry_stub_shape() -> list[str]:
+    """`--entry` prints a stub heading for a round entry, requiring --agent and --mode,
+    and combining with --read-line and/or --edits-line. It prompts for Log read through
+    on stderr without printing it on stdout."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "matrix"
+        shutil.copytree(FIXTURES / "matrix", spec)
+        base = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec)]
+
+        (spec / "_log.md").write_text(
+            "## R1 · 2026-09-30 · test · author\n"
+            "**Read:** `_facts.yml` (16 lines, blob fbfa5a3)\n"
+            "**Log read through:** — (first entry)\n", encoding="utf-8")
+
+        res = subprocess.run(base + ["--entry", "--agent", "t", "--mode", "implement",
+                                     "--read-line", "_facts.yml", "--today", "2026-10-26"],
+                             capture_output=True, text=True)
+        if res.returncode != 0:
+            problems.append(f"entry_stub_shape: expected exit 0, got {res.returncode}")
+        lines = [ln for ln in res.stdout.splitlines() if ln.strip()]
+        if len(lines) != 2:
+            problems.append(f"entry_stub_shape: expected exactly two lines, got {lines!r}")
+        else:
+            if lines[0] != "## R2 · 2026-10-26 · t · implement":
+                problems.append(f"entry_stub_shape: unexpected heading: {lines[0]!r}")
+            if not lines[1].startswith("**Read:** "):
+                problems.append(f"entry_stub_shape: unexpected read line: {lines[1]!r}")
+
+        if "Log read through" not in res.stderr:
+            problems.append(f"entry_stub_shape: stderr must mention 'Log read through', got {res.stderr!r}")
+
+        r0 = subprocess.run(base + ["--entry", "R0", "--agent", "t", "--mode", "implement",
+                                    "--read-line", "_facts.yml"],
+                            capture_output=True, text=True)
+        if r0.returncode == 0:
+            problems.append("entry_stub_shape: --entry R0 on log at R1 must exit non-zero")
+
+        bogus = subprocess.run(base + ["--entry", "--agent", "t", "--mode", "bogus",
+                                      "--read-line", "_facts.yml"],
+                               capture_output=True, text=True)
+        if bogus.returncode == 0:
+            problems.append("entry_stub_shape: --mode bogus must fail (argparse error)")
+
+        no_line = subprocess.run(base + ["--entry", "--agent", "t", "--mode", "implement"],
+                                 capture_output=True, text=True)
+        if no_line.returncode == 0:
+            problems.append("entry_stub_shape: --entry with neither line flag must fail")
+
+    return problems
+
+
 def log_size_counts_bytes() -> list[str]:
     """Check 16's size threshold, in both units. A log of long entries hit 103KB at
     701 lines — about 26k tokens — and the line threshold alone let it through. The
@@ -1120,6 +1331,10 @@ def log_size_counts_bytes() -> list[str]:
                 problems.append(f"log size: {rounds} rounds of 1.5KB "
                                 f"({'over' if expect else 'under'} 80KB, under 800 lines) "
                                 f"{'not ' if expect else ''}reported")
+            if expect and hit:
+                f16 = next(f for f in data["findings"] if f["check"].startswith("16") and "past what one read" in f["what"])
+                if "--rotate-plan" not in f16.get("fix", ""):
+                    problems.append("log size: POLISH remediation does not name --rotate-plan")
     return problems
 
 
@@ -1209,9 +1424,478 @@ def open_items_lists_pending_actions() -> list[str]:
     return problems
 
 
+def baseline_counts_only_new() -> list[str]:
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        t_path = Path(tmp)
+        spec = t_path / "spec"
+        shutil.copytree(FIXTURES / "baseline-drift", spec)
+        shutil.copy(FIXTURES / "_profile.fixture.yml", t_path / "_profile.fixture.yml")
+        b_json = t_path / "b.json"
+
+        out = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path), "--json"],
+                             capture_output=True, text=True)
+        if out.returncode != 0:
+            problems.append(f"baseline precondition: expected exit 0, got {out.returncode}")
+        try:
+            data = json.loads(out.stdout)
+            findings = data.get("findings", [])
+            if len(findings) != 2:
+                problems.append(f"baseline precondition: expected 2 findings, got {len(findings)}")
+            elif not all(f["severity"] == "DRIFT" and f["check"].startswith("16") for f in findings):
+                problems.append("baseline precondition: expected both findings to be check 16 DRIFT")
+        except json.JSONDecodeError as exc:
+            problems.append(f"baseline precondition: invalid json: {exc}")
+
+        w1 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                             "--write-baseline", str(b_json)], capture_output=True, text=True)
+        if w1.returncode != 0:
+            problems.append(f"--write-baseline exited {w1.returncode}: {w1.stderr}")
+        content1 = b_json.read_bytes()
+        try:
+            b_data = json.loads(content1)
+            if len(b_data.get("findings", [])) != 2:
+                problems.append(f"--write-baseline expected 2 entries, got {len(b_data.get('findings', []))}")
+        except json.JSONDecodeError as exc:
+            problems.append(f"--write-baseline file not valid JSON: {exc}")
+
+        w2 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                             "--write-baseline", str(b_json)], capture_output=True, text=True)
+        if w2.returncode != 0:
+            problems.append(f"--write-baseline rewrite exited {w2.returncode}: {w2.stderr}")
+        content2 = b_json.read_bytes()
+        if content1 != content2:
+            problems.append("--write-baseline rewrite did not yield identical bytes")
+
+        log_file = spec / "_log.md"
+        log_file.write_text("\n" + log_file.read_text(encoding="utf-8"), encoding="utf-8")
+        doc_file = spec / "01-master-plan.md"
+        doc_file.write_text(doc_file.read_text(encoding="utf-8") + "extra\n", encoding="utf-8")
+
+        r0 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                             "--baseline", str(b_json)], capture_output=True, text=True)
+        if r0.returncode != 0:
+            problems.append(f"--baseline volatile shift exited {r0.returncode}: {r0.stderr}")
+        last_line = r0.stdout.strip().splitlines()[-1] if r0.stdout.strip() else ""
+        if "0 new / 2 baseline" not in last_line:
+            problems.append(f"--baseline volatile shift verdict expected '0 new / 2 baseline', got {last_line!r}")
+
+        notes_file = spec / "notes.md"
+        notes_file.write_text("# notes\n", encoding="utf-8")
+
+        r1 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                             "--baseline", str(b_json)], capture_output=True, text=True)
+        if r1.returncode != 1:
+            problems.append(f"--baseline with notes.md expected exit 1, got {r1.returncode}")
+        last_line1 = r1.stdout.strip().splitlines()[-1] if r1.stdout.strip() else ""
+        if "1 new / 2 baseline" not in last_line1:
+            problems.append(f"--baseline with notes.md verdict expected '1 new / 2 baseline', got {last_line1!r}")
+
+        r1_json = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                                  "--baseline", str(b_json), "--json"], capture_output=True, text=True)
+        if r1_json.returncode != 1:
+            problems.append(f"--baseline --json with notes.md expected exit 1, got {r1_json.returncode}")
+        try:
+            j1 = json.loads(r1_json.stdout)
+            b_info = j1.get("baseline", {})
+            if b_info.get("new") != 1 or b_info.get("baseline") != 2 or b_info.get("gone") != 0:
+                problems.append(f"--baseline --json expected new=1, baseline=2, gone=0, got {b_info}")
+            new_f = [f for f in j1.get("findings", []) if f.get("baseline") is False]
+            if len(new_f) != 1 or not new_f[0]["check"].startswith("9"):
+                problems.append(f"--baseline --json expected 1 new finding with check 9, got {new_f}")
+        except json.JSONDecodeError as exc:
+            problems.append(f"--baseline --json invalid json: {exc}")
+
+        w3 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                             "--write-baseline", str(b_json)], capture_output=True, text=True)
+        if w3.returncode != 0:
+            problems.append(f"--write-baseline with 3 findings exited {w3.returncode}: {w3.stderr}")
+        notes_file.unlink()
+
+        r2 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                             "--baseline", str(b_json)], capture_output=True, text=True)
+        if r2.returncode != 0:
+            problems.append(f"--baseline after removing notes.md expected exit 0, got {r2.returncode}")
+        last_line2 = r2.stdout.strip().splitlines()[-1] if r2.stdout.strip() else ""
+        if "0 new / 2 baseline, 1 gone" not in last_line2:
+            problems.append(f"--baseline after removing notes.md expected '0 new / 2 baseline, 1 gone', got {last_line2!r}")
+
+    return problems
+
+
+def baseline_normalization_pairs() -> list[str]:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import audit
+
+    problems = []
+    # Must match:
+    f1a = {"severity": "DRIFT", "check": "16 handoff log integrity", "where": "01-master-plan.md",
+           "what": "last recorded at _log.md:4 as 7 lines, blob def5678; now 7 lines, blob c2d7bb6"}
+    f1b = {"severity": "DRIFT", "check": "16 handoff log integrity", "where": "01-master-plan.md",
+           "what": "last recorded at _log.md:5 as 7 lines, blob def5678; now 8 lines, blob 8491f95"}
+    if audit.finding_fingerprint(f1a) != audit.finding_fingerprint(f1b):
+        problems.append("normalization: check 16 line/blob variance should have matched")
+
+    f2a = {"severity": "DRIFT", "check": "16 handoff log integrity", "where": "_log.md",
+           "what": "570 lines, 106KB — past what one read can hold"}
+    f2b = {"severity": "DRIFT", "check": "16 handoff log integrity", "where": "_log.md",
+           "what": "701 lines, 103KB — past what one read can hold"}
+    if audit.finding_fingerprint(f2a) != audit.finding_fingerprint(f2b):
+        problems.append("normalization: check 16 log size variance should have matched")
+
+    f3a = {"severity": "DRIFT", "check": "44 cross-set value parity", "where": "01-master-plan.md:73",
+           "what": "cites `defects.D4` from `docs/features/interstice/_facts.yml` (now `ValidationException — … `bedrock list-foundation-models` … 11996 bytes …`) and this paragraph does not carry that value"}
+    f3b = {"severity": "DRIFT", "check": "44 cross-set value parity", "where": "01-master-plan.md:80",
+           "what": "cites `defects.D4` from `docs/features/interstice/_facts.yml` (now `other value without backticks`) and this paragraph does not carry that value"}
+    if audit.finding_fingerprint(f3a) != audit.finding_fingerprint(f3b):
+        problems.append("normalization: check 44 value and line variance should have matched")
+
+    f4a = {"severity": "POLISH", "check": "17 doc size", "where": "01-master-plan.md:73", "what": "something"}
+    f4b = {"severity": "POLISH", "check": "17 doc size", "where": "01-master-plan.md:80", "what": "something"}
+    if audit.finding_fingerprint(f4a) != audit.finding_fingerprint(f4b):
+        problems.append("normalization: line number in where should have matched")
+
+    # Must NOT match:
+    f5a = {"severity": "DRIFT", "check": "16 handoff log integrity", "where": "_log.md",
+           "what": "`R10` read `_facts.yml` at 633 lines, blob 857ce36; `R9` left it at 634 lines, blob 882d1ff — edited between rounds"}
+    f5b = {"severity": "DRIFT", "check": "16 handoff log integrity", "where": "_log.md",
+           "what": "`R11` read `_facts.yml` at 633 lines, blob 857ce36; `R9` left it at 634 lines, blob 882d1ff — edited between rounds"}
+    if audit.finding_fingerprint(f5a) == audit.finding_fingerprint(f5b):
+        problems.append("normalization: R10 vs R11 round ids should NOT match")
+
+    f6a = {"severity": "DRIFT", "check": "44 cross-set value parity", "where": "01-master-plan.md",
+           "what": "cites `defects.D4` from `docs/features/interstice/_facts.yml` (now `val`) and this paragraph does not carry that value"}
+    f6b = {"severity": "DRIFT", "check": "44 cross-set value parity", "where": "01-master-plan.md",
+           "what": "cites `defects.D5` from `docs/features/interstice/_facts.yml` (now `val`) and this paragraph does not carry that value"}
+    if audit.finding_fingerprint(f6a) == audit.finding_fingerprint(f6b):
+        problems.append("normalization: defects.D4 vs defects.D5 should NOT match")
+
+    f7a = {"severity": "DRIFT", "check": "18 anchor", "where": "01.md", "what": "text"}
+    f7b = {"severity": "CONTRADICTION", "check": "18 anchor", "where": "01.md", "what": "text"}
+    if audit.finding_fingerprint(f7a) == audit.finding_fingerprint(f7b):
+        problems.append("normalization: DRIFT vs CONTRADICTION should NOT match")
+
+    f8a = {"severity": "DRIFT", "check": "18 anchor", "where": "01-master-plan.md", "what": "text"}
+    f8b = {"severity": "DRIFT", "check": "18 anchor", "where": "02-architecture.md", "what": "text"}
+    if audit.finding_fingerprint(f8a) == audit.finding_fingerprint(f8b):
+        problems.append("normalization: different files in where should NOT match")
+
+    return problems
+
+
+def baseline_fingerprints_do_not_collide() -> list[str]:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import audit
+
+    problems = []
+    for fixture, _, _ in CASES:
+        findings = run(fixture)
+        fps = [audit.finding_fingerprint(f) for f in findings]
+        if len(fps) != len(set(fps)):
+            seen = {}
+            for f in findings:
+                fp = audit.finding_fingerprint(f)
+                if fp in seen:
+                    problems.append(
+                        f"{fixture}: fingerprint collision between {seen[fp]['where']}: {seen[fp]['what'][:40]!r} "
+                        f"and {f['where']}: {f['what'][:40]!r}")
+                seen[fp] = f
+    return problems
+
+
+def baseline_flag_errors() -> list[str]:
+    problems = []
+    fix = FIXTURES / "matrix"
+
+    nonexistent = str(fix / "does_not_exist_baseline.json")
+    r1 = subprocess.run([sys.executable, str(AUDIT), str(fix), "--baseline", nonexistent],
+                        capture_output=True, text=True)
+    if r1.returncode != 2:
+        problems.append(f"--baseline nonexistent file expected exit 2, got {r1.returncode}")
+    if nonexistent not in r1.stderr:
+        problems.append(f"--baseline nonexistent file stderr did not name file: {r1.stderr}")
+
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+        tf.write(json.dumps({"findings": []}))
+        tf_name = tf.name
+    try:
+        r2 = subprocess.run([sys.executable, str(AUDIT), str(fix), "--baseline", tf_name],
+                            capture_output=True, text=True)
+        if r2.returncode != 2:
+            problems.append(f"--baseline JSON without audit_baseline expected exit 2, got {r2.returncode}")
+    finally:
+        Path(tf_name).unlink(missing_ok=True)
+
+    r3 = subprocess.run([sys.executable, str(AUDIT), str(fix), "--baseline", "b.json", "--write-baseline", "w.json"],
+                        capture_output=True, text=True)
+    if r3.returncode != 2:
+        problems.append(f"--baseline with --write-baseline expected exit 2, got {r3.returncode}")
+
+    r4 = subprocess.run([sys.executable, str(AUDIT), str(fix), "--write-baseline", "w.json", "--as-status", "shipped"],
+                        capture_output=True, text=True)
+    if r4.returncode != 2:
+        problems.append(f"--write-baseline with --as-status shipped expected exit 2, got {r4.returncode}")
+
+    r5 = subprocess.run([sys.executable, str(AUDIT), str(fix), "--baseline", "b.json", "--open"],
+                        capture_output=True, text=True)
+    if r5.returncode != 2:
+        problems.append(f"--baseline with --open expected exit 2, got {r5.returncode}")
+
+    r6 = subprocess.run([sys.executable, str(AUDIT), str(fix), "--baseline", "b.json", "--rotate-plan"],
+                        capture_output=True, text=True)
+    if r6.returncode != 2:
+        problems.append(f"--baseline with --rotate-plan expected exit 2, got {r6.returncode}")
+
+    return problems
+
+
+def baseline_default_json_shape() -> list[str]:
+    problems = []
+    out = subprocess.run([sys.executable, str(AUDIT), str(FIXTURES / "anchor-drift"), "--json"],
+                         capture_output=True, text=True)
+    try:
+        data = json.loads(out.stdout)
+        if data.get("baseline") is not None:
+            problems.append(f"--json without flags: expected baseline is null, got {data.get('baseline')}")
+        findings = data.get("findings", [])
+        if not findings:
+            problems.append("--json without flags: anchor-drift expected findings")
+        for f in findings:
+            if "fingerprint" not in f or not isinstance(f["fingerprint"], str) or len(f["fingerprint"]) != 16:
+                problems.append(f"--json without flags: finding missing 16-char fingerprint: {f}")
+            if "baseline" in f:
+                problems.append(f"--json without flags: finding unexpectedly has baseline key: {f}")
+    except json.JSONDecodeError as exc:
+        problems.append(f"--json without flags invalid json: {exc}")
+    return problems
+
+
+def rotate_plan_round_trips() -> list[str]:
+    """`--rotate-plan` prints the cut, archive name, stage carry and exact shell
+    commands to rotate _log.md without losing a byte or summarizing."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "matrix"
+        shutil.copytree(FIXTURES / "matrix", spec)
+        base = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec)]
+
+        preamble = (
+            "# Handoff log — matrix\n\n"
+            "Append-only log for matrix feature.\n"
+        )
+        assert preamble.count("\n") == 3
+
+        entries = []
+        for i in range(37, 92):
+            extra = "**Stage:** draft → reviewed\n" if i == 40 else ""
+            entries.append(
+                f"## R{i} · 2026-09-30 · test · review\n"
+                f"**Read:** none\n"
+                f"**Log read through:** R{i - 1}\n"
+                f"{extra}"
+                + "x" * 1500 + "\n\n"
+            )
+        # R92 as two headings
+        entries.append(
+            "## R92-W1 · 2026-09-30 · test · review\n"
+            "**Read:** none\n"
+            "**Log read through:** R91\n"
+            + "x" * 750 + "\n\n"
+        )
+        entries.append(
+            "## R92-W2 · 2026-09-30 · test · review\n"
+            "**Read:** none\n"
+            "**Log read through:** R91\n"
+            + "x" * 750 + "\n\n"
+        )
+        for i in range(93, 97):
+            entries.append(
+                f"## R{i} · 2026-09-30 · test · review\n"
+                f"**Read:** none\n"
+                f"**Log read through:** R{i - 1}\n"
+                + "x" * 1500 + "\n\n"
+            )
+
+        orig_log = preamble + "".join(entries)
+        (spec / "_log.md").write_text(orig_log, encoding="utf-8")
+
+        # 1. Run --rotate-plan
+        plan_res = subprocess.run(base + ["--rotate-plan", "--today", "2026-10-26"],
+                                  capture_output=True, text=True)
+        if plan_res.returncode != 0:
+            problems.append(f"rotate_plan_round_trips: expected exit 0, got {plan_res.returncode}: {plan_res.stderr}")
+            return problems
+        plan_out = plan_res.stdout
+
+        if "_log-R37-R91.md" not in plan_out:
+            problems.append("rotate_plan_round_trips: plan did not name _log-R37-R91.md")
+        if "before `## R92-W1" not in plan_out:
+            problems.append("rotate_plan_round_trips: plan cut did not cut before ## R92-W1")
+        if "## R92-W2" in plan_out:
+            problems.append("rotate_plan_round_trips: plan cut wrongly named R92-W2")
+        if "last 5 rounds kept" not in plan_out:
+            problems.append("rotate_plan_round_trips: plan did not report fallback branch")
+        if "**Stage:** reviewed → reviewed — carried" not in plan_out:
+            problems.append("rotate_plan_round_trips: plan did not print reviewed -> reviewed carry line")
+
+        # Extract fenced sh block
+        m_sh = re.search(r"```sh\n(.*?)\n```", plan_out, re.S)
+        if not m_sh:
+            problems.append("rotate_plan_round_trips: no ```sh fenced block found in output")
+            return problems
+        sh_cmd = m_sh.group(1)
+
+        # 2. Run sh commands in temp dir
+        sh_res = subprocess.run(["sh", "-c", sh_cmd], capture_output=True, text=True)
+        if sh_res.returncode != 0 or "rotated" not in sh_res.stdout:
+            problems.append(f"rotate_plan_round_trips: sh execution failed (rc={sh_res.returncode}): {sh_res.stdout} {sh_res.stderr}")
+
+        archive_file = spec / "_log-R37-R91.md"
+        if not archive_file.is_file():
+            problems.append("rotate_plan_round_trips: archive file was not created")
+        else:
+            arch_lines = archive_file.read_text(encoding="utf-8").splitlines(keepends=True)
+            arch_body = "".join(arch_lines[8:])
+            kept_text = (spec / "_log.md").read_text(encoding="utf-8")
+            kept_lines = kept_text.splitlines(keepends=True)
+            kept_preamble = "".join(kept_lines[:3])
+            kept_rounds = "".join(kept_lines[3:])
+            reconstructed = kept_preamble + arch_body + kept_rounds
+            if reconstructed != orig_log:
+                problems.append("rotate_plan_round_trips: preamble + archive body + kept rounds != original log")
+
+        # 3. Audit check
+        audit_res = subprocess.run(base + ["--json"], capture_output=True, text=True)
+        audit_data = json.loads(audit_res.stdout)
+        if any("past what one read" in f.get("what", "") for f in audit_data["findings"]):
+            problems.append("rotate_plan_round_trips: audit still reports log size after rotation")
+
+        # Append rotate entry
+        rl_res = subprocess.run(base + ["--read-line", "_log-R37-R91.md"],
+                                capture_output=True, text=True).stdout.strip()
+        m_stage = re.search(r"(\*\*Stage:\*\* [^\n`]+)", plan_out)
+        stage_line = m_stage.group(1) if m_stage else ""
+        rotate_entry = (
+            f"\n## R97 · 2026-10-26 · test · rotate\n"
+            f"{rl_res}\n"
+            f"**Log read through:** R96\n"
+            f"{stage_line}\n"
+            f"**Archived:** `_log-R37-R91.md`\n"
+            f"**Edits:** `_log-R37-R91.md`\n"
+        )
+        with (spec / "_log.md").open("a", encoding="utf-8") as f:
+            f.write(rotate_entry)
+
+        audit_res2 = subprocess.run(base + ["--json"], capture_output=True, text=True)
+        audit_data2 = json.loads(audit_res2.stdout)
+        stage_drifts = [f for f in audit_data2["findings"] if f["check"].startswith("16") and "Stage:" in f.get("what", "")]
+        if stage_drifts:
+            problems.append(f"rotate_plan_round_trips: check 16 reports Stage findings after rotate entry: {stage_drifts}")
+
+        # 4. Stale plan test
+        (spec / "_log.md").write_text(orig_log, encoding="utf-8")
+        if archive_file.exists():
+            archive_file.unlink()
+        (spec / "_log.md.kept").unlink(missing_ok=True)
+
+        stale_log = preamble + "inserted line\n" + "".join(entries)
+        (spec / "_log.md").write_text(stale_log, encoding="utf-8")
+
+        stale_res = subprocess.run(["sh", "-c", sh_cmd], capture_output=True, text=True)
+        if stale_res.returncode == 0:
+            problems.append("rotate_plan_round_trips: stale plan commands should have failed")
+        if (spec / "_log.md").read_text(encoding="utf-8") != stale_log:
+            problems.append("rotate_plan_round_trips: stale plan commands modified _log.md")
+        if archive_file.exists():
+            problems.append("rotate_plan_round_trips: stale plan commands created archive file")
+        if (spec / "_log.md.kept").exists():
+            problems.append("rotate_plan_round_trips: stale plan commands created _log.md.kept")
+
+        # 5. Name taken test
+        (spec / "_log.md").write_text(orig_log, encoding="utf-8")
+        archive_file.write_text("existing content", encoding="utf-8")
+        taken_res = subprocess.run(base + ["--rotate-plan"], capture_output=True, text=True)
+        if taken_res.returncode == 0:
+            problems.append("rotate_plan_round_trips: plan should fail when archive name is taken")
+        if "_log-R37-R91.md" not in (taken_res.stdout + taken_res.stderr):
+            problems.append("rotate_plan_round_trips: error message did not name taken archive file")
+        if "```sh" in taken_res.stdout or "```sh" in taken_res.stderr:
+            problems.append("rotate_plan_round_trips: commands should not be printed when archive name is taken")
+
+    return problems
+
+
+def rotate_plan_cut_rule() -> list[str]:
+    """`--rotate-plan` cut rule: keeps from last real Stage transition when it fits
+    the budget, and exits 0 with nothing to rotate when under both limits."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "matrix"
+        shutil.copytree(FIXTURES / "matrix", spec)
+        base = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec)]
+
+        preamble = (
+            "# Handoff log — matrix\n\n"
+            "Append-only log for matrix feature.\n"
+        )
+        entries = []
+        for i in range(37, 97):
+            extra = "**Stage:** draft → reviewed\n" if i == 90 else ""
+            entries.append(
+                f"## R{i} · 2026-09-30 · test · review\n"
+                f"**Read:** none\n"
+                f"**Log read through:** R{i - 1}\n"
+                f"{extra}"
+                + "x" * 1500 + "\n\n"
+            )
+
+        (spec / "_log.md").write_text(preamble + "".join(entries), encoding="utf-8")
+
+        res = subprocess.run(base + ["--rotate-plan"], capture_output=True, text=True)
+        if res.returncode != 0:
+            problems.append(f"rotate_plan_cut_rule: expected exit 0, got {res.returncode}: {res.stderr}")
+        else:
+            out = res.stdout
+            if "before `## R90" not in out:
+                problems.append(f"rotate_plan_cut_rule: plan did not cut at R90: {out[:200]}")
+            if "_log-R37-R89.md" not in out:
+                problems.append(f"rotate_plan_cut_rule: plan archive name != _log-R37-R89.md: {out[:200]}")
+            if "stage:   carry" in out:
+                problems.append("rotate_plan_cut_rule: plan should not print carry line when transition is kept")
+
+        # 20-round log under limits
+        under_entries = [
+            f"## R{i} · 2026-09-30 · test · review\n"
+            f"**Read:** none\n"
+            f"**Log read through:** R{i - 1}\n"
+            + "x" * 1500 + "\n\n"
+            for i in range(1, 21)
+        ]
+        (spec / "_log.md").write_text(preamble + "".join(under_entries), encoding="utf-8")
+        under_res = subprocess.run(base + ["--rotate-plan"], capture_output=True, text=True)
+        if under_res.returncode != 0:
+            problems.append(f"rotate_plan_cut_rule: under limits expected exit 0, got {under_res.returncode}")
+        if "nothing to rotate" not in under_res.stdout:
+            problems.append(f"rotate_plan_cut_rule: expected 'nothing to rotate', got: {under_res.stdout}")
+        if "```sh" in under_res.stdout:
+            problems.append("rotate_plan_cut_rule: under limits should have no sh block")
+
+    return problems
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     failures, total = [], 0
+    total += 1
+    failures += baseline_counts_only_new()
+    total += 1
+    failures += baseline_normalization_pairs()
+    total += 1
+    failures += baseline_fingerprints_do_not_collide()
+    total += 1
+    failures += baseline_flag_errors()
+    total += 1
+    failures += baseline_default_json_shape()
     total += 1
     failures += open_items_lists_pending_actions()
     total += 1
@@ -1229,7 +1913,17 @@ def main() -> int:
     total += 1
     failures += read_line_round_trips()
     total += 1
+    failures += edits_line_round_trips()
+    total += 1
+    failures += entry_stub_shape()
+    total += 1
+    failures += rotate_plan_round_trips()
+    total += 1
+    failures += rotate_plan_cut_rule()
+    total += 1
     failures += paths_resolve_on_the_spec_branch()
+    total += 1
+    failures += profile_identity_survives_worktrees()
     total += 1
     failures += yaml_errors_name_their_position()
     for fixture, extra, expect, reject in FLAG_CASES:

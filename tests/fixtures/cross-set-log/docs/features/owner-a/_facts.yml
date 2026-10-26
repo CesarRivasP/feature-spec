@@ -1,0 +1,6 @@
+feature: owner-a
+status: draft
+profile: _profile.fixture.yml
+# version vA2
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

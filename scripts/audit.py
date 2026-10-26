@@ -12,8 +12,12 @@ So: this script runs every check a program can run, and prints the ones it canno
 script FIRST, then the judgment pass over what it lists — in that order.
 
     python3 scripts/audit.py docs/features/<slug>/ [--repo-root DIR] [--json]
+                             [--baseline FILE | --write-baseline FILE]
                              [--as-status STAGE] [--today YYYY-MM-DD]
-                             [--no-matrix] [--read-line [FILE ...]] [--index]
+                             [--no-matrix] [--read-line [FILE ...]]
+                             [--edits-line FILE[=WHAT] ...]
+                             [--entry [R<n>] --agent NAME --mode ACTION] [--index]
+                             [--rotate-plan]
 
 It never executes `evidence.cmd` (protocol check 1b). A registry is a data file that
 travels between repos and agents; running commands out of it because it claims they
@@ -26,7 +30,9 @@ implemented twice is the exact defect this skill exists to prevent.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -128,6 +134,117 @@ class Candidates:
 
     def total(self) -> int:
         return sum(len(v) for v in self.by_check.values())
+
+
+# A finding's identity across runs: what it is about, never the numbers that move
+# while it stays the same problem. Each rule is a real message that changed with
+# no new problem behind it.
+BASELINE_NORMALIZE = (
+    # check 44 carries the owner's whole value, backticks included; the finding is
+    # "this citation lacks it", whatever it now is
+    (re.compile(r"\(now `.*`\)(?= and this paragraph)", re.S), "(now <value>)"),
+    # check 16: `blob def5678` -> `blob 8491f95` on every unrecorded edit
+    (re.compile(r"\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b"), "<blob>"),
+    # counts and line numbers: `570 lines, 106KB`, `_log.md:4`, `579 lines`.
+    # A number glued to a letter is an id and stays: R10, D4, AC1, v1.2
+    (re.compile(r"(?<![\w.])\d+(?:\.\d+)*"), "#"),
+)
+
+
+def finding_fingerprint(x: dict) -> str:
+    where = re.sub(r":\d+$", "", x["where"])          # `01-master-plan.md:73`
+    what = x["what"]
+    for rx, rep in BASELINE_NORMALIZE:
+        what = rx.sub(rep, what)
+    key = "\x1f".join((x["severity"], x["check"].split()[0], where, what))
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+
+
+def sort_findings(f: Findings | list[dict]) -> list[dict]:
+    items = f.items if isinstance(f, Findings) else f
+    order = {CONTRADICTION: 0, DRIFT: 1, POLISH: 2}
+    items.sort(key=lambda x: (order.get(x["severity"], 99), x.get("check", ""), x.get("where", "")))
+    return items
+
+
+def load_baseline(path: str | Path) -> Counter | str:
+    p = Path(path)
+    if not p.is_file():
+        return f"--baseline: file '{path}' does not exist — generate it with --write-baseline {path}"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return f"--baseline: file '{path}' is not valid JSON — generate it with --write-baseline {path}"
+    if not isinstance(data, dict) or data.get("audit_baseline") != 1:
+        return f"--baseline: file '{path}' missing 'audit_baseline: 1' — generate it with --write-baseline {path}"
+    findings = data.get("findings", [])
+    counter = Counter(x["fingerprint"] for x in findings if isinstance(x, dict) and "fingerprint" in x)
+    counter.entries = findings
+    return counter
+
+
+def write_baseline(f: Findings | list[dict], facts: dict, path: str | Path) -> None:
+    items = f.items if isinstance(f, Findings) else f
+    findings_to_write = []
+    for x in items:
+        fp = x.get("fingerprint") or finding_fingerprint(x)
+        x["fingerprint"] = fp
+        findings_to_write.append({
+            "fingerprint": fp,
+            "severity": x["severity"],
+            "check": x["check"],
+            "where": x["where"],
+            "what": x["what"],
+        })
+    findings_to_write.sort(key=lambda x: (x["fingerprint"], x["where"]))
+    feature = str(facts.get("feature") or "?")
+    payload = {
+        "audit_baseline": 1,
+        "feature": feature,
+        "findings": findings_to_write,
+    }
+    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    target = Path(path)
+    if target.parent:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    c_count = sum(1 for x in findings_to_write if x["severity"] == CONTRADICTION)
+    if c_count > 0:
+        print(f"baseline records {c_count} contradiction(s) — with --baseline they stop failing the run", file=sys.stderr)
+
+
+def apply_baseline(f: Findings | list[dict], counter: Counter) -> tuple[int, int, list[dict]]:
+    items = sort_findings(f)
+    matched = Counter()
+    for x in items:
+        fp = x.get("fingerprint") or finding_fingerprint(x)
+        x["fingerprint"] = fp
+        if matched[fp] < counter[fp]:
+            x["baseline"] = True
+            matched[fp] += 1
+        else:
+            x["baseline"] = False
+
+    new_cnt = sum(1 for x in items if not x["baseline"])
+    base_cnt = sum(1 for x in items if x["baseline"])
+
+    matched_left = Counter(matched)
+    gone_entries = []
+    for entry in getattr(counter, "entries", []):
+        fp = entry.get("fingerprint")
+        if matched_left[fp] > 0:
+            matched_left[fp] -= 1
+        else:
+            gone_entries.append(entry)
+
+    if not hasattr(counter, "entries"):
+        for fp, count in counter.items():
+            diff = count - matched[fp]
+            if diff > 0:
+                for _ in range(diff):
+                    gone_entries.append({"fingerprint": fp})
+
+    return new_cnt, base_cnt, gone_entries
 
 
 # --------------------------------------------------------------------------
@@ -1603,6 +1720,34 @@ def _git(root: Path, *args: str) -> str | None:
     return out.stdout.strip() if out.returncode == 0 else None
 
 
+def worktree_main_name(repo_root: Path) -> str | None:
+    """The main checkout's folder name when `repo_root` is a LINKED worktree, else None.
+
+    `git rev-parse --show-toplevel` in a worktree is the worktree's own folder, named
+    whatever `git worktree add` was given; the repository's name lives in the shared
+    git dir. Only asked of a real toplevel: the tests point `--repo-root` at fixture
+    dirs inside feature-spec, where git would answer for feature-spec instead."""
+    toplevel = _git(repo_root, "rev-parse", "--show-toplevel")
+    if not toplevel:
+        return None
+    try:
+        if Path(toplevel).resolve() != repo_root.resolve():
+            return None
+    except (OSError, ValueError):
+        return None
+    git_dir_raw = _git(repo_root, "rev-parse", "--git-dir")
+    common_raw = _git(repo_root, "rev-parse", "--git-common-dir")
+    if not git_dir_raw or not common_raw:
+        return None
+    git_dir = (repo_root / git_dir_raw).resolve()
+    common = (repo_root / common_raw).resolve()
+    if git_dir == common:
+        return None
+    if common.name == ".git":
+        return common.parent.name
+    return common.name.removesuffix(".git")
+
+
 def spec_tree(facts: dict, spec_dir: Path, repo_root: Path,
               root_is_real: bool) -> tuple[WorkTree, str | None]:
     """-> (the tree checks 18 and 20 resolve against, the checkout's own label).
@@ -3054,13 +3199,16 @@ def check_profile_identity(prof: str, spec_dir: Path, repo_root: Path,
     declared = str(profile.get("repo") or "").strip()
     if declared and not STARTER_PLACEHOLDER.match(declared) \
             and declared != repo_root.name:
-        f.add(CONTRADICTION, prof,
-              f"`repo: {declared}` but this checkout is `{repo_root.name}`",
-              "the profile came from another checkout — almost always a spec folder "
-              "copied between projects with the profile travelling along. Every `cmd` "
-              "in the set now belongs to a different repo and every one of them still "
-              "runs",
-              "15 profile coverage")
+        main = worktree_main_name(repo_root)
+        if declared != main:
+            here = f"`{repo_root.name}`" + (f" (a worktree of `{main}`)" if main else "")
+            f.add(CONTRADICTION, prof,
+                  f"`repo: {declared}` but this checkout is {here}",
+                  "the profile came from another checkout — almost always a spec folder "
+                  "copied between projects with the profile travelling along. Every `cmd` "
+                  "in the set now belongs to a different repo and every one of them still "
+                  "runs",
+                  "15 profile coverage")
 
     app = str(profile.get("app") or "").strip()
     if not app or STARTER_PLACEHOLDER.match(app):
@@ -3704,12 +3852,12 @@ LOG_MAX_LINES = 800
 # Lines undercount a log written in long paragraphs. Real case: 701 lines, 103KB — about
 # 26k tokens, well past what one read holds, and silent under the line threshold alone.
 LOG_MAX_BYTES = 80_000
+ROTATE_KEEP_ROUNDS = 5
 LOG_FILE_RECORD_ANY = re.compile(
     r"`?(?P<file>[\w./-]+\.(?:md|ya?ml|tpl|json))`?(?:\s*\((?P<inner>[^()]*)\))?")
 
 
 def git_blob(data: bytes) -> str:
-    import hashlib
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
@@ -3761,6 +3909,46 @@ def _fmt_version(nlines: int | None, blob: str | None) -> str:
     if blob:
         parts.append(f"blob {blob[:7]}")
     return ", ".join(parts) or "no version"
+
+
+def owning_set(target: Path, spec_dir: Path) -> Path | None:
+    """The set a file belongs to, when that set is not this one and keeps a log.
+    A set is a directory holding `_facts.yml` — the same thing check 44 resolves a
+    qualified citation to. Without a `_log.md` the owner accounts for nothing, and
+    the citing set's own record stays the only one."""
+    d = target.resolve().parent
+    if d == spec_dir.resolve():
+        return None
+    if (d / "_facts.yml").is_file() and (d / "_log.md").is_file():
+        return d
+    return None
+
+
+def _record_key(name: str, spec_dir: Path, repo_root: Path) -> str:
+    for base in (spec_dir, repo_root):
+        target = confined(base, name)
+        if target is not None and target.is_file():
+            return str(target.resolve())
+    return name
+
+
+def _last_records(text: str, spec_dir: Path,
+                  repo_root: Path) -> dict[str, tuple[str, int, str | None, int | None]]:
+    recorded: dict[str, tuple[str, int, str | None, int | None]] = {}
+    for fm in re.finditer(r"^\*\*(?:Read|Edits):\*\*.*$", text, re.M):
+        base = text[:fm.start()].count("\n") + 1
+        for m in LOG_FILE_RECORD_ANY.finditer(fm.group(0)):
+            raw_name = m.group("file")
+            inner = m.group("inner") or ""
+            lines = re.search(r"(\d+)\s*(?:lines?|líneas?)", inner)
+            blob = re.search(r"blob\s+([0-9a-f]{7,40})", inner)
+            short = re.fullmatch(r"\s*(\d+)\s*,\s*([0-9a-f]{7,40})\s*", inner)
+            if short:           # `(520, c732dbe)` — the same record, abbreviated
+                lines, blob = short, re.match(r".*?,\s*([0-9a-f]{7,40})", inner)
+            recorded[_record_key(raw_name, spec_dir, repo_root)] = (
+                raw_name, base, blob.group(1) if blob else None,
+                int(lines.group(1)) if lines else None)
+    return recorded
 
 
 def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
@@ -3844,20 +4032,17 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
     # Keyed by the file, not the spelling: one round writes `_facts.yml`, the next
     # `docs/features/<slug>/_facts.yml`, and a comparison by name would skip the
     # round in between — which is how a real set reported R11 against R9.
-    def key(name: str) -> str:
-        for base in (spec_dir, repo_root):
-            target = confined(base, name)
-            if target is not None and target.is_file():
-                return str(target.resolve())
-        return name
-
     known: dict[str, tuple[str, int | None, str | None]] = {}
     for e in entries:
         for name, nlines, blob in e["read"]:
             if Path(name).name == "_log.md":
                 continue    # grows by the entry being written; never compared
-            prev = known.get(key(name))
-            if prev and _version_differs(prev[1:], (nlines, blob)):
+            target = next((p for p in (confined(spec_dir, name), confined(repo_root, name))
+                           if p is not None and p.is_file()), None)
+            k = _record_key(name, spec_dir, repo_root)
+            prev = known.get(k)
+            is_owned = target is not None and owning_set(target, spec_dir) is not None
+            if not is_owned and prev and _version_differs(prev[1:], (nlines, blob)):
                 f.add(DRIFT, f"_log.md:{e['line']}",
                       f"`{e['id']}` read `{name}` at {_fmt_version(nlines, blob)}; "
                       f"`{prev[0]}` left it at {_fmt_version(prev[1], prev[2])} — "
@@ -3866,27 +4051,32 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
                       "the round that made it, or record it in this entry's "
                       "`**Edits:**` with what changed",
                       "16 handoff log")
-            known[key(name)] = (e["id"], nlines, blob)
+            known[k] = (e["id"], nlines, blob)
         for name, nlines, blob in e["edits"]:
-            known[key(name)] = (e["id"], nlines, blob)
+            known[_record_key(name, spec_dir, repo_root)] = (e["id"], nlines, blob)
+
+    owners: dict[Path, dict[str, tuple[str, int, str | None, int | None]]] = {}
+
+    def get_owner_records(owner: Path) -> dict[str, tuple[str, int, str | None, int | None]]:
+        if owner not in owners:
+            owner_log = owner / "_log.md"
+            records: dict[str, tuple[str, int, str | None, int | None]] = {}
+            if owner_log.is_file():
+                try:
+                    raw_owner = owner_log.read_text(encoding="utf-8")
+                    text_owner = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"),
+                                        raw_owner, flags=re.S)
+                    records = _last_records(text_owner, owner, repo_root)
+                except (OSError, UnicodeDecodeError):
+                    records = {}
+            owners[owner] = records
+        return owners[owner]
 
     # Only the fields that claim a version: `**Read:**` and `**Edits:**` lines. A
     # file named in narrative is not a claim about which version was read.
     # Keyed by the resolved path, keeping the original spelling for findings, so
     # the last record across all spellings is what is compared against disk.
-    recorded: dict[str, tuple[str, int, str | None, int | None]] = {}
-    for fm in re.finditer(r"^\*\*(?:Read|Edits):\*\*.*$", text, re.M):
-        base = text[:fm.start()].count("\n") + 1
-        for m in LOG_FILE_RECORD_ANY.finditer(fm.group(0)):
-            raw_name = m.group("file")
-            inner = m.group("inner") or ""
-            lines = re.search(r"(\d+)\s*(?:lines?|líneas?)", inner)
-            blob = re.search(r"blob\s+([0-9a-f]{7,40})", inner)
-            short = re.fullmatch(r"\s*(\d+)\s*,\s*([0-9a-f]{7,40})\s*", inner)
-            if short:           # `(520, c732dbe)` — the same record, abbreviated
-                lines, blob = short, re.match(r".*?,\s*([0-9a-f]{7,40})", inner)
-            recorded[key(raw_name)] = (raw_name, base, blob.group(1) if blob else None,
-                                       int(lines.group(1)) if lines else None)
+    recorded = _last_records(text, spec_dir, repo_root)
     for k, (name, ln, blob, nlines) in sorted(recorded.items()):
         target = next((p for p in (confined(spec_dir, name), confined(repo_root, name))
                        if p is not None and p.is_file()), None)
@@ -3910,20 +4100,46 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
         now_blob = git_blob(data)
         if (nlines is not None and nlines != now_lines) or \
                 (blob and not now_blob.startswith(blob)):
-            f.add(DRIFT, name,
-                  f"last recorded at _log.md:{ln} as "
-                  f"{nlines if nlines is not None else '?'} lines"
-                  + (f", blob {blob}" if blob else "")
-                  + f"; now {now_lines} lines, blob {now_blob[:7]}",
-                  "someone edited without recording it — or a round's stub never "
-                  "reached the disk. Append the entry that accounts for this version",
-                  "16 handoff log")
+            owner = owning_set(target, spec_dir)
+            if owner is not None:
+                owner_rec = get_owner_records(owner).get(str(target.resolve()))
+                if owner_rec is not None:
+                    _, o_ln, o_blob, o_nlines = owner_rec
+                    owner_matches = (o_nlines is None or o_nlines == now_lines) and \
+                        (not o_blob or now_blob.startswith(o_blob)) and \
+                        (o_nlines is not None or o_blob is not None)
+                    if owner_matches:
+                        continue
+                try:
+                    owner_rel = owner.relative_to(repo_root).as_posix()
+                except ValueError:
+                    owner_rel = str(owner)
+                account = f"last there: {_fmt_version(o_nlines, o_blob)}" if owner_rec else "not named there"
+                f.add(DRIFT, name,
+                      f"last recorded at _log.md:{ln} as "
+                      f"{nlines if nlines is not None else '?'} lines"
+                      + (f", blob {blob}" if blob else "")
+                      + f"; now {now_lines} lines, blob {now_blob[:7]}; "
+                      + f"owned by {owner_rel}, whose _log.md does not account for it either ({account})",
+                      f"the owning set edited it without a round — audit {owner_rel} and "
+                      "append the round there; this set needs no entry for it",
+                      "16 handoff log")
+            else:
+                f.add(DRIFT, name,
+                      f"last recorded at _log.md:{ln} as "
+                      f"{nlines if nlines is not None else '?'} lines"
+                      + (f", blob {blob}" if blob else "")
+                      + f"; now {now_lines} lines, blob {now_blob[:7]}",
+                      "someone edited without recording it — or a round's stub never "
+                      "reached the disk. Append the entry that accounts for this version",
+                      "16 handoff log")
 
     total, size = raw.count("\n"), len(raw.encode("utf-8"))
     if total > LOG_MAX_LINES or size > LOG_MAX_BYTES:
         f.add(POLISH, "_log.md",
               f"{total} lines, {size // 1000}KB — past what one read can hold",
-              "rotate, never summarize: references/handoff.md §Rotating the log",
+              "rotate, never summarize: `audit.py <dir> --rotate-plan` prints the "
+              "cut, the archive and the commands — references/handoff.md §Rotating the log",
               "16 handoff log")
 
 
@@ -3993,6 +4209,271 @@ def registry_index(text: str) -> list[str]:
     return out
 
 
+def version_stamp(name: str, data: bytes, what: str | None = None) -> str:
+    """`name` (N lines, blob abc1234[ — what]) — measured as check 16 re-measures."""
+    if what is not None:
+        if any(c in what for c in ("(", ")", "\n", "\r")):
+            raise ValueError(f"what cannot contain '(', ')' or newline: {what!r}")
+    nlines = data.count(b"\n")
+    blob = git_blob(data)[:7]
+    desc = f" — {what}" if what else ""
+    return f"`{name}` ({nlines} lines, blob {blob}{desc})"
+
+
+def _resolve_named(names: list[str], spec_dir: Path,
+                   repo_root: Path) -> tuple[list[tuple[str, Path]], list[str]]:
+    files: list[tuple[str, Path]] = []
+    missing: list[str] = []
+    for name in names:
+        target = next((p for p in (confined(spec_dir, name),
+                                   confined(repo_root, name))
+                       if p is not None and p.is_file()), None)
+        if target is None:
+            missing.append(name)
+        else:
+            files.append((name, target))
+    return files, missing
+
+
+def rotate_plan(facts: dict, spec_dir: Path,
+                today: datetime.date | None = None) -> tuple[int, str]:
+    """Derive the cut, archive name, stage carry and exact shell commands to
+    rotate `_log.md` without summarizing or losing a byte. Exits without auditing."""
+    log_path = spec_dir / "_log.md"
+    if not log_path.is_file():
+        return 0, f"nothing to rotate — 0 lines, 0KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
+
+    raw_bytes = log_path.read_bytes()
+    try:
+        raw = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return 1, "--rotate-plan: _log.md is not valid UTF-8"
+
+    total_lines = raw.count("\n")
+    total_bytes = len(raw_bytes)
+    total_kb = round(total_bytes / 1000)
+
+    # 1. Size gate (within both line and byte limits)
+    if total_lines <= LOG_MAX_LINES and total_bytes <= LOG_MAX_BYTES:
+        return 0, f"nothing to rotate — {total_lines} lines, {total_kb}KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
+
+    # Strip comments while preserving newlines for line counting
+    text = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), raw, flags=re.S)
+    heads = list(re.finditer(r"^## (R(\d+))\b(.*)$", text, re.M))
+
+    if not heads:
+        return 0, f"nothing to rotate — {total_lines} lines, {total_kb}KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
+
+    # 2. Refusals
+    # - the file does not end in \n
+    if not raw.endswith("\n"):
+        return 1, "--rotate-plan: _log.md does not end in newline"
+
+    # - the slug contains '
+    slug = str(facts.get("feature") or spec_dir.name)
+    if "'" in slug:
+        return 1, f"--rotate-plan: slug {slug!r} contains single quote"
+
+    class _RoundGroup:
+        def __init__(self, num: int, first_head: re.Match, start_line: int):
+            self.num = num
+            self.first_head = first_head
+            self.start_line = start_line
+            self.start_pos = first_head.start()
+            self.end_pos = len(text)
+            self.headings: list[re.Match] = [first_head]
+
+    groups: list[_RoundGroup] = []
+    last_n = 0
+    for h in heads:
+        n = int(h.group(2))
+        ln = text[:h.start()].count("\n") + 1
+        if groups and n == groups[-1].num:
+            groups[-1].headings.append(h)
+            continue
+        # - the round ids decrease
+        if n <= last_n:
+            return 1, f"--rotate-plan: round ids decrease in _log.md ({h.group(1)} after R{last_n})"
+        last_n = n
+        if groups:
+            groups[-1].end_pos = h.start()
+        groups.append(_RoundGroup(n, h, ln))
+
+    # Size gate: only one round group
+    if len(groups) <= 1:
+        return 0, f"nothing to rotate — {total_lines} lines, {total_kb}KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
+
+    preamble_lines = groups[0].start_line - 1
+    preamble_bytes = len(raw[:groups[0].start_pos].encode("utf-8"))
+
+    # Stage transitions
+    stage_pattern = re.compile(r"^\*\*Stage:\*\*\s*(\S+)\s*(?:→|->)\s*(\S+)", re.M)
+    real_transitions: list[tuple[int, int, str, str, str]] = []  # (group_idx, round_num, from, to, full_line)
+    carried_stages: list[tuple[int, int, str, str, str]] = []
+
+    for idx, grp in enumerate(groups):
+        grp_text = text[grp.start_pos:grp.end_pos]
+        for m in stage_pattern.finditer(grp_text):
+            fr = m.group(1).strip("`")
+            to = m.group(2).strip("`")
+            full_line = grp_text[m.start():grp_text.find("\n", m.start()) if grp_text.find("\n", m.start()) != -1 else len(grp_text)]
+            if fr != to:
+                real_transitions.append((idx, grp.num, fr, to, full_line))
+            else:
+                carried_stages.append((idx, grp.num, fr, to, full_line))
+
+    budget_lines = LOG_MAX_LINES // 2
+    budget_bytes = LOG_MAX_BYTES // 2
+
+    cut_group_idx = None
+    cut_reason = ""
+
+    if real_transitions:
+        last_trans_idx, last_trans_round, trans_from, trans_to, _ = real_transitions[-1]
+        if last_trans_idx > 0:
+            trans_cut_line = groups[last_trans_idx].start_line
+            trans_cut_pos = groups[last_trans_idx].start_pos
+            trans_kept_lines = preamble_lines + (total_lines - trans_cut_line + 1)
+            trans_kept_bytes = preamble_bytes + len(raw[trans_cut_pos:].encode("utf-8"))
+            if trans_kept_lines <= budget_lines and trans_kept_bytes <= budget_bytes:
+                cut_group_idx = last_trans_idx
+                cut_reason = f"last Stage transition at R{last_trans_round} (kept part fits budget)"
+            else:
+                if trans_kept_bytes > budget_bytes:
+                    why_exceed = f"transition at R{last_trans_round} would keep {round(trans_kept_bytes / 1000)}KB, which is over {budget_bytes // 1000}KB"
+                else:
+                    why_exceed = f"transition at R{last_trans_round} would keep {trans_kept_lines} lines, which is over {budget_lines} lines"
+                fallback_k = min(ROTATE_KEEP_ROUNDS, len(groups) - 1)
+                cut_group_idx = len(groups) - fallback_k
+                cut_reason = f"last {fallback_k} rounds kept ({why_exceed})"
+        else:
+            fallback_k = min(ROTATE_KEEP_ROUNDS, len(groups) - 1)
+            cut_group_idx = len(groups) - fallback_k
+            cut_reason = f"last {fallback_k} rounds kept (transition at R{last_trans_round} is in first round group)"
+    else:
+        fallback_k = min(ROTATE_KEEP_ROUNDS, len(groups) - 1)
+        cut_group_idx = len(groups) - fallback_k
+        if carried_stages:
+            carried_round = carried_stages[-1][1]
+            cut_reason = f"last {fallback_k} rounds kept (no Stage transition in _log.md; R{carried_round}'s is carried)"
+        else:
+            cut_reason = f"last {fallback_k} rounds kept (no Stage transition in _log.md)"
+
+    cut_group = groups[cut_group_idx]
+    cut_line = cut_group.start_line
+    cut_pos = cut_group.start_pos
+    arch_start = preamble_lines + 1
+    arch_end = cut_line - 1
+
+    first_arch_n = groups[0].num
+    last_arch_n = groups[cut_group_idx - 1].num
+    archive_name = f"_log-R{first_arch_n}-R{last_arch_n}.md"
+
+    # - the archive name already exists
+    if (spec_dir / archive_name).exists():
+        return 1, f"--rotate-plan: archive {archive_name} already exists"
+
+    arch_lines_count = arch_end - arch_start + 1
+    arch_bytes = len(raw[groups[0].start_pos:cut_pos].encode("utf-8"))
+    arch_kb = round(arch_bytes / 1000)
+
+    kept_lines_count = preamble_lines + (total_lines - cut_line + 1)
+    kept_bytes = preamble_bytes + len(raw[cut_pos:].encode("utf-8"))
+    kept_kb = round(kept_bytes / 1000)
+
+    raw_lines = raw.splitlines()
+    cut_head_line = raw_lines[cut_line - 1]
+    m_head = re.match(r"^(## \S+)", cut_head_line)
+    head_stub = (m_head.group(1) if m_head else f"## R{cut_group.num}") + " · …"
+
+    if preamble_lines > 0:
+        keep_span = f"lines 1–{preamble_lines} + {cut_line}–{total_lines}"
+    else:
+        keep_span = f"lines {cut_line}–{total_lines}"
+    keep_str = f"keep:    {keep_span} — {kept_lines_count} lines, {kept_kb}KB"
+
+    last_head_line = raw_lines[groups[-1].start_line - 1]
+    if re.search(r"\brotate\b", last_head_line):
+        round_str = f"round:   rotate round already open: `{last_head_line.strip()}`"
+    else:
+        today_val = today or datetime.date.today()
+        today_str = today_val.isoformat()
+        next_n = groups[-1].num + 1
+        round_str = f"round:   open the stub first: `## R{next_n} · {today_str} · <agent> · rotate`"
+
+    status = norm(facts.get("status")) or "draft"
+    stage_str = None
+    if status != "draft":
+        kept_text = raw[:groups[0].start_pos] + raw[cut_pos:]
+        kept_stages = stage_pattern.findall(kept_text)
+        if not kept_stages:
+            archived_real = [t for t in real_transitions if t[0] < cut_group_idx]
+            if archived_real:
+                _, real_n, real_from, real_to, _ = archived_real[-1]
+                carry_content = (f"**Stage:** {status} → {status} — carried, not a transition; "
+                                 f"the last real one (`{real_from} → {real_to}`, R{real_n}) is in {archive_name}")
+            else:
+                archived_carried = [c for c in carried_stages if c[0] < cut_group_idx]
+                if archived_carried:
+                    c_line = archived_carried[-1][4]
+                    m_prev = re.search(r"the last real one \((`[^`]+`), R(\d+)\) is in (\S+)", c_line)
+                    if m_prev:
+                        carry_content = (f"**Stage:** {status} → {status} — carried, not a transition; "
+                                         f"the last real one ({m_prev.group(1)}, R{m_prev.group(2)}) is in {m_prev.group(3)}")
+                    else:
+                        carry_content = f"**Stage:** {status} → {status} — carried, not a transition; in {archive_name}"
+                else:
+                    carry_content = f"**Stage:** {status} → {status} — carried, not a transition; in {archive_name}"
+            stage_str = f"stage:   carry `{carry_content}` in the rotate entry"
+
+    before_str = "before:  `audit.py <dir> --open` — its open findings are the `Carried open:` index"
+    after_str = f"after:   `audit.py <dir> --read-line {archive_name}` → the record for `Archived:` and `Edits:`; then the audit"
+
+    header_lines = [
+        f"# rotate plan — _log.md ({total_lines} lines, {total_kb}KB, blob {git_blob(raw_bytes)[:7]})",
+        f"cut:     line {cut_line}, before `{head_stub}` — {cut_reason}",
+        f"archive: {archive_name} — R{first_arch_n}–R{last_arch_n}, lines {arch_start}–{arch_end}, {arch_kb}KB",
+        keep_str,
+        round_str,
+    ]
+    if stage_str:
+        header_lines.append(stage_str)
+    header_lines.append(before_str)
+
+    prefix_lines = raw.splitlines(keepends=True)[:arch_end]
+    prefix_data = "".join(prefix_lines).encode("utf-8")
+    prefix_sha7 = git_blob(prefix_data)[:7]
+
+    fixed_header_lines = (
+        "'Archived rounds from _log.md. Historical record — never edited,' "
+        "'never summarized. New rounds continue in _log.md.' "
+        "'Read this file when a carried finding points into it.'"
+    )
+
+    if preamble_lines > 0:
+        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}' '' {fixed_header_lines} '' '---' ''; sed -n '{arch_start},{arch_end}p' _log.md; }} > {archive_name} && \\"
+        cmd_kept = f"{{ sed -n '1,{preamble_lines}p' _log.md; sed -n '{cut_line},$p' _log.md; }} > _log.md.kept && \\"
+        cmd_cmp = f"{{ sed -n '1,{preamble_lines}p' _log.md.kept; sed '1,8d' {archive_name}; sed '1,{preamble_lines}d' _log.md.kept; }} | cmp - _log.md && \\"
+    else:
+        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}' '' {fixed_header_lines} '' '---' ''; sed -n '1,{arch_end}p' _log.md; }} > {archive_name} && \\"
+        cmd_kept = f"{{ sed -n '{cut_line},$p' _log.md; }} > _log.md.kept && \\"
+        cmd_cmp = f"{{ sed '1,8d' {archive_name}; cat _log.md.kept; }} | cmp - _log.md && \\"
+
+    sh_commands = [
+        "```sh",
+        f"cd {spec_dir} && \\",
+        f"test \"$(head -n {arch_end} _log.md | git hash-object --stdin | cut -c1-7)\" = {prefix_sha7} && \\",
+        cmd_printf_sed,
+        cmd_kept,
+        cmd_cmp,
+        "mv _log.md.kept _log.md && echo rotated",
+        "```",
+    ]
+
+    output = "\n".join(header_lines) + "\n" + "\n".join(sh_commands) + "\n" + after_str
+    return 0, output
+
+
 def read_line(facts: dict, spec_dir: Path, repo_root: Path,
               names: list[str]) -> tuple[str, list[str]]:
     """-> (the `**Read:**` line, names that resolve to no file).
@@ -4010,14 +4491,7 @@ def read_line(facts: dict, spec_dir: Path, repo_root: Path,
     files: list[tuple[str, Path]] = []
     missing: list[str] = []
     if names:
-        for name in names:
-            target = next((p for p in (confined(spec_dir, name),
-                                       confined(repo_root, name))
-                           if p is not None and p.is_file()), None)
-            if target is None:
-                missing.append(name)
-            else:
-                files.append((name, target))
+        files, missing = _resolve_named(names, spec_dir, repo_root)
     else:
         files.append(("_facts.yml", spec_dir / "_facts.yml"))
         for entry in facts.get("docs") or []:
@@ -4041,9 +4515,43 @@ def read_line(facts: dict, spec_dir: Path, repo_root: Path,
     parts = []
     for name, target in files:
         data = target.read_bytes()
-        lines = data.count(b"\n")
-        parts.append(f"`{name}` ({lines} lines, blob {git_blob(data)[:7]})")
+        parts.append(version_stamp(name, data))
     return "**Read:** " + " · ".join(parts), missing
+
+
+def edits_line(spec_dir: Path, repo_root: Path,
+               items: list[str]) -> tuple[str, list[str]]:
+    """-> (the `**Edits:**` line, names that resolve to no file).
+
+    Each ITEM is either `FILE` or `FILE=WHAT`. If the whole argument resolves to a
+    file, it is taken as a file with no description; otherwise it is split at the
+    first `=` into a filename and a description.
+    """
+    resolved: list[tuple[str, Path, str | None]] = []
+    missing: list[str] = []
+    for item in items:
+        found, _ = _resolve_named([item], spec_dir, repo_root)
+        if found:
+            resolved.append((item, found[0][1], None))
+            continue
+        if "=" in item:
+            name, what = item.split("=", 1)
+            found, _ = _resolve_named([name], spec_dir, repo_root)
+            if found:
+                resolved.append((name, found[0][1], what))
+                continue
+            missing.append(name)
+        else:
+            missing.append(item)
+
+    if missing:
+        return "", missing
+
+    parts = []
+    for name, target, what in resolved:
+        data = target.read_bytes()
+        parts.append(version_stamp(name, data, what))
+    return "**Edits:** " + " · ".join(parts), []
 
 
 def _truncate_finding_line(line: str, maxlen: int = 160) -> str:
@@ -4551,9 +5059,24 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
            audited_as: str | None = None,
            today: datetime.date | None = None,
            matrix: dict | None = None,
-           tree: tuple[str, str] | None = None) -> int:
-    order = {CONTRADICTION: 0, DRIFT: 1, POLISH: 2}
-    f.items.sort(key=lambda x: (order[x["severity"]], x["check"], x["where"]))
+           tree: tuple[str, str] | None = None,
+           baseline: dict | None = None) -> int:
+    sort_findings(f)
+    for x in f.items:
+        if "fingerprint" not in x:
+            x["fingerprint"] = finding_fingerprint(x)
+    if baseline is None:
+        for x in f.items:
+            x.pop("baseline", None)
+
+    if baseline is not None:
+        has_failing_new = any(
+            not x.get("baseline", False) and x["severity"] in (CONTRADICTION, DRIFT)
+            for x in f.items
+        )
+        exit_code = 1 if has_failing_new else 0
+    else:
+        exit_code = 1 if f.count(CONTRADICTION) else 0
 
     if as_json:
         accepted_risks_json = []
@@ -4569,9 +5092,10 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
                           "matrix": matrix,
                           "tree": ({"checkout": tree[0], "spec": tree[1]} if tree
                                    else None),
-                          "deferred_docs": [d["file"] for d in deferred]},
+                          "deferred_docs": [d["file"] for d in deferred],
+                          "baseline": baseline},
                          indent=2, ensure_ascii=False))
-        return 1 if f.count(CONTRADICTION) else 0
+        return exit_code
 
     status = str(facts.get("status") or "draft")
     shown = (f"status: {declared_status}, audited AS `{audited_as}` — preview, the "
@@ -4587,11 +5111,22 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
             f"{d['file']} (stage {d['stage']})" for d in deferred))
     print()
 
-    if f.items:
+    new_items = [x for x in f.items if not x.get("baseline", False)] if baseline is not None else f.items
+    base_items = [x for x in f.items if x.get("baseline", False)] if baseline is not None else []
+
+    if new_items:
         print("## Findings\n")
-        for x in f.items:
+        for x in new_items:
             print(f"{x['where']}: {x['severity']}: {x['what']}. {x['fix']}.")
             print(f"    └ check {x['check']}")
+        print()
+
+    if baseline is not None:
+        print(f"## Baseline findings ({len(base_items)}, from {baseline['file']})\n")
+        for x in base_items:
+            print(_truncate_finding_line(f"{x['where']}: {x['severity']}: {x['what']}"))
+        if baseline["gone"] > 0:
+            print(f"{baseline['gone']} baseline finding(s) no longer reported — rewrite with --write-baseline to lock the gain in")
         print()
 
     have = {d["id"] for d in in_scope if d["exists"]}
@@ -4665,6 +5200,10 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
     c, d, p = f.count(CONTRADICTION), f.count(DRIFT), f.count(POLISH)
     verdict = (f"{c} contradictions, {d} drift, {p} polish" if f.items
                else "clean — every mechanized check passed")
+    if baseline is not None:
+        verdict += f" · {baseline['new']} new / {baseline['baseline']} baseline"
+        if baseline["gone"] > 0:
+            verdict += f", {baseline['gone']} gone"
     if deferred:
         verdict += f" · stage {status}: {len(deferred)} doc(s) not due yet"
     if risks:
@@ -4679,7 +5218,7 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
         verdict += (f" · {cands.total()} candidate(s) for the human pass, in "
                     f"{len(cands.by_check)} check(s)")
     print(verdict)
-    return 1 if c else 0
+    return exit_code
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -4688,6 +5227,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repo-root", default=None,
                     help="anchor/file resolution root (default: git toplevel)")
     ap.add_argument("--json", action="store_true")
+    bg = ap.add_mutually_exclusive_group()
+    bg.add_argument("--baseline", default=None, metavar="FILE",
+                    help="filter findings against a baseline JSON file, reporting only new ones")
+    bg.add_argument("--write-baseline", default=None, metavar="FILE",
+                    help="write current findings to a baseline JSON file and exit 0")
     ap.add_argument("--as-status", choices=sorted(STATUS_RANK, key=STATUS_RANK.get),
                     default=None,
                     help="audit the set as if `status:` already read STAGE — in "
@@ -4710,7 +5254,60 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the `**Read:**` line of a `_log.md` entry — line "
                          "count and blob of each FILE, or of every file of the set "
                          "when none is named — and exit without auditing")
+    ap.add_argument("--edits-line", nargs="+", default=None, metavar="FILE[=WHAT]",
+                    help="print the `**Edits:**` line of a `_log.md` entry — line "
+                         "count and blob of each FILE, with optional description "
+                         "after '=', and exit without auditing")
+    ap.add_argument("--entry", nargs="?", const="", default=None, metavar="[R<n>]",
+                    help="print a stub heading `## R<n>` for a `_log.md` entry "
+                         "together with --read-line and/or --edits-line")
+    ap.add_argument("--agent", default=None,
+                    help="agent identity for --entry heading")
+    ap.add_argument("--mode",
+                    choices=["author", "review", "implement", "validate", "verify", "sync"],
+                    default=None,
+                    help="mode/action for --entry heading")
+    ap.add_argument("--rotate-plan", action="store_true",
+                    help="print the cut, archive name, stage carry and exact shell "
+                         "commands to rotate _log.md, and exit without auditing")
     args = ap.parse_args(argv)
+    if args.baseline or args.write_baseline:
+        if args.open:
+            ap.error("--baseline/--write-baseline cannot be used with --open")
+        if args.index:
+            ap.error("--baseline/--write-baseline cannot be used with --index")
+        if args.read_line is not None:
+            ap.error("--baseline/--write-baseline cannot be used with --read-line")
+        if args.edits_line is not None:
+            ap.error("--baseline/--write-baseline cannot be used with --edits-line")
+        if args.entry is not None:
+            ap.error("--baseline/--write-baseline cannot be used with --entry")
+        if args.rotate_plan:
+            ap.error("--baseline/--write-baseline cannot be used with --rotate-plan")
+    if args.rotate_plan:
+        if args.baseline or args.write_baseline:
+            ap.error("--rotate-plan cannot be used with --baseline/--write-baseline")
+        if args.open:
+            ap.error("--rotate-plan cannot be used with --open")
+        if args.index:
+            ap.error("--rotate-plan cannot be used with --index")
+        if args.read_line is not None:
+            ap.error("--rotate-plan cannot be used with --read-line")
+        if args.edits_line is not None:
+            ap.error("--rotate-plan cannot be used with --edits-line")
+        if args.entry is not None:
+            ap.error("--rotate-plan cannot be used with --entry")
+    if args.write_baseline and args.as_status:
+        ap.error("--write-baseline cannot be used with --as-status")
+    if args.entry is not None:
+        if not args.agent:
+            ap.error("--agent is required with --entry")
+        if not args.mode:
+            ap.error("--mode is required with --entry")
+        if args.read_line is None and args.edits_line is None:
+            ap.error("--entry requires --read-line and/or --edits-line")
+    elif args.agent is not None or args.mode is not None:
+        ap.error("--agent and --mode require --entry")
     today = None
     if args.today:
         try:
@@ -4722,6 +5319,12 @@ def main(argv: list[str] | None = None) -> int:
     facts_path = spec_dir / "_facts.yml"
     if not facts_path.is_file():
         sys.exit(f"no _facts.yml in {spec_dir} — not a feature-spec set.")
+    loaded_baseline = None
+    if args.baseline:
+        loaded_baseline = load_baseline(args.baseline)
+        if isinstance(loaded_baseline, str):
+            print(loaded_baseline, file=sys.stderr)
+            return 2
     try:
         facts = load_facts(facts_path)
     except yaml.YAMLError as exc:
@@ -4754,17 +5357,71 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(lines))
         return 0
 
+    read_str = None
     if args.read_line is not None:
-        line, missing = read_line(facts, spec_dir, repo_root, args.read_line)
+        read_str, missing = read_line(facts, spec_dir, repo_root, args.read_line)
         if missing:
             sys.exit(f"--read-line: no such file under {spec_dir} or {repo_root}: "
                      + ", ".join(missing))
-        print(line)
-        if not args.read_line:
-            print("every file of the set is listed — `Read:` claims the ones you "
-                  "opened. Drop the rest, or name them: --read-line FILE ...",
-                  file=sys.stderr)
+
+    edits_str = None
+    if args.edits_line is not None:
+        try:
+            edits_str, missing = edits_line(spec_dir, repo_root, args.edits_line)
+        except ValueError as exc:
+            print(f"--edits-line: {exc}", file=sys.stderr)
+            return 2
+        if missing:
+            sys.exit(f"--edits-line: no such file under {spec_dir} or {repo_root}: "
+                     + ", ".join(missing))
+
+    if args.entry is not None or args.read_line is not None or args.edits_line is not None:
+        if args.entry is not None:
+            log_path = spec_dir / "_log.md"
+            last = 0
+            if log_path.is_file():
+                raw = log_path.read_text(encoding="utf-8")
+                clean = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), raw, flags=re.S)
+                heads = list(re.finditer(r"^## (R(\d+))\b(.*)$", clean, re.M))
+                for h in heads:
+                    last = max(last, int(h.group(2)))
+
+            if args.entry:
+                m = re.fullmatch(r"R?(\d+)", args.entry)
+                if not m:
+                    print(f"--entry: {args.entry!r} is not a valid round id (expected R<n>)", file=sys.stderr)
+                    return 2
+                n = int(m.group(1))
+                if n < last:
+                    print(f"--entry: R{n} is lower than last round R{last}", file=sys.stderr)
+                    return 2
+                entry_id = f"R{n}"
+            else:
+                entry_id = f"R{last + 1}"
+
+            entry_date = (today or datetime.date.today()).isoformat()
+            print(f"## {entry_id} · {entry_date} · {args.agent} · {args.mode}")
+            print(f"add `**Log read through:** R<k>` yourself — the log's last round is R{last}", file=sys.stderr)
+
+        if read_str is not None:
+            print(read_str)
+            if not args.read_line:
+                print("every file of the set is listed — `Read:` claims the ones you "
+                      "opened. Drop the rest, or name them: --read-line FILE ...",
+                      file=sys.stderr)
+        if edits_str is not None:
+            print(edits_str)
+
         return 0
+
+    if args.rotate_plan:
+        code, msg = rotate_plan(facts, spec_dir, today=today)
+        if msg:
+            if code == 0:
+                print(msg)
+            else:
+                print(msg, file=sys.stderr)
+        return code
 
     rank, in_scope, deferred = resolve_stage(facts, spec_dir)
     prose = {d["file"]: d["path"].read_text(encoding="utf-8")
@@ -4821,14 +5478,40 @@ def main(argv: list[str] | None = None) -> int:
     check_doc02_executability(facts, prose, in_scope, c)
     check_doc_freshness(facts, prose, rank, c)
 
+    baseline_dict = None
+    if args.baseline:
+        new_cnt, base_cnt, gone_entries = apply_baseline(f, loaded_baseline)
+        baseline_dict = {
+            "file": args.baseline,
+            "new": new_cnt,
+            "baseline": base_cnt,
+            "gone": len(gone_entries),
+            "gone_findings": gone_entries,
+        }
+
     audited_as = (args.as_status if args.as_status
                   and norm(args.as_status) != norm(declared_status) else None)
     matrix = (None if args.no_matrix or not prose
               else correspondence(facts, prose, in_scope))
+
+    if args.write_baseline:
+        try:
+            write_baseline(f, facts, args.write_baseline)
+        except OSError as exc:
+            print(f"--write-baseline: cannot write {args.write_baseline}: {exc}", file=sys.stderr)
+            return 2
+        report(f, c, facts, in_scope, deferred, prose, args.json,
+               declared_status=declared_status, audited_as=audited_as, today=today,
+               matrix=matrix,
+               tree=(checkout, tree.label) if tree.label else None,
+               baseline=None)
+        return 0
+
     return report(f, c, facts, in_scope, deferred, prose, args.json,
                   declared_status=declared_status, audited_as=audited_as, today=today,
                   matrix=matrix,
-                  tree=(checkout, tree.label) if tree.label else None)
+                  tree=(checkout, tree.label) if tree.label else None,
+                  baseline=baseline_dict)
 
 
 if __name__ == "__main__":

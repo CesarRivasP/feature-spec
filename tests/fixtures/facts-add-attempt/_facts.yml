@@ -1,0 +1,37 @@
+feature: facts-add-attempt
+status: draft
+profile: ../_profile.fixture.yml
+defects:
+  - id: D1
+    role: root_cause
+    basis: asserted
+    status: open
+    claim: 'el stream corta por buffer starvation'
+    falsified_by: 'un evento en vivo sin buffer starvation'
+    log_line: null
+    outcome: 'queda abierta como riesgo aceptado'
+    accepted:
+      by: 'Cesar Rivas'
+      decided_on: 2026-09-23
+      until: 2026-11-23
+      because: 'no hay eventos en vivo en la ventana'
+acceptance:
+  - { id: AC1, item: 'description cues play inside real dialogue gaps and never overlap dialogue', status: written, closes: D1,
+      attempts: [ { date: 2026-10-20, round: R57, outcome: passed, env: 'Vega Virtual Device, OS 1.2, Release aarch64, SDK 0.24.12112 — e2e-harness S07, run 2026-10-20T17-24-25-693Z-release, app commit e0567b5',
+                    note: 'ONE cue, the first: cue_0-11500 of the generated standard track fired at pos_ms=142, ducked and restored inside [0, 11500].
+The other 54, and the never-overlaps half, wait on an end-to-end watch (AC14)' }
+                ] }
+  # un comentario entre AC1 y AC2
+  - { id: AC2, item: 'description can be toggled on and off from the remote without interrupting playback', status: written }
+  - id: AC3
+    item: 'el stream reconecta en menos de 2s'
+    status: written
+    attempts:
+      - date: 2026-10-12
+        outcome: failed
+  - id: AC4
+    item: 'no hay frames descartados'
+    status: written # trailing comment after status
+  - 'AC5: plain-string criterion'
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
