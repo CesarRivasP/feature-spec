@@ -1604,6 +1604,12 @@ def _git(root: Path, *args: str) -> str | None:
 
 
 def worktree_main_name(repo_root: Path) -> str | None:
+    """The main checkout's folder name when `repo_root` is a LINKED worktree, else None.
+
+    `git rev-parse --show-toplevel` in a worktree is the worktree's own folder, named
+    whatever `git worktree add` was given; the repository's name lives in the shared
+    git dir. Only asked of a real toplevel: the tests point `--repo-root` at fixture
+    dirs inside feature-spec, where git would answer for feature-spec instead."""
     toplevel = _git(repo_root, "rev-parse", "--show-toplevel")
     if not toplevel:
         return None
