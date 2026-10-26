@@ -17,6 +17,7 @@ script FIRST, then the judgment pass over what it lists — in that order.
                              [--no-matrix] [--read-line [FILE ...]]
                              [--edits-line FILE[=WHAT] ...]
                              [--entry [R<n>] --agent NAME --mode ACTION] [--index]
+                             [--rotate-plan]
 
 It never executes `evidence.cmd` (protocol check 1b). A registry is a data file that
 travels between repos and agents; running commands out of it because it claims they
@@ -3851,6 +3852,7 @@ LOG_MAX_LINES = 800
 # Lines undercount a log written in long paragraphs. Real case: 701 lines, 103KB — about
 # 26k tokens, well past what one read holds, and silent under the line threshold alone.
 LOG_MAX_BYTES = 80_000
+ROTATE_KEEP_ROUNDS = 5
 LOG_FILE_RECORD_ANY = re.compile(
     r"`?(?P<file>[\w./-]+\.(?:md|ya?ml|tpl|json))`?(?:\s*\((?P<inner>[^()]*)\))?")
 
@@ -4136,7 +4138,8 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
     if total > LOG_MAX_LINES or size > LOG_MAX_BYTES:
         f.add(POLISH, "_log.md",
               f"{total} lines, {size // 1000}KB — past what one read can hold",
-              "rotate, never summarize: references/handoff.md §Rotating the log",
+              "rotate, never summarize: `audit.py <dir> --rotate-plan` prints the "
+              "cut, the archive and the commands — references/handoff.md §Rotating the log",
               "16 handoff log")
 
 
@@ -4230,6 +4233,245 @@ def _resolve_named(names: list[str], spec_dir: Path,
         else:
             files.append((name, target))
     return files, missing
+
+
+def rotate_plan(facts: dict, spec_dir: Path,
+                today: datetime.date | None = None) -> tuple[int, str]:
+    """Derive the cut, archive name, stage carry and exact shell commands to
+    rotate `_log.md` without summarizing or losing a byte. Exits without auditing."""
+    log_path = spec_dir / "_log.md"
+    if not log_path.is_file():
+        return 0, f"nothing to rotate — 0 lines, 0KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
+
+    raw_bytes = log_path.read_bytes()
+    try:
+        raw = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return 1, "--rotate-plan: _log.md is not valid UTF-8"
+
+    total_lines = raw.count("\n")
+    total_bytes = len(raw_bytes)
+    total_kb = round(total_bytes / 1000)
+
+    # 1. Size gate (within both line and byte limits)
+    if total_lines <= LOG_MAX_LINES and total_bytes <= LOG_MAX_BYTES:
+        return 0, f"nothing to rotate — {total_lines} lines, {total_kb}KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
+
+    # Strip comments while preserving newlines for line counting
+    text = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), raw, flags=re.S)
+    heads = list(re.finditer(r"^## (R(\d+))\b(.*)$", text, re.M))
+
+    if not heads:
+        return 0, f"nothing to rotate — {total_lines} lines, {total_kb}KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
+
+    # 2. Refusals
+    # - the file does not end in \n
+    if not raw.endswith("\n"):
+        return 1, "--rotate-plan: _log.md does not end in newline"
+
+    # - the slug contains '
+    slug = str(facts.get("feature") or spec_dir.name)
+    if "'" in slug:
+        return 1, f"--rotate-plan: slug {slug!r} contains single quote"
+
+    class _RoundGroup:
+        def __init__(self, num: int, first_head: re.Match, start_line: int):
+            self.num = num
+            self.first_head = first_head
+            self.start_line = start_line
+            self.start_pos = first_head.start()
+            self.end_pos = len(text)
+            self.headings: list[re.Match] = [first_head]
+
+    groups: list[_RoundGroup] = []
+    last_n = 0
+    for h in heads:
+        n = int(h.group(2))
+        ln = text[:h.start()].count("\n") + 1
+        if groups and n == groups[-1].num:
+            groups[-1].headings.append(h)
+            continue
+        # - the round ids decrease
+        if n <= last_n:
+            return 1, f"--rotate-plan: round ids decrease in _log.md ({h.group(1)} after R{last_n})"
+        last_n = n
+        if groups:
+            groups[-1].end_pos = h.start()
+        groups.append(_RoundGroup(n, h, ln))
+
+    # Size gate: only one round group
+    if len(groups) <= 1:
+        return 0, f"nothing to rotate — {total_lines} lines, {total_kb}KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
+
+    preamble_lines = groups[0].start_line - 1
+    preamble_bytes = len(raw[:groups[0].start_pos].encode("utf-8"))
+
+    # Stage transitions
+    stage_pattern = re.compile(r"^\*\*Stage:\*\*\s*(\S+)\s*(?:→|->)\s*(\S+)", re.M)
+    real_transitions: list[tuple[int, int, str, str, str]] = []  # (group_idx, round_num, from, to, full_line)
+    carried_stages: list[tuple[int, int, str, str, str]] = []
+
+    for idx, grp in enumerate(groups):
+        grp_text = text[grp.start_pos:grp.end_pos]
+        for m in stage_pattern.finditer(grp_text):
+            fr = m.group(1).strip("`")
+            to = m.group(2).strip("`")
+            full_line = grp_text[m.start():grp_text.find("\n", m.start()) if grp_text.find("\n", m.start()) != -1 else len(grp_text)]
+            if fr != to:
+                real_transitions.append((idx, grp.num, fr, to, full_line))
+            else:
+                carried_stages.append((idx, grp.num, fr, to, full_line))
+
+    budget_lines = LOG_MAX_LINES // 2
+    budget_bytes = LOG_MAX_BYTES // 2
+
+    cut_group_idx = None
+    cut_reason = ""
+
+    if real_transitions:
+        last_trans_idx, last_trans_round, trans_from, trans_to, _ = real_transitions[-1]
+        if last_trans_idx > 0:
+            trans_cut_line = groups[last_trans_idx].start_line
+            trans_cut_pos = groups[last_trans_idx].start_pos
+            trans_kept_lines = preamble_lines + (total_lines - trans_cut_line + 1)
+            trans_kept_bytes = preamble_bytes + len(raw[trans_cut_pos:].encode("utf-8"))
+            if trans_kept_lines <= budget_lines and trans_kept_bytes <= budget_bytes:
+                cut_group_idx = last_trans_idx
+                cut_reason = f"last Stage transition at R{last_trans_round} (kept part fits budget)"
+            else:
+                if trans_kept_bytes > budget_bytes:
+                    why_exceed = f"transition at R{last_trans_round} would keep {round(trans_kept_bytes / 1000)}KB, which is over {budget_bytes // 1000}KB"
+                else:
+                    why_exceed = f"transition at R{last_trans_round} would keep {trans_kept_lines} lines, which is over {budget_lines} lines"
+                fallback_k = min(ROTATE_KEEP_ROUNDS, len(groups) - 1)
+                cut_group_idx = len(groups) - fallback_k
+                cut_reason = f"last {fallback_k} rounds kept ({why_exceed})"
+        else:
+            fallback_k = min(ROTATE_KEEP_ROUNDS, len(groups) - 1)
+            cut_group_idx = len(groups) - fallback_k
+            cut_reason = f"last {fallback_k} rounds kept (transition at R{last_trans_round} is in first round group)"
+    else:
+        fallback_k = min(ROTATE_KEEP_ROUNDS, len(groups) - 1)
+        cut_group_idx = len(groups) - fallback_k
+        if carried_stages:
+            carried_round = carried_stages[-1][1]
+            cut_reason = f"last {fallback_k} rounds kept (no Stage transition in _log.md; R{carried_round}'s is carried)"
+        else:
+            cut_reason = f"last {fallback_k} rounds kept (no Stage transition in _log.md)"
+
+    cut_group = groups[cut_group_idx]
+    cut_line = cut_group.start_line
+    cut_pos = cut_group.start_pos
+    arch_start = preamble_lines + 1
+    arch_end = cut_line - 1
+
+    first_arch_n = groups[0].num
+    last_arch_n = groups[cut_group_idx - 1].num
+    archive_name = f"_log-R{first_arch_n}-R{last_arch_n}.md"
+
+    # - the archive name already exists
+    if (spec_dir / archive_name).exists():
+        return 1, f"--rotate-plan: archive {archive_name} already exists"
+
+    arch_lines_count = arch_end - arch_start + 1
+    arch_bytes = len(raw[groups[0].start_pos:cut_pos].encode("utf-8"))
+    arch_kb = round(arch_bytes / 1000)
+
+    kept_lines_count = preamble_lines + (total_lines - cut_line + 1)
+    kept_bytes = preamble_bytes + len(raw[cut_pos:].encode("utf-8"))
+    kept_kb = round(kept_bytes / 1000)
+
+    raw_lines = raw.splitlines()
+    cut_head_line = raw_lines[cut_line - 1]
+    m_head = re.match(r"^(## \S+)", cut_head_line)
+    head_stub = (m_head.group(1) if m_head else f"## R{cut_group.num}") + " · …"
+
+    if preamble_lines > 0:
+        keep_span = f"lines 1–{preamble_lines} + {cut_line}–{total_lines}"
+    else:
+        keep_span = f"lines {cut_line}–{total_lines}"
+    keep_str = f"keep:    {keep_span} — {kept_lines_count} lines, {kept_kb}KB"
+
+    last_head_line = raw_lines[groups[-1].start_line - 1]
+    if re.search(r"\brotate\b", last_head_line):
+        round_str = f"round:   rotate round already open: `{last_head_line.strip()}`"
+    else:
+        today_val = today or datetime.date.today()
+        today_str = today_val.isoformat()
+        next_n = groups[-1].num + 1
+        round_str = f"round:   open the stub first: `## R{next_n} · {today_str} · <agent> · rotate`"
+
+    status = norm(facts.get("status")) or "draft"
+    stage_str = None
+    if status != "draft":
+        kept_text = raw[:groups[0].start_pos] + raw[cut_pos:]
+        kept_stages = stage_pattern.findall(kept_text)
+        if not kept_stages:
+            archived_real = [t for t in real_transitions if t[0] < cut_group_idx]
+            if archived_real:
+                _, real_n, real_from, real_to, _ = archived_real[-1]
+                carry_content = (f"**Stage:** {status} → {status} — carried, not a transition; "
+                                 f"the last real one (`{real_from} → {real_to}`, R{real_n}) is in {archive_name}")
+            else:
+                archived_carried = [c for c in carried_stages if c[0] < cut_group_idx]
+                if archived_carried:
+                    c_line = archived_carried[-1][4]
+                    m_prev = re.search(r"the last real one \((`[^`]+`), R(\d+)\) is in (\S+)", c_line)
+                    if m_prev:
+                        carry_content = (f"**Stage:** {status} → {status} — carried, not a transition; "
+                                         f"the last real one ({m_prev.group(1)}, R{m_prev.group(2)}) is in {m_prev.group(3)}")
+                    else:
+                        carry_content = f"**Stage:** {status} → {status} — carried, not a transition; in {archive_name}"
+                else:
+                    carry_content = f"**Stage:** {status} → {status} — carried, not a transition; in {archive_name}"
+            stage_str = f"stage:   carry `{carry_content}` in the rotate entry"
+
+    before_str = "before:  `audit.py <dir> --open` — its open findings are the `Carried open:` index"
+    after_str = f"after:   `audit.py <dir> --read-line {archive_name}` → the record for `Archived:` and `Edits:`; then the audit"
+
+    header_lines = [
+        f"# rotate plan — _log.md ({total_lines} lines, {total_kb}KB, blob {git_blob(raw_bytes)[:7]})",
+        f"cut:     line {cut_line}, before `{head_stub}` — {cut_reason}",
+        f"archive: {archive_name} — R{first_arch_n}–R{last_arch_n}, lines {arch_start}–{arch_end}, {arch_kb}KB",
+        keep_str,
+        round_str,
+    ]
+    if stage_str:
+        header_lines.append(stage_str)
+    header_lines.append(before_str)
+
+    prefix_lines = raw.splitlines(keepends=True)[:arch_end]
+    prefix_data = "".join(prefix_lines).encode("utf-8")
+    prefix_sha7 = git_blob(prefix_data)[:7]
+
+    fixed_header_lines = (
+        "'Archived rounds from _log.md. Historical record — never edited,' "
+        "'never summarized. New rounds continue in _log.md.' "
+        "'Read this file when a carried finding points into it.'"
+    )
+
+    if preamble_lines > 0:
+        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}' '' {fixed_header_lines} '' '---' ''; sed -n '{arch_start},{arch_end}p' _log.md; }} > {archive_name} && \\"
+        cmd_kept = f"{{ sed -n '1,{preamble_lines}p' _log.md; sed -n '{cut_line},$p' _log.md; }} > _log.md.kept && \\"
+        cmd_cmp = f"{{ sed -n '1,{preamble_lines}p' _log.md.kept; sed '1,8d' {archive_name}; sed '1,{preamble_lines}d' _log.md.kept; }} | cmp - _log.md && \\"
+    else:
+        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}' '' {fixed_header_lines} '' '---' ''; sed -n '1,{arch_end}p' _log.md; }} > {archive_name} && \\"
+        cmd_kept = f"{{ sed -n '{cut_line},$p' _log.md; }} > _log.md.kept && \\"
+        cmd_cmp = f"{{ sed '1,8d' {archive_name}; cat _log.md.kept; }} | cmp - _log.md && \\"
+
+    sh_commands = [
+        "```sh",
+        f"cd {spec_dir} && \\",
+        f"test \"$(head -n {arch_end} _log.md | git hash-object --stdin | cut -c1-7)\" = {prefix_sha7} && \\",
+        cmd_printf_sed,
+        cmd_kept,
+        cmd_cmp,
+        "mv _log.md.kept _log.md && echo rotated",
+        "```",
+    ]
+
+    output = "\n".join(header_lines) + "\n" + "\n".join(sh_commands) + "\n" + after_str
+    return 0, output
 
 
 def read_line(facts: dict, spec_dir: Path, repo_root: Path,
@@ -5025,6 +5267,9 @@ def main(argv: list[str] | None = None) -> int:
                     choices=["author", "review", "implement", "validate", "verify", "sync"],
                     default=None,
                     help="mode/action for --entry heading")
+    ap.add_argument("--rotate-plan", action="store_true",
+                    help="print the cut, archive name, stage carry and exact shell "
+                         "commands to rotate _log.md, and exit without auditing")
     args = ap.parse_args(argv)
     if args.baseline or args.write_baseline:
         if args.open:
@@ -5037,6 +5282,21 @@ def main(argv: list[str] | None = None) -> int:
             ap.error("--baseline/--write-baseline cannot be used with --edits-line")
         if args.entry is not None:
             ap.error("--baseline/--write-baseline cannot be used with --entry")
+        if args.rotate_plan:
+            ap.error("--baseline/--write-baseline cannot be used with --rotate-plan")
+    if args.rotate_plan:
+        if args.baseline or args.write_baseline:
+            ap.error("--rotate-plan cannot be used with --baseline/--write-baseline")
+        if args.open:
+            ap.error("--rotate-plan cannot be used with --open")
+        if args.index:
+            ap.error("--rotate-plan cannot be used with --index")
+        if args.read_line is not None:
+            ap.error("--rotate-plan cannot be used with --read-line")
+        if args.edits_line is not None:
+            ap.error("--rotate-plan cannot be used with --edits-line")
+        if args.entry is not None:
+            ap.error("--rotate-plan cannot be used with --entry")
     if args.write_baseline and args.as_status:
         ap.error("--write-baseline cannot be used with --as-status")
     if args.entry is not None:
@@ -5153,6 +5413,15 @@ def main(argv: list[str] | None = None) -> int:
             print(edits_str)
 
         return 0
+
+    if args.rotate_plan:
+        code, msg = rotate_plan(facts, spec_dir, today=today)
+        if msg:
+            if code == 0:
+                print(msg)
+            else:
+                print(msg, file=sys.stderr)
+        return code
 
     rank, in_scope, deferred = resolve_stage(facts, spec_dir)
     prose = {d["file"]: d["path"].read_text(encoding="utf-8")

@@ -1331,6 +1331,10 @@ def log_size_counts_bytes() -> list[str]:
                 problems.append(f"log size: {rounds} rounds of 1.5KB "
                                 f"({'over' if expect else 'under'} 80KB, under 800 lines) "
                                 f"{'not ' if expect else ''}reported")
+            if expect and hit:
+                f16 = next(f for f in data["findings"] if f["check"].startswith("16") and "past what one read" in f["what"])
+                if "--rotate-plan" not in f16.get("fix", ""):
+                    problems.append("log size: POLISH remediation does not name --rotate-plan")
     return problems
 
 
@@ -1637,6 +1641,11 @@ def baseline_flag_errors() -> list[str]:
     if r5.returncode != 2:
         problems.append(f"--baseline with --open expected exit 2, got {r5.returncode}")
 
+    r6 = subprocess.run([sys.executable, str(AUDIT), str(fix), "--baseline", "b.json", "--rotate-plan"],
+                        capture_output=True, text=True)
+    if r6.returncode != 2:
+        problems.append(f"--baseline with --rotate-plan expected exit 2, got {r6.returncode}")
+
     return problems
 
 
@@ -1658,6 +1667,219 @@ def baseline_default_json_shape() -> list[str]:
                 problems.append(f"--json without flags: finding unexpectedly has baseline key: {f}")
     except json.JSONDecodeError as exc:
         problems.append(f"--json without flags invalid json: {exc}")
+    return problems
+
+
+def rotate_plan_round_trips() -> list[str]:
+    """`--rotate-plan` prints the cut, archive name, stage carry and exact shell
+    commands to rotate _log.md without losing a byte or summarizing."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "matrix"
+        shutil.copytree(FIXTURES / "matrix", spec)
+        base = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec)]
+
+        preamble = (
+            "# Handoff log — matrix\n\n"
+            "Append-only log for matrix feature.\n"
+        )
+        assert preamble.count("\n") == 3
+
+        entries = []
+        for i in range(37, 92):
+            extra = "**Stage:** draft → reviewed\n" if i == 40 else ""
+            entries.append(
+                f"## R{i} · 2026-09-30 · test · review\n"
+                f"**Read:** none\n"
+                f"**Log read through:** R{i - 1}\n"
+                f"{extra}"
+                + "x" * 1500 + "\n\n"
+            )
+        # R92 as two headings
+        entries.append(
+            "## R92-W1 · 2026-09-30 · test · review\n"
+            "**Read:** none\n"
+            "**Log read through:** R91\n"
+            + "x" * 750 + "\n\n"
+        )
+        entries.append(
+            "## R92-W2 · 2026-09-30 · test · review\n"
+            "**Read:** none\n"
+            "**Log read through:** R91\n"
+            + "x" * 750 + "\n\n"
+        )
+        for i in range(93, 97):
+            entries.append(
+                f"## R{i} · 2026-09-30 · test · review\n"
+                f"**Read:** none\n"
+                f"**Log read through:** R{i - 1}\n"
+                + "x" * 1500 + "\n\n"
+            )
+
+        orig_log = preamble + "".join(entries)
+        (spec / "_log.md").write_text(orig_log, encoding="utf-8")
+
+        # 1. Run --rotate-plan
+        plan_res = subprocess.run(base + ["--rotate-plan", "--today", "2026-10-26"],
+                                  capture_output=True, text=True)
+        if plan_res.returncode != 0:
+            problems.append(f"rotate_plan_round_trips: expected exit 0, got {plan_res.returncode}: {plan_res.stderr}")
+            return problems
+        plan_out = plan_res.stdout
+
+        if "_log-R37-R91.md" not in plan_out:
+            problems.append("rotate_plan_round_trips: plan did not name _log-R37-R91.md")
+        if "before `## R92-W1" not in plan_out:
+            problems.append("rotate_plan_round_trips: plan cut did not cut before ## R92-W1")
+        if "## R92-W2" in plan_out:
+            problems.append("rotate_plan_round_trips: plan cut wrongly named R92-W2")
+        if "last 5 rounds kept" not in plan_out:
+            problems.append("rotate_plan_round_trips: plan did not report fallback branch")
+        if "**Stage:** reviewed → reviewed — carried" not in plan_out:
+            problems.append("rotate_plan_round_trips: plan did not print reviewed -> reviewed carry line")
+
+        # Extract fenced sh block
+        m_sh = re.search(r"```sh\n(.*?)\n```", plan_out, re.S)
+        if not m_sh:
+            problems.append("rotate_plan_round_trips: no ```sh fenced block found in output")
+            return problems
+        sh_cmd = m_sh.group(1)
+
+        # 2. Run sh commands in temp dir
+        sh_res = subprocess.run(["sh", "-c", sh_cmd], capture_output=True, text=True)
+        if sh_res.returncode != 0 or "rotated" not in sh_res.stdout:
+            problems.append(f"rotate_plan_round_trips: sh execution failed (rc={sh_res.returncode}): {sh_res.stdout} {sh_res.stderr}")
+
+        archive_file = spec / "_log-R37-R91.md"
+        if not archive_file.is_file():
+            problems.append("rotate_plan_round_trips: archive file was not created")
+        else:
+            arch_lines = archive_file.read_text(encoding="utf-8").splitlines(keepends=True)
+            arch_body = "".join(arch_lines[8:])
+            kept_text = (spec / "_log.md").read_text(encoding="utf-8")
+            kept_lines = kept_text.splitlines(keepends=True)
+            kept_preamble = "".join(kept_lines[:3])
+            kept_rounds = "".join(kept_lines[3:])
+            reconstructed = kept_preamble + arch_body + kept_rounds
+            if reconstructed != orig_log:
+                problems.append("rotate_plan_round_trips: preamble + archive body + kept rounds != original log")
+
+        # 3. Audit check
+        audit_res = subprocess.run(base + ["--json"], capture_output=True, text=True)
+        audit_data = json.loads(audit_res.stdout)
+        if any("past what one read" in f.get("what", "") for f in audit_data["findings"]):
+            problems.append("rotate_plan_round_trips: audit still reports log size after rotation")
+
+        # Append rotate entry
+        rl_res = subprocess.run(base + ["--read-line", "_log-R37-R91.md"],
+                                capture_output=True, text=True).stdout.strip()
+        m_stage = re.search(r"(\*\*Stage:\*\* [^\n`]+)", plan_out)
+        stage_line = m_stage.group(1) if m_stage else ""
+        rotate_entry = (
+            f"\n## R97 · 2026-10-26 · test · rotate\n"
+            f"{rl_res}\n"
+            f"**Log read through:** R96\n"
+            f"{stage_line}\n"
+            f"**Archived:** `_log-R37-R91.md`\n"
+            f"**Edits:** `_log-R37-R91.md`\n"
+        )
+        with (spec / "_log.md").open("a", encoding="utf-8") as f:
+            f.write(rotate_entry)
+
+        audit_res2 = subprocess.run(base + ["--json"], capture_output=True, text=True)
+        audit_data2 = json.loads(audit_res2.stdout)
+        stage_drifts = [f for f in audit_data2["findings"] if f["check"].startswith("16") and "Stage:" in f.get("what", "")]
+        if stage_drifts:
+            problems.append(f"rotate_plan_round_trips: check 16 reports Stage findings after rotate entry: {stage_drifts}")
+
+        # 4. Stale plan test
+        (spec / "_log.md").write_text(orig_log, encoding="utf-8")
+        if archive_file.exists():
+            archive_file.unlink()
+        (spec / "_log.md.kept").unlink(missing_ok=True)
+
+        stale_log = preamble + "inserted line\n" + "".join(entries)
+        (spec / "_log.md").write_text(stale_log, encoding="utf-8")
+
+        stale_res = subprocess.run(["sh", "-c", sh_cmd], capture_output=True, text=True)
+        if stale_res.returncode == 0:
+            problems.append("rotate_plan_round_trips: stale plan commands should have failed")
+        if (spec / "_log.md").read_text(encoding="utf-8") != stale_log:
+            problems.append("rotate_plan_round_trips: stale plan commands modified _log.md")
+        if archive_file.exists():
+            problems.append("rotate_plan_round_trips: stale plan commands created archive file")
+        if (spec / "_log.md.kept").exists():
+            problems.append("rotate_plan_round_trips: stale plan commands created _log.md.kept")
+
+        # 5. Name taken test
+        (spec / "_log.md").write_text(orig_log, encoding="utf-8")
+        archive_file.write_text("existing content", encoding="utf-8")
+        taken_res = subprocess.run(base + ["--rotate-plan"], capture_output=True, text=True)
+        if taken_res.returncode == 0:
+            problems.append("rotate_plan_round_trips: plan should fail when archive name is taken")
+        if "_log-R37-R91.md" not in (taken_res.stdout + taken_res.stderr):
+            problems.append("rotate_plan_round_trips: error message did not name taken archive file")
+        if "```sh" in taken_res.stdout or "```sh" in taken_res.stderr:
+            problems.append("rotate_plan_round_trips: commands should not be printed when archive name is taken")
+
+    return problems
+
+
+def rotate_plan_cut_rule() -> list[str]:
+    """`--rotate-plan` cut rule: keeps from last real Stage transition when it fits
+    the budget, and exits 0 with nothing to rotate when under both limits."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "matrix"
+        shutil.copytree(FIXTURES / "matrix", spec)
+        base = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec)]
+
+        preamble = (
+            "# Handoff log — matrix\n\n"
+            "Append-only log for matrix feature.\n"
+        )
+        entries = []
+        for i in range(37, 97):
+            extra = "**Stage:** draft → reviewed\n" if i == 90 else ""
+            entries.append(
+                f"## R{i} · 2026-09-30 · test · review\n"
+                f"**Read:** none\n"
+                f"**Log read through:** R{i - 1}\n"
+                f"{extra}"
+                + "x" * 1500 + "\n\n"
+            )
+
+        (spec / "_log.md").write_text(preamble + "".join(entries), encoding="utf-8")
+
+        res = subprocess.run(base + ["--rotate-plan"], capture_output=True, text=True)
+        if res.returncode != 0:
+            problems.append(f"rotate_plan_cut_rule: expected exit 0, got {res.returncode}: {res.stderr}")
+        else:
+            out = res.stdout
+            if "before `## R90" not in out:
+                problems.append(f"rotate_plan_cut_rule: plan did not cut at R90: {out[:200]}")
+            if "_log-R37-R89.md" not in out:
+                problems.append(f"rotate_plan_cut_rule: plan archive name != _log-R37-R89.md: {out[:200]}")
+            if "stage:   carry" in out:
+                problems.append("rotate_plan_cut_rule: plan should not print carry line when transition is kept")
+
+        # 20-round log under limits
+        under_entries = [
+            f"## R{i} · 2026-09-30 · test · review\n"
+            f"**Read:** none\n"
+            f"**Log read through:** R{i - 1}\n"
+            + "x" * 1500 + "\n\n"
+            for i in range(1, 21)
+        ]
+        (spec / "_log.md").write_text(preamble + "".join(under_entries), encoding="utf-8")
+        under_res = subprocess.run(base + ["--rotate-plan"], capture_output=True, text=True)
+        if under_res.returncode != 0:
+            problems.append(f"rotate_plan_cut_rule: under limits expected exit 0, got {under_res.returncode}")
+        if "nothing to rotate" not in under_res.stdout:
+            problems.append(f"rotate_plan_cut_rule: expected 'nothing to rotate', got: {under_res.stdout}")
+        if "```sh" in under_res.stdout:
+            problems.append("rotate_plan_cut_rule: under limits should have no sh block")
+
     return problems
 
 
@@ -1694,6 +1916,10 @@ def main() -> int:
     failures += edits_line_round_trips()
     total += 1
     failures += entry_stub_shape()
+    total += 1
+    failures += rotate_plan_round_trips()
+    total += 1
+    failures += rotate_plan_cut_rule()
     total += 1
     failures += paths_resolve_on_the_spec_branch()
     total += 1
