@@ -1603,6 +1603,28 @@ def _git(root: Path, *args: str) -> str | None:
     return out.stdout.strip() if out.returncode == 0 else None
 
 
+def worktree_main_name(repo_root: Path) -> str | None:
+    toplevel = _git(repo_root, "rev-parse", "--show-toplevel")
+    if not toplevel:
+        return None
+    try:
+        if Path(toplevel).resolve() != repo_root.resolve():
+            return None
+    except (OSError, ValueError):
+        return None
+    git_dir_raw = _git(repo_root, "rev-parse", "--git-dir")
+    common_raw = _git(repo_root, "rev-parse", "--git-common-dir")
+    if not git_dir_raw or not common_raw:
+        return None
+    git_dir = (repo_root / git_dir_raw).resolve()
+    common = (repo_root / common_raw).resolve()
+    if git_dir == common:
+        return None
+    if common.name == ".git":
+        return common.parent.name
+    return common.name.removesuffix(".git")
+
+
 def spec_tree(facts: dict, spec_dir: Path, repo_root: Path,
               root_is_real: bool) -> tuple[WorkTree, str | None]:
     """-> (the tree checks 18 and 20 resolve against, the checkout's own label).
@@ -3054,13 +3076,16 @@ def check_profile_identity(prof: str, spec_dir: Path, repo_root: Path,
     declared = str(profile.get("repo") or "").strip()
     if declared and not STARTER_PLACEHOLDER.match(declared) \
             and declared != repo_root.name:
-        f.add(CONTRADICTION, prof,
-              f"`repo: {declared}` but this checkout is `{repo_root.name}`",
-              "the profile came from another checkout — almost always a spec folder "
-              "copied between projects with the profile travelling along. Every `cmd` "
-              "in the set now belongs to a different repo and every one of them still "
-              "runs",
-              "15 profile coverage")
+        main = worktree_main_name(repo_root)
+        if declared != main:
+            here = f"`{repo_root.name}`" + (f" (a worktree of `{main}`)" if main else "")
+            f.add(CONTRADICTION, prof,
+                  f"`repo: {declared}` but this checkout is {here}",
+                  "the profile came from another checkout — almost always a spec folder "
+                  "copied between projects with the profile travelling along. Every `cmd` "
+                  "in the set now belongs to a different repo and every one of them still "
+                  "runs",
+                  "15 profile coverage")
 
     app = str(profile.get("app") or "").strip()
     if not app or STARTER_PLACEHOLDER.match(app):

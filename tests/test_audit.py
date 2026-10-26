@@ -1004,6 +1004,77 @@ def paths_resolve_on_the_spec_branch() -> list[str]:
     return problems
 
 
+def profile_identity_survives_worktrees() -> list[str]:
+    """Check 15 compares `repo:` against the checkout's basename. In a linked
+    worktree, the checkout is named for the worktree, not the repo, which raised a
+    false CONTRADICTION. Resolving the main checkout's name keeps worktrees clean,
+    flags genuine foreign profiles with both names, and still fires when a repo is
+    copied to a new directory."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = Path(tmp_dir)
+        repo = tmp / "Hackathon"
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        (repo / "README.md").write_text("# Hackathon\n")
+
+        docs_feat = repo / "docs" / "features"
+        docs_feat.mkdir(parents=True)
+        prof = docs_feat / "_profile.yml"
+        prof.write_text("repo: Hackathon\ncommands:\n  tests: pytest\n")
+
+        spec = docs_feat / "x"
+        spec.mkdir()
+        (spec / "_facts.yml").write_text(
+            "feature: x\n"
+            "status: draft\n"
+            "profile: _profile.yml\n"
+            "defects: []\n"
+            "acceptance: []\n"
+            "docs:\n"
+            "  - { id: \"01\", file: 01-master-plan.md, role: master-plan, stage: draft }\n"
+        )
+        (spec / "01-master-plan.md").write_text("# Master Plan\n\nSome plan.\n")
+
+        git(repo, "add", ".")
+        git(repo, "commit", "-q", "-m", "init")
+
+        def run_spec(target_spec: Path) -> list[dict]:
+            out = subprocess.run([sys.executable, str(AUDIT), str(target_spec), "--json"],
+                                 capture_output=True, text=True)
+            if out.returncode not in (0, 1):
+                raise AssertionError(f"worktree test: audit.py crashed\n{out.stderr}")
+            return json.loads(out.stdout).get("findings", [])
+
+        # 1. Main checkout: sin finding 15 'but this checkout is'
+        fs1 = run_spec(spec)
+        if matches(fs1, "15", "but this checkout is"):
+            problems.append("worktree: main checkout unexpectedly reported check 15 'but this checkout is'")
+
+        # 2. Linked worktree: sin ese finding
+        git(repo, "worktree", "add", "-b", "wt", str(tmp / "fresh-clone-assets"))
+        wt_spec = tmp / "fresh-clone-assets" / "docs" / "features" / "x"
+        fs2 = run_spec(wt_spec)
+        if matches(fs2, "15", "but this checkout is"):
+            problems.append("worktree: linked worktree falsely reported check 15 'but this checkout is'")
+
+        # 3. Copytree a tmp/copied-elsewhere -> finding 15 con 'but this checkout is `copied-elsewhere`'
+        shutil.copytree(repo, tmp / "copied-elsewhere")
+        cp_spec = tmp / "copied-elsewhere" / "docs" / "features" / "x"
+        fs3 = run_spec(cp_spec)
+        if not matches(fs3, "15", "but this checkout is `copied-elsewhere`"):
+            problems.append("worktree: copytree to copied-elsewhere did not report check 15 with 'but this checkout is `copied-elsewhere`'")
+
+        # 4. En worktree profile repo: some-other-checkout -> finding con '(a worktree of `Hackathon`)'
+        wt_prof = tmp / "fresh-clone-assets" / "docs" / "features" / "_profile.yml"
+        wt_prof.write_text("repo: some-other-checkout\ncommands:\n  tests: pytest\n")
+        fs4 = run_spec(wt_spec)
+        if not matches(fs4, "15", "(a worktree of `Hackathon`)"):
+            problems.append("worktree: profile mismatch in worktree did not report '(a worktree of `Hackathon`)'")
+
+    return problems
+
+
 def yaml_errors_name_their_position() -> list[str]:
     """A missing comma after `absence: true` inside a flow mapping came back as a
     raw `ComposerError`. The 36 checks never ran, and nothing said where to look.
@@ -1230,6 +1301,8 @@ def main() -> int:
     failures += read_line_round_trips()
     total += 1
     failures += paths_resolve_on_the_spec_branch()
+    total += 1
+    failures += profile_identity_survives_worktrees()
     total += 1
     failures += yaml_errors_name_their_position()
     for fixture, extra, expect, reject in FLAG_CASES:
