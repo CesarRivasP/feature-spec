@@ -3796,6 +3796,46 @@ def _fmt_version(nlines: int | None, blob: str | None) -> str:
     return ", ".join(parts) or "no version"
 
 
+def owning_set(target: Path, spec_dir: Path) -> Path | None:
+    """The set a file belongs to, when that set is not this one and keeps a log.
+    A set is a directory holding `_facts.yml` — the same thing check 44 resolves a
+    qualified citation to. Without a `_log.md` the owner accounts for nothing, and
+    the citing set's own record stays the only one."""
+    d = target.resolve().parent
+    if d == spec_dir.resolve():
+        return None
+    if (d / "_facts.yml").is_file() and (d / "_log.md").is_file():
+        return d
+    return None
+
+
+def _record_key(name: str, spec_dir: Path, repo_root: Path) -> str:
+    for base in (spec_dir, repo_root):
+        target = confined(base, name)
+        if target is not None and target.is_file():
+            return str(target.resolve())
+    return name
+
+
+def _last_records(text: str, spec_dir: Path,
+                  repo_root: Path) -> dict[str, tuple[str, int, str | None, int | None]]:
+    recorded: dict[str, tuple[str, int, str | None, int | None]] = {}
+    for fm in re.finditer(r"^\*\*(?:Read|Edits):\*\*.*$", text, re.M):
+        base = text[:fm.start()].count("\n") + 1
+        for m in LOG_FILE_RECORD_ANY.finditer(fm.group(0)):
+            raw_name = m.group("file")
+            inner = m.group("inner") or ""
+            lines = re.search(r"(\d+)\s*(?:lines?|líneas?)", inner)
+            blob = re.search(r"blob\s+([0-9a-f]{7,40})", inner)
+            short = re.fullmatch(r"\s*(\d+)\s*,\s*([0-9a-f]{7,40})\s*", inner)
+            if short:           # `(520, c732dbe)` — the same record, abbreviated
+                lines, blob = short, re.match(r".*?,\s*([0-9a-f]{7,40})", inner)
+            recorded[_record_key(raw_name, spec_dir, repo_root)] = (
+                raw_name, base, blob.group(1) if blob else None,
+                int(lines.group(1)) if lines else None)
+    return recorded
+
+
 def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
                         f: Findings) -> None:
     """Check 16, the half that is parsing. Round ids, the three required fields,
@@ -3877,20 +3917,17 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
     # Keyed by the file, not the spelling: one round writes `_facts.yml`, the next
     # `docs/features/<slug>/_facts.yml`, and a comparison by name would skip the
     # round in between — which is how a real set reported R11 against R9.
-    def key(name: str) -> str:
-        for base in (spec_dir, repo_root):
-            target = confined(base, name)
-            if target is not None and target.is_file():
-                return str(target.resolve())
-        return name
-
     known: dict[str, tuple[str, int | None, str | None]] = {}
     for e in entries:
         for name, nlines, blob in e["read"]:
             if Path(name).name == "_log.md":
                 continue    # grows by the entry being written; never compared
-            prev = known.get(key(name))
-            if prev and _version_differs(prev[1:], (nlines, blob)):
+            target = next((p for p in (confined(spec_dir, name), confined(repo_root, name))
+                           if p is not None and p.is_file()), None)
+            k = _record_key(name, spec_dir, repo_root)
+            prev = known.get(k)
+            is_owned = target is not None and owning_set(target, spec_dir) is not None
+            if not is_owned and prev and _version_differs(prev[1:], (nlines, blob)):
                 f.add(DRIFT, f"_log.md:{e['line']}",
                       f"`{e['id']}` read `{name}` at {_fmt_version(nlines, blob)}; "
                       f"`{prev[0]}` left it at {_fmt_version(prev[1], prev[2])} — "
@@ -3899,27 +3936,32 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
                       "the round that made it, or record it in this entry's "
                       "`**Edits:**` with what changed",
                       "16 handoff log")
-            known[key(name)] = (e["id"], nlines, blob)
+            known[k] = (e["id"], nlines, blob)
         for name, nlines, blob in e["edits"]:
-            known[key(name)] = (e["id"], nlines, blob)
+            known[_record_key(name, spec_dir, repo_root)] = (e["id"], nlines, blob)
+
+    owners: dict[Path, dict[str, tuple[str, int, str | None, int | None]]] = {}
+
+    def get_owner_records(owner: Path) -> dict[str, tuple[str, int, str | None, int | None]]:
+        if owner not in owners:
+            owner_log = owner / "_log.md"
+            records: dict[str, tuple[str, int, str | None, int | None]] = {}
+            if owner_log.is_file():
+                try:
+                    raw_owner = owner_log.read_text(encoding="utf-8")
+                    text_owner = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"),
+                                        raw_owner, flags=re.S)
+                    records = _last_records(text_owner, owner, repo_root)
+                except (OSError, UnicodeDecodeError):
+                    records = {}
+            owners[owner] = records
+        return owners[owner]
 
     # Only the fields that claim a version: `**Read:**` and `**Edits:**` lines. A
     # file named in narrative is not a claim about which version was read.
     # Keyed by the resolved path, keeping the original spelling for findings, so
     # the last record across all spellings is what is compared against disk.
-    recorded: dict[str, tuple[str, int, str | None, int | None]] = {}
-    for fm in re.finditer(r"^\*\*(?:Read|Edits):\*\*.*$", text, re.M):
-        base = text[:fm.start()].count("\n") + 1
-        for m in LOG_FILE_RECORD_ANY.finditer(fm.group(0)):
-            raw_name = m.group("file")
-            inner = m.group("inner") or ""
-            lines = re.search(r"(\d+)\s*(?:lines?|líneas?)", inner)
-            blob = re.search(r"blob\s+([0-9a-f]{7,40})", inner)
-            short = re.fullmatch(r"\s*(\d+)\s*,\s*([0-9a-f]{7,40})\s*", inner)
-            if short:           # `(520, c732dbe)` — the same record, abbreviated
-                lines, blob = short, re.match(r".*?,\s*([0-9a-f]{7,40})", inner)
-            recorded[key(raw_name)] = (raw_name, base, blob.group(1) if blob else None,
-                                       int(lines.group(1)) if lines else None)
+    recorded = _last_records(text, spec_dir, repo_root)
     for k, (name, ln, blob, nlines) in sorted(recorded.items()):
         target = next((p for p in (confined(spec_dir, name), confined(repo_root, name))
                        if p is not None and p.is_file()), None)
@@ -3943,14 +3985,39 @@ def check_log_integrity(facts: dict, spec_dir: Path, repo_root: Path,
         now_blob = git_blob(data)
         if (nlines is not None and nlines != now_lines) or \
                 (blob and not now_blob.startswith(blob)):
-            f.add(DRIFT, name,
-                  f"last recorded at _log.md:{ln} as "
-                  f"{nlines if nlines is not None else '?'} lines"
-                  + (f", blob {blob}" if blob else "")
-                  + f"; now {now_lines} lines, blob {now_blob[:7]}",
-                  "someone edited without recording it — or a round's stub never "
-                  "reached the disk. Append the entry that accounts for this version",
-                  "16 handoff log")
+            owner = owning_set(target, spec_dir)
+            if owner is not None:
+                owner_rec = get_owner_records(owner).get(str(target.resolve()))
+                if owner_rec is not None:
+                    _, o_ln, o_blob, o_nlines = owner_rec
+                    owner_matches = (o_nlines is None or o_nlines == now_lines) and \
+                        (not o_blob or now_blob.startswith(o_blob)) and \
+                        (o_nlines is not None or o_blob is not None)
+                    if owner_matches:
+                        continue
+                try:
+                    owner_rel = owner.relative_to(repo_root).as_posix()
+                except ValueError:
+                    owner_rel = str(owner)
+                account = f"last there: {_fmt_version(o_nlines, o_blob)}" if owner_rec else "not named there"
+                f.add(DRIFT, name,
+                      f"last recorded at _log.md:{ln} as "
+                      f"{nlines if nlines is not None else '?'} lines"
+                      + (f", blob {blob}" if blob else "")
+                      + f"; now {now_lines} lines, blob {now_blob[:7]}; "
+                      + f"owned by {owner_rel}, whose _log.md does not account for it either ({account})",
+                      f"the owning set edited it without a round — audit {owner_rel} and "
+                      "append the round there; this set needs no entry for it",
+                      "16 handoff log")
+            else:
+                f.add(DRIFT, name,
+                      f"last recorded at _log.md:{ln} as "
+                      f"{nlines if nlines is not None else '?'} lines"
+                      + (f", blob {blob}" if blob else "")
+                      + f"; now {now_lines} lines, blob {now_blob[:7]}",
+                      "someone edited without recording it — or a round's stub never "
+                      "reached the disk. Append the entry that accounts for this version",
+                      "16 handoff log")
 
     total, size = raw.count("\n"), len(raw.encode("utf-8"))
     if total > LOG_MAX_LINES or size > LOG_MAX_BYTES:

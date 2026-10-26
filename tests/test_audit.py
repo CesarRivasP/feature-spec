@@ -458,6 +458,18 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("44", "01-master-plan.md:4"),            # clean: carries verbatim 24
       ("35", "rail_budget"),                    # derived_from inherits, clean for 35
       ("30", "rail_budget")]),                  # parent has n: 3 and spread, clean for 30
+
+    # §16 — a file owned by another set (its directory holds _facts.yml and _log.md)
+    # is accounted for by that set's log. Real case: e2e-harness R13/R15/R16 were empty
+    # rounds appended only to copy interstice's _facts.yml blob.
+    ("cross-set-log/docs/features/citer-b",
+     [("16", "owned by docs/features/owner-a, whose _log.md does not account for it"),  # 01 edited in A, unlogged
+      ("16", "@docs/features/owner-c/_facts.yml")],         # owner with no log: today's rule
+     [("16", "@docs/features/owner-a/_facts.yml"),          # A logged vA2; B carries nothing
+      ("16", "edited between rounds")]),                     # R2 read vA2 after R1 left vA1
+    ("cross-set-log/docs/features/owner-a",
+     [("16", "@01-master-plan.md")],                         # the owner reports its own unlogged edit
+     [("16", "@_facts.yml")]),
 ]
 
 # (fixture, extra args, expect, reject) — cases that only exist under a flag.
