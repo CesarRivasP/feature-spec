@@ -423,11 +423,13 @@ acceptance: []          # Definition-of-Done items (shared across docs).
                         #     item: 'la grilla abre con 4 tiles en vivo'
                         #     status: written            # written | executed | approved | retired
                         #     closes: D1                 # optional: defect id whose accepted risk this settles
-                        #     attempts:                  # optional, append-only, oldest first
+                        #     attempts:                  # optional, append-only, oldest first (`facts.py add-attempt`)
                         #       - date: YYYY-MM-DD
+                        #         round: R<n>              # optional: the round that ran it
                         #         outcome: aborted_no_conditions   # aborted_no_conditions | failed | passed
                         #         aborted_because: 'no live event available in the window'
                         #         env: 'production-release-1.4.3, Fire TV Cube'
+                        #         note: '...'              # optional free text
                         #
                         #   A `[MANUAL]` step in doc 02 records its run HERE, on the
                         #   criterion it verifies — `status: executed`, `verified_on:`,
