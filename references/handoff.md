@@ -53,11 +53,17 @@ Required fields. A missing one is an audit finding, not a style choice. **The la
 
 ```bash
 python3 scripts/audit.py docs/features/<slug>/ --read-line [FILE ...]   # the whole `**Read:**` line
+python3 scripts/audit.py docs/features/<slug>/ --edits-line FILE[=WHAT] ...   # the `**Edits:**` line
+python3 scripts/audit.py docs/features/<slug>/ --entry [R<n>] --agent NAME --mode ACTION --read-line ... [--edits-line ...]  # entry stub
 git hash-object <file>        # blob sha, needs no commit and no staging
 shasum -a 256 <file> | cut -c1-7   # fallback outside a git repo
 ```
 
 `--read-line` prints the line ready to paste, each file measured the way check 16 will re-measure it. With no `FILE` it lists every file of the set — the registry, each `docs[]` file on disk, the profile. **Keep the ones you opened:** `Read:` claims what was read, not what exists, and a line naming a file nobody opened is the fabrication this field exists to make checkable.
+
+`--edits-line FILE[=WHAT] ...` prints the `**Edits:**` line for the files modified, with an optional description after `=`. Descriptions must not contain `(`, `)` or a newline: check 16 reads `(inner)` records with `[^()]*`, so a parenthesis in `WHAT` breaks the match and drops the record in silence. `--edits-line` refuses them with exit 2. Unlike `--read-line`, `FILE` is required: listing every file would falsely claim edits that never happened.
+
+`--entry [R<n>] --agent NAME --mode ACTION` prints the round heading together with `--read-line` and/or `--edits-line`. If `R<n>` is omitted, it defaults to the last round id in `_log.md` plus 1. `**Log read through:**` is never printed by the command — that field claims what the agent actually read, so a script cannot fill it (stderr prompts for it).
 
 By hand, record the first 7 characters plus `wc -l`. Both, not either: the line count is readable at a glance and catches most edits; the hash catches an edit that preserves line count, which is the one a reviewer would otherwise miss.
 

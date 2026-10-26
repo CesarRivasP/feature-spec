@@ -1168,6 +1168,134 @@ def read_line_round_trips() -> list[str]:
     return problems
 
 
+def edits_line_round_trips() -> list[str]:
+    """`--edits-line` prints the `**Edits:**` line of a log entry. Check 16 reads it
+    back: an Edits record becomes the version compared against disk (no "last recorded"
+    drift) and against the next round's Read: (no "edited between rounds" drift)."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "matrix"
+        shutil.copytree(FIXTURES / "matrix", spec)
+        base = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec)]
+
+        out = subprocess.run(base + ["--read-line"], capture_output=True, text=True)
+        line = out.stdout.strip()
+        (spec / "_log.md").write_text(
+            f"## R1 · 2026-09-30 · test · author\n{line}\n"
+            "**Log read through:** — (first entry)\n", encoding="utf-8")
+
+        with (spec / "01-master-plan.md").open("a", encoding="utf-8") as fh:
+            fh.write("una línea más\n")
+
+        ed = subprocess.run(base + ["--edits-line", "01-master-plan.md=one line"],
+                            capture_output=True, text=True)
+        if ed.returncode != 0 or not ed.stdout.startswith("**Edits:** "):
+            problems.append(f"edits-line: expected `**Edits:**` line, got {ed.stdout!r} {ed.stderr!r}")
+        ed_line = ed.stdout.strip()
+
+        with (spec / "_log.md").open("a", encoding="utf-8") as fh:
+            fh.write(f"{ed_line}\n")
+
+        def check16_findings() -> list[dict]:
+            data = json.loads(subprocess.run(base + ["--json"], capture_output=True,
+                                             text=True).stdout)
+            return [f for f in data["findings"] if f["check"].startswith("16")]
+
+        # (a) Check 16 has no "last recorded" finding for 01-master-plan.md
+        last_rec = {f["where"] for f in check16_findings() if "last recorded" in f["what"]}
+        if "01-master-plan.md" in last_rec:
+            problems.append("edits-line: (a) check 16 reports last recorded drift for 01-master-plan.md")
+
+        # (b) After R2 with --read-line 01-master-plan.md is appended, no "edited between rounds" finding
+        r2_out = subprocess.run(base + ["--read-line", "01-master-plan.md"],
+                                capture_output=True, text=True).stdout.strip()
+        with (spec / "_log.md").open("a", encoding="utf-8") as fh:
+            fh.write(f"## R2 · 2026-10-01 · test · implement\n{r2_out}\n"
+                     "**Log read through:** R1\n")
+
+        between_rounds = {f["where"] for f in check16_findings() if "edited between rounds" in f["what"]}
+        if "01-master-plan.md" in between_rounds:
+            problems.append("edits-line: (b) check 16 reports edited between rounds for 01-master-plan.md")
+
+        # (c) After one more line is appended to the file, check 16 reports exactly 01-master-plan.md
+        with (spec / "01-master-plan.md").open("a", encoding="utf-8") as fh:
+            fh.write("segunda línea extra\n")
+
+        stale_after = {f["where"] for f in check16_findings() if "last recorded" in f["what"]}
+        if stale_after != {"01-master-plan.md"}:
+            problems.append(f"edits-line: (c) expected last recorded drift for only 01-master-plan.md, got {sorted(stale_after)}")
+
+        # 5. Edge cases:
+        paren = subprocess.run(base + ["--edits-line", "01-master-plan.md=has (paren)"],
+                               capture_output=True, text=True)
+        if paren.returncode == 0 or paren.stdout:
+            problems.append("edits-line: description with parens must exit non-zero with nothing on stdout")
+
+        nope = subprocess.run(base + ["--edits-line", "nope.md"],
+                              capture_output=True, text=True)
+        if nope.returncode == 0 or nope.stdout:
+            problems.append("edits-line: missing file must exit non-zero with nothing on stdout")
+
+        no_arg = subprocess.run(base + ["--edits-line"],
+                                capture_output=True, text=True)
+        if no_arg.returncode == 0:
+            problems.append("edits-line: missing argument must fail (argparse error)")
+
+    return problems
+
+
+def entry_stub_shape() -> list[str]:
+    """`--entry` prints a stub heading for a round entry, requiring --agent and --mode,
+    and combining with --read-line and/or --edits-line. It prompts for Log read through
+    on stderr without printing it on stdout."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "matrix"
+        shutil.copytree(FIXTURES / "matrix", spec)
+        base = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec)]
+
+        (spec / "_log.md").write_text(
+            "## R1 · 2026-09-30 · test · author\n"
+            "**Read:** `_facts.yml` (16 lines, blob fbfa5a3)\n"
+            "**Log read through:** — (first entry)\n", encoding="utf-8")
+
+        res = subprocess.run(base + ["--entry", "--agent", "t", "--mode", "implement",
+                                     "--read-line", "_facts.yml", "--today", "2026-10-26"],
+                             capture_output=True, text=True)
+        if res.returncode != 0:
+            problems.append(f"entry_stub_shape: expected exit 0, got {res.returncode}")
+        lines = [ln for ln in res.stdout.splitlines() if ln.strip()]
+        if len(lines) != 2:
+            problems.append(f"entry_stub_shape: expected exactly two lines, got {lines!r}")
+        else:
+            if lines[0] != "## R2 · 2026-10-26 · t · implement":
+                problems.append(f"entry_stub_shape: unexpected heading: {lines[0]!r}")
+            if not lines[1].startswith("**Read:** "):
+                problems.append(f"entry_stub_shape: unexpected read line: {lines[1]!r}")
+
+        if "Log read through" not in res.stderr:
+            problems.append(f"entry_stub_shape: stderr must mention 'Log read through', got {res.stderr!r}")
+
+        r0 = subprocess.run(base + ["--entry", "R0", "--agent", "t", "--mode", "implement",
+                                    "--read-line", "_facts.yml"],
+                            capture_output=True, text=True)
+        if r0.returncode == 0:
+            problems.append("entry_stub_shape: --entry R0 on log at R1 must exit non-zero")
+
+        bogus = subprocess.run(base + ["--entry", "--agent", "t", "--mode", "bogus",
+                                      "--read-line", "_facts.yml"],
+                               capture_output=True, text=True)
+        if bogus.returncode == 0:
+            problems.append("entry_stub_shape: --mode bogus must fail (argparse error)")
+
+        no_line = subprocess.run(base + ["--entry", "--agent", "t", "--mode", "implement"],
+                                 capture_output=True, text=True)
+        if no_line.returncode == 0:
+            problems.append("entry_stub_shape: --entry with neither line flag must fail")
+
+    return problems
+
+
 def log_size_counts_bytes() -> list[str]:
     """Check 16's size threshold, in both units. A log of long entries hit 103KB at
     701 lines — about 26k tokens — and the line threshold alone let it through. The
@@ -1299,6 +1427,10 @@ def main() -> int:
 
     total += 1
     failures += read_line_round_trips()
+    total += 1
+    failures += edits_line_round_trips()
+    total += 1
+    failures += entry_stub_shape()
     total += 1
     failures += paths_resolve_on_the_spec_branch()
     total += 1

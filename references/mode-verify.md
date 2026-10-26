@@ -31,4 +31,4 @@ Reconcile `_facts.yml` against observations from a device run or instrumented se
 
 ---
 
-Every mode starts by reading `_log.md` from disk and opens its own entry before editing (`SKILL.md` §Modes, `references/handoff.md`). The rules every mode that writes is held to: `references/rules.md`.
+Every mode starts by reading `_log.md` from disk and opens its own entry before editing (`SKILL.md` §Modes, `references/handoff.md`). Stub with `python3 scripts/audit.py docs/features/<slug>/ --entry --agent <name> --mode verify --read-line [FILE ...]` and close with `--edits-line FILE ...` when edits complete. The rules every mode that writes is held to: `references/rules.md`.

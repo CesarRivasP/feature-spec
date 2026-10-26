@@ -45,8 +45,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from audit import (CHANGELOG_HEADING, CONTRADICTION, STATUS_RANK, Findings,  # noqa: E402
                    check_acceptance_state, check_basis_gates, confined, git_blob,
-                   load_facts, norm, repo_root_for, revision_number, yaml,
-                   yaml_error_report)
+                   load_facts, norm, repo_root_for, revision_number,
+                   version_stamp, yaml, yaml_error_report)
 
 INDENT_RE = re.compile(r"^(\s*)")
 
@@ -343,9 +343,7 @@ def main(argv: list[str] | None = None) -> int:
     for ed in edits:
         if not ed.changed():
             continue
-        data = ed.after.encode("utf-8")
-        nlines = data.count(b"\n")
-        stamps.append(f"`{ed.path.name}` ({nlines} lines, blob {git_blob(data)[:7]})")
+        stamps.append(version_stamp(ed.path.name, ed.after.encode("utf-8")))
     print("Paste into the round's entry in `_log.md` — the stub is already open, "
           "this completes it:\n")
     print(f"**Stage:** {status_from} → shipped — shipped in `{args.tag}` on {on}"

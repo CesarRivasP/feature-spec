@@ -13,7 +13,9 @@ script FIRST, then the judgment pass over what it lists — in that order.
 
     python3 scripts/audit.py docs/features/<slug>/ [--repo-root DIR] [--json]
                              [--as-status STAGE] [--today YYYY-MM-DD]
-                             [--no-matrix] [--read-line [FILE ...]] [--index]
+                             [--no-matrix] [--read-line [FILE ...]]
+                             [--edits-line FILE[=WHAT] ...]
+                             [--entry [R<n>] --agent NAME --mode ACTION] [--index]
 
 It never executes `evidence.cmd` (protocol check 1b). A registry is a data file that
 travels between repos and agents; running commands out of it because it claims they
@@ -4024,6 +4026,32 @@ def registry_index(text: str) -> list[str]:
     return out
 
 
+def version_stamp(name: str, data: bytes, what: str | None = None) -> str:
+    """`name` (N lines, blob abc1234[ — what]) — measured as check 16 re-measures."""
+    if what is not None:
+        if any(c in what for c in ("(", ")", "\n", "\r")):
+            raise ValueError(f"what cannot contain '(', ')' or newline: {what!r}")
+    nlines = data.count(b"\n")
+    blob = git_blob(data)[:7]
+    desc = f" — {what}" if what else ""
+    return f"`{name}` ({nlines} lines, blob {blob}{desc})"
+
+
+def _resolve_named(names: list[str], spec_dir: Path,
+                   repo_root: Path) -> tuple[list[tuple[str, Path]], list[str]]:
+    files: list[tuple[str, Path]] = []
+    missing: list[str] = []
+    for name in names:
+        target = next((p for p in (confined(spec_dir, name),
+                                   confined(repo_root, name))
+                       if p is not None and p.is_file()), None)
+        if target is None:
+            missing.append(name)
+        else:
+            files.append((name, target))
+    return files, missing
+
+
 def read_line(facts: dict, spec_dir: Path, repo_root: Path,
               names: list[str]) -> tuple[str, list[str]]:
     """-> (the `**Read:**` line, names that resolve to no file).
@@ -4041,14 +4069,7 @@ def read_line(facts: dict, spec_dir: Path, repo_root: Path,
     files: list[tuple[str, Path]] = []
     missing: list[str] = []
     if names:
-        for name in names:
-            target = next((p for p in (confined(spec_dir, name),
-                                       confined(repo_root, name))
-                           if p is not None and p.is_file()), None)
-            if target is None:
-                missing.append(name)
-            else:
-                files.append((name, target))
+        files, missing = _resolve_named(names, spec_dir, repo_root)
     else:
         files.append(("_facts.yml", spec_dir / "_facts.yml"))
         for entry in facts.get("docs") or []:
@@ -4072,9 +4093,43 @@ def read_line(facts: dict, spec_dir: Path, repo_root: Path,
     parts = []
     for name, target in files:
         data = target.read_bytes()
-        lines = data.count(b"\n")
-        parts.append(f"`{name}` ({lines} lines, blob {git_blob(data)[:7]})")
+        parts.append(version_stamp(name, data))
     return "**Read:** " + " · ".join(parts), missing
+
+
+def edits_line(spec_dir: Path, repo_root: Path,
+               items: list[str]) -> tuple[str, list[str]]:
+    """-> (the `**Edits:**` line, names that resolve to no file).
+
+    Each ITEM is either `FILE` or `FILE=WHAT`. If the whole argument resolves to a
+    file, it is taken as a file with no description; otherwise it is split at the
+    first `=` into a filename and a description.
+    """
+    resolved: list[tuple[str, Path, str | None]] = []
+    missing: list[str] = []
+    for item in items:
+        found, _ = _resolve_named([item], spec_dir, repo_root)
+        if found:
+            resolved.append((item, found[0][1], None))
+            continue
+        if "=" in item:
+            name, what = item.split("=", 1)
+            found, _ = _resolve_named([name], spec_dir, repo_root)
+            if found:
+                resolved.append((name, found[0][1], what))
+                continue
+            missing.append(name)
+        else:
+            missing.append(item)
+
+    if missing:
+        return "", missing
+
+    parts = []
+    for name, target, what in resolved:
+        data = target.read_bytes()
+        parts.append(version_stamp(name, data, what))
+    return "**Edits:** " + " · ".join(parts), []
 
 
 def _truncate_finding_line(line: str, maxlen: int = 160) -> str:
@@ -4741,7 +4796,29 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the `**Read:**` line of a `_log.md` entry — line "
                          "count and blob of each FILE, or of every file of the set "
                          "when none is named — and exit without auditing")
+    ap.add_argument("--edits-line", nargs="+", default=None, metavar="FILE[=WHAT]",
+                    help="print the `**Edits:**` line of a `_log.md` entry — line "
+                         "count and blob of each FILE, with optional description "
+                         "after '=', and exit without auditing")
+    ap.add_argument("--entry", nargs="?", const="", default=None, metavar="[R<n>]",
+                    help="print a stub heading `## R<n>` for a `_log.md` entry "
+                         "together with --read-line and/or --edits-line")
+    ap.add_argument("--agent", default=None,
+                    help="agent identity for --entry heading")
+    ap.add_argument("--mode",
+                    choices=["author", "review", "implement", "validate", "verify", "sync"],
+                    default=None,
+                    help="mode/action for --entry heading")
     args = ap.parse_args(argv)
+    if args.entry is not None:
+        if not args.agent:
+            ap.error("--agent is required with --entry")
+        if not args.mode:
+            ap.error("--mode is required with --entry")
+        if args.read_line is None and args.edits_line is None:
+            ap.error("--entry requires --read-line and/or --edits-line")
+    elif args.agent is not None or args.mode is not None:
+        ap.error("--agent and --mode require --entry")
     today = None
     if args.today:
         try:
@@ -4785,16 +4862,61 @@ def main(argv: list[str] | None = None) -> int:
         print("\n".join(lines))
         return 0
 
+    read_str = None
     if args.read_line is not None:
-        line, missing = read_line(facts, spec_dir, repo_root, args.read_line)
+        read_str, missing = read_line(facts, spec_dir, repo_root, args.read_line)
         if missing:
             sys.exit(f"--read-line: no such file under {spec_dir} or {repo_root}: "
                      + ", ".join(missing))
-        print(line)
-        if not args.read_line:
-            print("every file of the set is listed — `Read:` claims the ones you "
-                  "opened. Drop the rest, or name them: --read-line FILE ...",
-                  file=sys.stderr)
+
+    edits_str = None
+    if args.edits_line is not None:
+        try:
+            edits_str, missing = edits_line(spec_dir, repo_root, args.edits_line)
+        except ValueError as exc:
+            print(f"--edits-line: {exc}", file=sys.stderr)
+            return 2
+        if missing:
+            sys.exit(f"--edits-line: no such file under {spec_dir} or {repo_root}: "
+                     + ", ".join(missing))
+
+    if args.entry is not None or args.read_line is not None or args.edits_line is not None:
+        if args.entry is not None:
+            log_path = spec_dir / "_log.md"
+            last = 0
+            if log_path.is_file():
+                raw = log_path.read_text(encoding="utf-8")
+                clean = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), raw, flags=re.S)
+                heads = list(re.finditer(r"^## (R(\d+))\b(.*)$", clean, re.M))
+                for h in heads:
+                    last = max(last, int(h.group(2)))
+
+            if args.entry:
+                m = re.fullmatch(r"R?(\d+)", args.entry)
+                if not m:
+                    print(f"--entry: {args.entry!r} is not a valid round id (expected R<n>)", file=sys.stderr)
+                    return 2
+                n = int(m.group(1))
+                if n < last:
+                    print(f"--entry: R{n} is lower than last round R{last}", file=sys.stderr)
+                    return 2
+                entry_id = f"R{n}"
+            else:
+                entry_id = f"R{last + 1}"
+
+            entry_date = (today or datetime.date.today()).isoformat()
+            print(f"## {entry_id} · {entry_date} · {args.agent} · {args.mode}")
+            print(f"add `**Log read through:** R<k>` yourself — the log's last round is R{last}", file=sys.stderr)
+
+        if read_str is not None:
+            print(read_str)
+            if not args.read_line:
+                print("every file of the set is listed — `Read:` claims the ones you "
+                      "opened. Drop the rest, or name them: --read-line FILE ...",
+                      file=sys.stderr)
+        if edits_str is not None:
+            print(edits_str)
+
         return 0
 
     rank, in_scope, deferred = resolve_stage(facts, spec_dir)
