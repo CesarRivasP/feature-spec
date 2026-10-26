@@ -12,6 +12,7 @@ So: this script runs every check a program can run, and prints the ones it canno
 script FIRST, then the judgment pass over what it lists — in that order.
 
     python3 scripts/audit.py docs/features/<slug>/ [--repo-root DIR] [--json]
+                             [--baseline FILE | --write-baseline FILE]
                              [--as-status STAGE] [--today YYYY-MM-DD]
                              [--no-matrix] [--read-line [FILE ...]]
                              [--edits-line FILE[=WHAT] ...]
@@ -28,7 +29,9 @@ implemented twice is the exact defect this skill exists to prevent.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -130,6 +133,117 @@ class Candidates:
 
     def total(self) -> int:
         return sum(len(v) for v in self.by_check.values())
+
+
+# A finding's identity across runs: what it is about, never the numbers that move
+# while it stays the same problem. Each rule is a real message that changed with
+# no new problem behind it.
+BASELINE_NORMALIZE = (
+    # check 44 carries the owner's whole value, backticks included; the finding is
+    # "this citation lacks it", whatever it now is
+    (re.compile(r"\(now `.*`\)(?= and this paragraph)", re.S), "(now <value>)"),
+    # check 16: `blob def5678` -> `blob 8491f95` on every unrecorded edit
+    (re.compile(r"\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b"), "<blob>"),
+    # counts and line numbers: `570 lines, 106KB`, `_log.md:4`, `579 lines`.
+    # A number glued to a letter is an id and stays: R10, D4, AC1, v1.2
+    (re.compile(r"(?<![\w.])\d+(?:\.\d+)*"), "#"),
+)
+
+
+def finding_fingerprint(x: dict) -> str:
+    where = re.sub(r":\d+$", "", x["where"])          # `01-master-plan.md:73`
+    what = x["what"]
+    for rx, rep in BASELINE_NORMALIZE:
+        what = rx.sub(rep, what)
+    key = "\x1f".join((x["severity"], x["check"].split()[0], where, what))
+    return hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+
+
+def sort_findings(f: Findings | list[dict]) -> list[dict]:
+    items = f.items if isinstance(f, Findings) else f
+    order = {CONTRADICTION: 0, DRIFT: 1, POLISH: 2}
+    items.sort(key=lambda x: (order.get(x["severity"], 99), x.get("check", ""), x.get("where", "")))
+    return items
+
+
+def load_baseline(path: str | Path) -> Counter | str:
+    p = Path(path)
+    if not p.is_file():
+        return f"--baseline: file '{path}' does not exist — generate it with --write-baseline {path}"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return f"--baseline: file '{path}' is not valid JSON — generate it with --write-baseline {path}"
+    if not isinstance(data, dict) or data.get("audit_baseline") != 1:
+        return f"--baseline: file '{path}' missing 'audit_baseline: 1' — generate it with --write-baseline {path}"
+    findings = data.get("findings", [])
+    counter = Counter(x["fingerprint"] for x in findings if isinstance(x, dict) and "fingerprint" in x)
+    counter.entries = findings
+    return counter
+
+
+def write_baseline(f: Findings | list[dict], facts: dict, path: str | Path) -> None:
+    items = f.items if isinstance(f, Findings) else f
+    findings_to_write = []
+    for x in items:
+        fp = x.get("fingerprint") or finding_fingerprint(x)
+        x["fingerprint"] = fp
+        findings_to_write.append({
+            "fingerprint": fp,
+            "severity": x["severity"],
+            "check": x["check"],
+            "where": x["where"],
+            "what": x["what"],
+        })
+    findings_to_write.sort(key=lambda x: (x["fingerprint"], x["where"]))
+    feature = str(facts.get("feature") or "?")
+    payload = {
+        "audit_baseline": 1,
+        "feature": feature,
+        "findings": findings_to_write,
+    }
+    text = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    target = Path(path)
+    if target.parent:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    c_count = sum(1 for x in findings_to_write if x["severity"] == CONTRADICTION)
+    if c_count > 0:
+        print(f"baseline records {c_count} contradiction(s) — with --baseline they stop failing the run", file=sys.stderr)
+
+
+def apply_baseline(f: Findings | list[dict], counter: Counter) -> tuple[int, int, list[dict]]:
+    items = sort_findings(f)
+    matched = Counter()
+    for x in items:
+        fp = x.get("fingerprint") or finding_fingerprint(x)
+        x["fingerprint"] = fp
+        if matched[fp] < counter[fp]:
+            x["baseline"] = True
+            matched[fp] += 1
+        else:
+            x["baseline"] = False
+
+    new_cnt = sum(1 for x in items if not x["baseline"])
+    base_cnt = sum(1 for x in items if x["baseline"])
+
+    matched_left = Counter(matched)
+    gone_entries = []
+    for entry in getattr(counter, "entries", []):
+        fp = entry.get("fingerprint")
+        if matched_left[fp] > 0:
+            matched_left[fp] -= 1
+        else:
+            gone_entries.append(entry)
+
+    if not hasattr(counter, "entries"):
+        for fp, count in counter.items():
+            diff = count - matched[fp]
+            if diff > 0:
+                for _ in range(diff):
+                    gone_entries.append({"fingerprint": fp})
+
+    return new_cnt, base_cnt, gone_entries
 
 
 # --------------------------------------------------------------------------
@@ -3742,7 +3856,6 @@ LOG_FILE_RECORD_ANY = re.compile(
 
 
 def git_blob(data: bytes) -> str:
-    import hashlib
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
@@ -4704,9 +4817,24 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
            audited_as: str | None = None,
            today: datetime.date | None = None,
            matrix: dict | None = None,
-           tree: tuple[str, str] | None = None) -> int:
-    order = {CONTRADICTION: 0, DRIFT: 1, POLISH: 2}
-    f.items.sort(key=lambda x: (order[x["severity"]], x["check"], x["where"]))
+           tree: tuple[str, str] | None = None,
+           baseline: dict | None = None) -> int:
+    sort_findings(f)
+    for x in f.items:
+        if "fingerprint" not in x:
+            x["fingerprint"] = finding_fingerprint(x)
+    if baseline is None:
+        for x in f.items:
+            x.pop("baseline", None)
+
+    if baseline is not None:
+        has_failing_new = any(
+            not x.get("baseline", False) and x["severity"] in (CONTRADICTION, DRIFT)
+            for x in f.items
+        )
+        exit_code = 1 if has_failing_new else 0
+    else:
+        exit_code = 1 if f.count(CONTRADICTION) else 0
 
     if as_json:
         accepted_risks_json = []
@@ -4722,9 +4850,10 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
                           "matrix": matrix,
                           "tree": ({"checkout": tree[0], "spec": tree[1]} if tree
                                    else None),
-                          "deferred_docs": [d["file"] for d in deferred]},
+                          "deferred_docs": [d["file"] for d in deferred],
+                          "baseline": baseline},
                          indent=2, ensure_ascii=False))
-        return 1 if f.count(CONTRADICTION) else 0
+        return exit_code
 
     status = str(facts.get("status") or "draft")
     shown = (f"status: {declared_status}, audited AS `{audited_as}` — preview, the "
@@ -4740,11 +4869,22 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
             f"{d['file']} (stage {d['stage']})" for d in deferred))
     print()
 
-    if f.items:
+    new_items = [x for x in f.items if not x.get("baseline", False)] if baseline is not None else f.items
+    base_items = [x for x in f.items if x.get("baseline", False)] if baseline is not None else []
+
+    if new_items:
         print("## Findings\n")
-        for x in f.items:
+        for x in new_items:
             print(f"{x['where']}: {x['severity']}: {x['what']}. {x['fix']}.")
             print(f"    └ check {x['check']}")
+        print()
+
+    if baseline is not None:
+        print(f"## Baseline findings ({len(base_items)}, from {baseline['file']})\n")
+        for x in base_items:
+            print(_truncate_finding_line(f"{x['where']}: {x['severity']}: {x['what']}"))
+        if baseline["gone"] > 0:
+            print(f"{baseline['gone']} baseline finding(s) no longer reported — rewrite with --write-baseline to lock the gain in")
         print()
 
     have = {d["id"] for d in in_scope if d["exists"]}
@@ -4818,6 +4958,10 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
     c, d, p = f.count(CONTRADICTION), f.count(DRIFT), f.count(POLISH)
     verdict = (f"{c} contradictions, {d} drift, {p} polish" if f.items
                else "clean — every mechanized check passed")
+    if baseline is not None:
+        verdict += f" · {baseline['new']} new / {baseline['baseline']} baseline"
+        if baseline["gone"] > 0:
+            verdict += f", {baseline['gone']} gone"
     if deferred:
         verdict += f" · stage {status}: {len(deferred)} doc(s) not due yet"
     if risks:
@@ -4832,7 +4976,7 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
         verdict += (f" · {cands.total()} candidate(s) for the human pass, in "
                     f"{len(cands.by_check)} check(s)")
     print(verdict)
-    return 1 if c else 0
+    return exit_code
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -4841,6 +4985,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--repo-root", default=None,
                     help="anchor/file resolution root (default: git toplevel)")
     ap.add_argument("--json", action="store_true")
+    bg = ap.add_mutually_exclusive_group()
+    bg.add_argument("--baseline", default=None, metavar="FILE",
+                    help="filter findings against a baseline JSON file, reporting only new ones")
+    bg.add_argument("--write-baseline", default=None, metavar="FILE",
+                    help="write current findings to a baseline JSON file and exit 0")
     ap.add_argument("--as-status", choices=sorted(STATUS_RANK, key=STATUS_RANK.get),
                     default=None,
                     help="audit the set as if `status:` already read STAGE — in "
@@ -4877,6 +5026,19 @@ def main(argv: list[str] | None = None) -> int:
                     default=None,
                     help="mode/action for --entry heading")
     args = ap.parse_args(argv)
+    if args.baseline or args.write_baseline:
+        if args.open:
+            ap.error("--baseline/--write-baseline cannot be used with --open")
+        if args.index:
+            ap.error("--baseline/--write-baseline cannot be used with --index")
+        if args.read_line is not None:
+            ap.error("--baseline/--write-baseline cannot be used with --read-line")
+        if args.edits_line is not None:
+            ap.error("--baseline/--write-baseline cannot be used with --edits-line")
+        if args.entry is not None:
+            ap.error("--baseline/--write-baseline cannot be used with --entry")
+    if args.write_baseline and args.as_status:
+        ap.error("--write-baseline cannot be used with --as-status")
     if args.entry is not None:
         if not args.agent:
             ap.error("--agent is required with --entry")
@@ -4897,6 +5059,12 @@ def main(argv: list[str] | None = None) -> int:
     facts_path = spec_dir / "_facts.yml"
     if not facts_path.is_file():
         sys.exit(f"no _facts.yml in {spec_dir} — not a feature-spec set.")
+    loaded_baseline = None
+    if args.baseline:
+        loaded_baseline = load_baseline(args.baseline)
+        if isinstance(loaded_baseline, str):
+            print(loaded_baseline, file=sys.stderr)
+            return 2
     try:
         facts = load_facts(facts_path)
     except yaml.YAMLError as exc:
@@ -5041,14 +5209,40 @@ def main(argv: list[str] | None = None) -> int:
     check_doc02_executability(facts, prose, in_scope, c)
     check_doc_freshness(facts, prose, rank, c)
 
+    baseline_dict = None
+    if args.baseline:
+        new_cnt, base_cnt, gone_entries = apply_baseline(f, loaded_baseline)
+        baseline_dict = {
+            "file": args.baseline,
+            "new": new_cnt,
+            "baseline": base_cnt,
+            "gone": len(gone_entries),
+            "gone_findings": gone_entries,
+        }
+
     audited_as = (args.as_status if args.as_status
                   and norm(args.as_status) != norm(declared_status) else None)
     matrix = (None if args.no_matrix or not prose
               else correspondence(facts, prose, in_scope))
+
+    if args.write_baseline:
+        try:
+            write_baseline(f, facts, args.write_baseline)
+        except OSError as exc:
+            print(f"--write-baseline: cannot write {args.write_baseline}: {exc}", file=sys.stderr)
+            return 2
+        report(f, c, facts, in_scope, deferred, prose, args.json,
+               declared_status=declared_status, audited_as=audited_as, today=today,
+               matrix=matrix,
+               tree=(checkout, tree.label) if tree.label else None,
+               baseline=None)
+        return 0
+
     return report(f, c, facts, in_scope, deferred, prose, args.json,
                   declared_status=declared_status, audited_as=audited_as, today=today,
                   matrix=matrix,
-                  tree=(checkout, tree.label) if tree.label else None)
+                  tree=(checkout, tree.label) if tree.label else None,
+                  baseline=baseline_dict)
 
 
 if __name__ == "__main__":

@@ -1420,9 +1420,260 @@ def open_items_lists_pending_actions() -> list[str]:
     return problems
 
 
+def baseline_counts_only_new() -> list[str]:
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        t_path = Path(tmp)
+        spec = t_path / "spec"
+        shutil.copytree(FIXTURES / "baseline-drift", spec)
+        shutil.copy(FIXTURES / "_profile.fixture.yml", t_path / "_profile.fixture.yml")
+        b_json = t_path / "b.json"
+
+        out = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path), "--json"],
+                             capture_output=True, text=True)
+        if out.returncode != 0:
+            problems.append(f"baseline precondition: expected exit 0, got {out.returncode}")
+        try:
+            data = json.loads(out.stdout)
+            findings = data.get("findings", [])
+            if len(findings) != 2:
+                problems.append(f"baseline precondition: expected 2 findings, got {len(findings)}")
+            elif not all(f["severity"] == "DRIFT" and f["check"].startswith("16") for f in findings):
+                problems.append("baseline precondition: expected both findings to be check 16 DRIFT")
+        except json.JSONDecodeError as exc:
+            problems.append(f"baseline precondition: invalid json: {exc}")
+
+        w1 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                             "--write-baseline", str(b_json)], capture_output=True, text=True)
+        if w1.returncode != 0:
+            problems.append(f"--write-baseline exited {w1.returncode}: {w1.stderr}")
+        content1 = b_json.read_bytes()
+        try:
+            b_data = json.loads(content1)
+            if len(b_data.get("findings", [])) != 2:
+                problems.append(f"--write-baseline expected 2 entries, got {len(b_data.get('findings', []))}")
+        except json.JSONDecodeError as exc:
+            problems.append(f"--write-baseline file not valid JSON: {exc}")
+
+        w2 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                             "--write-baseline", str(b_json)], capture_output=True, text=True)
+        if w2.returncode != 0:
+            problems.append(f"--write-baseline rewrite exited {w2.returncode}: {w2.stderr}")
+        content2 = b_json.read_bytes()
+        if content1 != content2:
+            problems.append("--write-baseline rewrite did not yield identical bytes")
+
+        log_file = spec / "_log.md"
+        log_file.write_text("\n" + log_file.read_text(encoding="utf-8"), encoding="utf-8")
+        doc_file = spec / "01-master-plan.md"
+        doc_file.write_text(doc_file.read_text(encoding="utf-8") + "extra\n", encoding="utf-8")
+
+        r0 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                             "--baseline", str(b_json)], capture_output=True, text=True)
+        if r0.returncode != 0:
+            problems.append(f"--baseline volatile shift exited {r0.returncode}: {r0.stderr}")
+        last_line = r0.stdout.strip().splitlines()[-1] if r0.stdout.strip() else ""
+        if "0 new / 2 baseline" not in last_line:
+            problems.append(f"--baseline volatile shift verdict expected '0 new / 2 baseline', got {last_line!r}")
+
+        notes_file = spec / "notes.md"
+        notes_file.write_text("# notes\n", encoding="utf-8")
+
+        r1 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                             "--baseline", str(b_json)], capture_output=True, text=True)
+        if r1.returncode != 1:
+            problems.append(f"--baseline with notes.md expected exit 1, got {r1.returncode}")
+        last_line1 = r1.stdout.strip().splitlines()[-1] if r1.stdout.strip() else ""
+        if "1 new / 2 baseline" not in last_line1:
+            problems.append(f"--baseline with notes.md verdict expected '1 new / 2 baseline', got {last_line1!r}")
+
+        r1_json = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                                  "--baseline", str(b_json), "--json"], capture_output=True, text=True)
+        if r1_json.returncode != 1:
+            problems.append(f"--baseline --json with notes.md expected exit 1, got {r1_json.returncode}")
+        try:
+            j1 = json.loads(r1_json.stdout)
+            b_info = j1.get("baseline", {})
+            if b_info.get("new") != 1 or b_info.get("baseline") != 2 or b_info.get("gone") != 0:
+                problems.append(f"--baseline --json expected new=1, baseline=2, gone=0, got {b_info}")
+            new_f = [f for f in j1.get("findings", []) if f.get("baseline") is False]
+            if len(new_f) != 1 or not new_f[0]["check"].startswith("9"):
+                problems.append(f"--baseline --json expected 1 new finding with check 9, got {new_f}")
+        except json.JSONDecodeError as exc:
+            problems.append(f"--baseline --json invalid json: {exc}")
+
+        w3 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                             "--write-baseline", str(b_json)], capture_output=True, text=True)
+        if w3.returncode != 0:
+            problems.append(f"--write-baseline with 3 findings exited {w3.returncode}: {w3.stderr}")
+        notes_file.unlink()
+
+        r2 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(t_path),
+                             "--baseline", str(b_json)], capture_output=True, text=True)
+        if r2.returncode != 0:
+            problems.append(f"--baseline after removing notes.md expected exit 0, got {r2.returncode}")
+        last_line2 = r2.stdout.strip().splitlines()[-1] if r2.stdout.strip() else ""
+        if "0 new / 2 baseline, 1 gone" not in last_line2:
+            problems.append(f"--baseline after removing notes.md expected '0 new / 2 baseline, 1 gone', got {last_line2!r}")
+
+    return problems
+
+
+def baseline_normalization_pairs() -> list[str]:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import audit
+
+    problems = []
+    # Must match:
+    f1a = {"severity": "DRIFT", "check": "16 handoff log integrity", "where": "01-master-plan.md",
+           "what": "last recorded at _log.md:4 as 7 lines, blob def5678; now 7 lines, blob c2d7bb6"}
+    f1b = {"severity": "DRIFT", "check": "16 handoff log integrity", "where": "01-master-plan.md",
+           "what": "last recorded at _log.md:5 as 7 lines, blob def5678; now 8 lines, blob 8491f95"}
+    if audit.finding_fingerprint(f1a) != audit.finding_fingerprint(f1b):
+        problems.append("normalization: check 16 line/blob variance should have matched")
+
+    f2a = {"severity": "DRIFT", "check": "16 handoff log integrity", "where": "_log.md",
+           "what": "570 lines, 106KB — past what one read can hold"}
+    f2b = {"severity": "DRIFT", "check": "16 handoff log integrity", "where": "_log.md",
+           "what": "701 lines, 103KB — past what one read can hold"}
+    if audit.finding_fingerprint(f2a) != audit.finding_fingerprint(f2b):
+        problems.append("normalization: check 16 log size variance should have matched")
+
+    f3a = {"severity": "DRIFT", "check": "44 cross-set value parity", "where": "01-master-plan.md:73",
+           "what": "cites `defects.D4` from `docs/features/interstice/_facts.yml` (now `ValidationException — … `bedrock list-foundation-models` … 11996 bytes …`) and this paragraph does not carry that value"}
+    f3b = {"severity": "DRIFT", "check": "44 cross-set value parity", "where": "01-master-plan.md:80",
+           "what": "cites `defects.D4` from `docs/features/interstice/_facts.yml` (now `other value without backticks`) and this paragraph does not carry that value"}
+    if audit.finding_fingerprint(f3a) != audit.finding_fingerprint(f3b):
+        problems.append("normalization: check 44 value and line variance should have matched")
+
+    f4a = {"severity": "POLISH", "check": "17 doc size", "where": "01-master-plan.md:73", "what": "something"}
+    f4b = {"severity": "POLISH", "check": "17 doc size", "where": "01-master-plan.md:80", "what": "something"}
+    if audit.finding_fingerprint(f4a) != audit.finding_fingerprint(f4b):
+        problems.append("normalization: line number in where should have matched")
+
+    # Must NOT match:
+    f5a = {"severity": "DRIFT", "check": "16 handoff log integrity", "where": "_log.md",
+           "what": "`R10` read `_facts.yml` at 633 lines, blob 857ce36; `R9` left it at 634 lines, blob 882d1ff — edited between rounds"}
+    f5b = {"severity": "DRIFT", "check": "16 handoff log integrity", "where": "_log.md",
+           "what": "`R11` read `_facts.yml` at 633 lines, blob 857ce36; `R9` left it at 634 lines, blob 882d1ff — edited between rounds"}
+    if audit.finding_fingerprint(f5a) == audit.finding_fingerprint(f5b):
+        problems.append("normalization: R10 vs R11 round ids should NOT match")
+
+    f6a = {"severity": "DRIFT", "check": "44 cross-set value parity", "where": "01-master-plan.md",
+           "what": "cites `defects.D4` from `docs/features/interstice/_facts.yml` (now `val`) and this paragraph does not carry that value"}
+    f6b = {"severity": "DRIFT", "check": "44 cross-set value parity", "where": "01-master-plan.md",
+           "what": "cites `defects.D5` from `docs/features/interstice/_facts.yml` (now `val`) and this paragraph does not carry that value"}
+    if audit.finding_fingerprint(f6a) == audit.finding_fingerprint(f6b):
+        problems.append("normalization: defects.D4 vs defects.D5 should NOT match")
+
+    f7a = {"severity": "DRIFT", "check": "18 anchor", "where": "01.md", "what": "text"}
+    f7b = {"severity": "CONTRADICTION", "check": "18 anchor", "where": "01.md", "what": "text"}
+    if audit.finding_fingerprint(f7a) == audit.finding_fingerprint(f7b):
+        problems.append("normalization: DRIFT vs CONTRADICTION should NOT match")
+
+    f8a = {"severity": "DRIFT", "check": "18 anchor", "where": "01-master-plan.md", "what": "text"}
+    f8b = {"severity": "DRIFT", "check": "18 anchor", "where": "02-architecture.md", "what": "text"}
+    if audit.finding_fingerprint(f8a) == audit.finding_fingerprint(f8b):
+        problems.append("normalization: different files in where should NOT match")
+
+    return problems
+
+
+def baseline_fingerprints_do_not_collide() -> list[str]:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import audit
+
+    problems = []
+    for fixture, _, _ in CASES:
+        findings = run(fixture)
+        fps = [audit.finding_fingerprint(f) for f in findings]
+        if len(fps) != len(set(fps)):
+            seen = {}
+            for f in findings:
+                fp = audit.finding_fingerprint(f)
+                if fp in seen:
+                    problems.append(
+                        f"{fixture}: fingerprint collision between {seen[fp]['where']}: {seen[fp]['what'][:40]!r} "
+                        f"and {f['where']}: {f['what'][:40]!r}")
+                seen[fp] = f
+    return problems
+
+
+def baseline_flag_errors() -> list[str]:
+    problems = []
+    fix = FIXTURES / "matrix"
+
+    nonexistent = str(fix / "does_not_exist_baseline.json")
+    r1 = subprocess.run([sys.executable, str(AUDIT), str(fix), "--baseline", nonexistent],
+                        capture_output=True, text=True)
+    if r1.returncode != 2:
+        problems.append(f"--baseline nonexistent file expected exit 2, got {r1.returncode}")
+    if nonexistent not in r1.stderr:
+        problems.append(f"--baseline nonexistent file stderr did not name file: {r1.stderr}")
+
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as tf:
+        tf.write(json.dumps({"findings": []}))
+        tf_name = tf.name
+    try:
+        r2 = subprocess.run([sys.executable, str(AUDIT), str(fix), "--baseline", tf_name],
+                            capture_output=True, text=True)
+        if r2.returncode != 2:
+            problems.append(f"--baseline JSON without audit_baseline expected exit 2, got {r2.returncode}")
+    finally:
+        Path(tf_name).unlink(missing_ok=True)
+
+    r3 = subprocess.run([sys.executable, str(AUDIT), str(fix), "--baseline", "b.json", "--write-baseline", "w.json"],
+                        capture_output=True, text=True)
+    if r3.returncode != 2:
+        problems.append(f"--baseline with --write-baseline expected exit 2, got {r3.returncode}")
+
+    r4 = subprocess.run([sys.executable, str(AUDIT), str(fix), "--write-baseline", "w.json", "--as-status", "shipped"],
+                        capture_output=True, text=True)
+    if r4.returncode != 2:
+        problems.append(f"--write-baseline with --as-status shipped expected exit 2, got {r4.returncode}")
+
+    r5 = subprocess.run([sys.executable, str(AUDIT), str(fix), "--baseline", "b.json", "--open"],
+                        capture_output=True, text=True)
+    if r5.returncode != 2:
+        problems.append(f"--baseline with --open expected exit 2, got {r5.returncode}")
+
+    return problems
+
+
+def baseline_default_json_shape() -> list[str]:
+    problems = []
+    out = subprocess.run([sys.executable, str(AUDIT), str(FIXTURES / "anchor-drift"), "--json"],
+                         capture_output=True, text=True)
+    try:
+        data = json.loads(out.stdout)
+        if data.get("baseline") is not None:
+            problems.append(f"--json without flags: expected baseline is null, got {data.get('baseline')}")
+        findings = data.get("findings", [])
+        if not findings:
+            problems.append("--json without flags: anchor-drift expected findings")
+        for f in findings:
+            if "fingerprint" not in f or not isinstance(f["fingerprint"], str) or len(f["fingerprint"]) != 16:
+                problems.append(f"--json without flags: finding missing 16-char fingerprint: {f}")
+            if "baseline" in f:
+                problems.append(f"--json without flags: finding unexpectedly has baseline key: {f}")
+    except json.JSONDecodeError as exc:
+        problems.append(f"--json without flags invalid json: {exc}")
+    return problems
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     failures, total = [], 0
+    total += 1
+    failures += baseline_counts_only_new()
+    total += 1
+    failures += baseline_normalization_pairs()
+    total += 1
+    failures += baseline_fingerprints_do_not_collide()
+    total += 1
+    failures += baseline_flag_errors()
+    total += 1
+    failures += baseline_default_json_shape()
     total += 1
     failures += open_items_lists_pending_actions()
     total += 1
