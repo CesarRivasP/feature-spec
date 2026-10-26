@@ -1,0 +1,21 @@
+# FS-3 — baseline and write-baseline for sets with pre-existing drift.
+#
+# Real case: e2e-harness (Hackathon) has 7 pre-existing DRIFT findings. A change
+# that adds an 8th was indistinguishable from one that adds none: same exit code (0),
+# same list. With --baseline FILE, CI exits 1 only on new CONTRADICTION or DRIFT.
+#
+# Audited with _profile.fixture.yml alongside and --repo-root in parent, this fixture
+# produces exactly 2 DRIFT findings from check 16 and 0 contradictions / 0 polish.
+feature: baseline-drift
+status: reviewed
+profile: _profile.fixture.yml
+defects:
+  - { id: D1, role: root_cause, basis: asserted, status: open,
+      claim: 'el decoder se queda sin buffers al montar el cuarto tile',
+      falsified_by: 'cuatro tiles montados 20 min sin cma_alloc_fail',
+      log_line: 'DIAG-RNV tile=<n> dropped=<n>',
+      outcome: 'queda abierta: la mide el set hermano' }
+acceptance:
+  - { id: AC1, item: 'cuatro tiles sostienen 20 minutos', status: written }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

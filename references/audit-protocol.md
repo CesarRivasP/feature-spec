@@ -88,6 +88,10 @@ cost shows.
 measured against, so `--today` the day after an expiry shows the G1 refusal that is
 coming, before it comes.
 
+### Baselines for pre-existing drift — `--baseline <file>` / `--write-baseline <file>`
+
+`python3 scripts/audit.py docs/features/<slug>/ --baseline <file>` filters findings against a recorded baseline to report only new problems; exits 1 on new CONTRADICTION or DRIFT. Write the baseline with `--write-baseline <file>`.
+
 ## Checks
 
 ### 1. Data-vs-registry (highest priority) — [human]
