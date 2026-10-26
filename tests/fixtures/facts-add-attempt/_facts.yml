@@ -17,7 +17,7 @@ defects:
       because: 'no hay eventos en vivo en la ventana'
 acceptance:
   - { id: AC1, item: 'description cues play inside real dialogue gaps and never overlap dialogue', status: written, closes: D1,
-      attempts: [ { date: 2026-10-20, round: R57, outcome: passed, env: 'Vega Virtual Device, OS 1.2, Release aarch64, SDK 0.24.12112 — e2e-harness S07, run 2026-10-20T17-24-25-693Z-release, app commit e0567b5',
+      attempts: [ { date: 2026-10-20, round: R57, outcome: passed, env: 'virtual device, release build — harness scenario S07',
                     note: 'ONE cue, the first: cue_0-11500 of the generated standard track fired at pos_ms=142, ducked and restored inside [0, 11500].
 The other 54, and the never-overlaps half, wait on an end-to-end watch (AC14)' }
                 ] }
