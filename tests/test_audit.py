@@ -1491,6 +1491,18 @@ docs:
         sec = next(d for d in json.loads(r2.stdout)["docs"] if d["file"] == "b.md")["sections"][0]
         if sec["cites"] != ["limits.cf"]:
             problems.append(f"doc-index: a 4-digit value did not cite: {sec['cites']}")
+        # a sentence's own period or comma is not a decimal point: real case, `timeout
+        # 30000.` cited nothing after the glued-number fix; `1.4242` and `4242,5` still don't
+        for body, want in (("# B\nEl timeout es 4242.\n", ["limits.cf"]),
+                           ("# B\nCodigo 4242, luego nada\n", ["limits.cf"]),
+                           ("# B\nVersion 1.4242 y 4242,5 y 4242.5\n", [])):
+            (spec / "b.md").write_text(body, encoding="utf-8")
+            r3 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--doc-index", "--json"],
+                                capture_output=True, text=True)
+            got = next(d for d in json.loads(r3.stdout)["docs"]
+                       if d["file"] == "b.md")["sections"][0]["cites"]
+            if got != want:
+                problems.append(f"doc-index: {body.splitlines()[1]!r} cited {got}, expected {want}")
     return problems
 
 

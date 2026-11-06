@@ -4350,10 +4350,19 @@ def _value_cite_ok(value: str, body: str, m: re.Match) -> bool:
         return True
     if sum(c.isdigit() for c in value) < 4:
         return False
-    before = body[m.start() - 1] if m.start() > 0 else ""
-    after = body[m.end()] if m.end() < len(body) else ""
-    return not (before and (before in ".,%" or before.isdigit())
-                or after and (after in ".,%" or after.isdigit()))
+    # `.`/`,` break the cite only as part of a number (`1.524`, `30,000.5`), not as the
+    # sentence's own punctuation: `timeout 30000.` still cites
+    b1 = body[m.start() - 1] if m.start() > 0 else ""
+    b2 = body[m.start() - 2] if m.start() > 1 else ""
+    a1 = body[m.end()] if m.end() < len(body) else ""
+    a2 = body[m.end() + 1] if m.end() + 1 < len(body) else ""
+    if b1.isdigit() or a1.isdigit() or a1 == "%":
+        return False
+    if b1 in ".," and b2.isdigit():
+        return False
+    if a1 in ".," and a2.isdigit():
+        return False
+    return True
 
 
 def doc_index(facts: dict, facts_text: str,
