@@ -30,6 +30,7 @@ implemented twice is the exact defect this skill exists to prevent.
 from __future__ import annotations
 
 import argparse
+import atexit
 from collections import Counter
 import datetime
 import hashlib
@@ -44,8 +45,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from render import (accepted_state, build_datum_regex, collect_claims,
-                        collect_datums, confined, norm,
-                        status_gate, trace_datums, walk, yaml)
+                        collect_datums, confined, datums_in, norm,
+                        slow_path, status_gate, trace_datums, walk, yaml)
 except ImportError as exc:  # pragma: no cover
     sys.exit(
         f"cannot import the shared registry core from render.py: {exc}\n"
@@ -1574,6 +1575,9 @@ class WorkTree:
         return name_index(self.root)
 
 
+_FALLBACK = object()
+
+
 class GitTree(WorkTree):
     """The tree at `tracking.branch` (or `tracking.shipped_in`, once shipped) when
     the checkout is on something else.
@@ -1603,6 +1607,65 @@ class GitTree(WorkTree):
         self._dirs: set[str] | None = None
         self._tracked: set[str] | None = None
         self._disk: dict[str, list[str]] | None = None
+        self._batch: subprocess.Popen | None = None
+        self._blobs: dict[str, bytes | None] = {}
+
+    def _show(self, rel: str) -> bytes | None:
+        """`git show <ref>:<rel>` bytes, or None when git fails. One long-lived
+        `git cat-file --batch` answers every path (119 forks measured ~2.1 s on a real
+        307 KB set), cached by path. Anything that is not a plain blob, or a path git's
+        line protocol cannot carry, goes through `git show` so the bytes never differ."""
+        if rel in self._blobs:
+            return self._blobs[rel]
+        data = self._cat_file(rel)
+        if data is _FALLBACK:
+            out = subprocess.run(["git", "show", f"{self.ref}:{rel}"], cwd=self.root,
+                                 capture_output=True)
+            data = out.stdout if out.returncode == 0 else None
+        self._blobs[rel] = data
+        return data
+
+    def _cat_file(self, rel: str):
+        if "\n" in rel or "\r" in rel or slow_path():
+            return _FALLBACK
+        try:
+            if self._batch is None:
+                self._batch = subprocess.Popen(
+                    ["git", "cat-file", "--batch"], cwd=self.root,
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL)
+                atexit.register(self.close)
+            proc = self._batch
+            proc.stdin.write(f"{self.ref}:{rel}\n".encode("utf-8"))
+            proc.stdin.flush()
+            header = proc.stdout.readline().split()
+            if len(header) == 2 and header[1] in (b"missing", b"ambiguous"):
+                return None
+            if len(header) != 3 or header[1] != b"blob":
+                # a tree or a submodule: git show prints something else; and the
+                # object body (if any) must still be drained to keep the stream aligned
+                if len(header) == 3 and header[2].isdigit():
+                    proc.stdout.read(int(header[2]) + 1)
+                return _FALLBACK
+            size = int(header[2])
+            body = proc.stdout.read(size)
+            proc.stdout.read(1)  # the newline git appends
+            return body
+        except (OSError, ValueError):
+            self.close()
+            return _FALLBACK
+
+    def close(self) -> None:
+        proc, self._batch = self._batch, None
+        if proc is not None:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
 
     def _tracked_here(self) -> set[str]:
         if self._tracked is None:
@@ -1660,17 +1723,14 @@ class GitTree(WorkTree):
     def line_count(self, target: Path) -> int:
         if self._ours(target) or self._from_disk(target):
             return super().line_count(target)
-        rel = self._rel(target)
-        out = subprocess.run(["git", "show", f"{self.ref}:{rel}"], cwd=self.root,
-                             capture_output=True)
-        return out.stdout.count(b"\n") if out.returncode == 0 else 0
+        data = self._show(str(self._rel(target)))
+        return data.count(b"\n") if data is not None else 0
 
     def read_text(self, target: Path) -> str:
         if self._ours(target) or self._from_disk(target):
             return super().read_text(target)
-        out = subprocess.run(["git", "show", f"{self.ref}:{self._rel(target)}"],
-                             cwd=self.root, capture_output=True)
-        return out.stdout.decode("utf-8", errors="ignore") if out.returncode == 0 else ""
+        data = self._show(str(self._rel(target)))
+        return data.decode("utf-8", errors="ignore") if data is not None else ""
 
     def glob(self, pattern: str) -> set[str]:
         """The ref's files matching the pattern, plus the checkout's untracked ones
@@ -1944,6 +2004,9 @@ def entry_values(facts: dict, container: str, name: str) -> list[str]:
     return out
 
 
+_FOLDS_TO_ASCII = re.compile("[\u212a\u017f\u0130]")
+
+
 def check_orphan_and_dangling_ids(facts: dict, prose: dict[str, str],
                                   f: Findings) -> None:
     """§1.4 (registry -> prose) and §2.2 (prose -> registry).
@@ -1956,13 +2019,26 @@ def check_orphan_and_dangling_ids(facts: dict, prose: dict[str, str],
     by_lower = {k.lower(): v for k, v in ids.items()}
     slug = str(facts.get("feature") or "")
     body = "\n".join(prose.values())
+    # `(?<!\w)name\b` with re.I, asked of every id against the whole prose, was the
+    # biggest cost left on a 300 KB set (7 s of 11). For a plain `\w` ASCII name it
+    # asks "is `name` a whole \w-run of the text, ignoring case", which a set of the
+    # text's lowered runs answers at once. Three characters fold to an ASCII letter
+    # under re.I without lowering to it (U+212A, U+017F, U+0130): a body carrying one
+    # keeps the regex, so the two paths cannot differ.
+    runs = None if slow_path() or _FOLDS_TO_ASCII.search(body) else \
+        {r.lower() for r in re.findall(r"\w+", body)}
+
+    def named_in_prose(name: str) -> bool:
+        if runs is not None and name.isascii() and re.fullmatch(r"\w+", name):
+            return name.lower() in runs
+        return bool(re.search(rf"(?<!\w){re.escape(name)}\b", body, re.I))
 
     for name, container in sorted(ids.items()):
         if container in ORPHAN_EXEMPT:
             continue  # a decision is cited by consequence, not by key (report §3.5)
         if is_history(registry_entry(facts, container, name)):
             continue  # kept on purpose so it is not re-derived; nobody has to cite it
-        if re.search(rf"(?<!\w){re.escape(name)}\b", body, re.I):
+        if named_in_prose(name):
             continue
         # Cited by VALUE counts as cited. An orphan is an entry no doc mentions at
         # all — "measured, correct and dead". A `limits.cloudflare` whose 100 and 524
@@ -4716,7 +4792,7 @@ def doc_index(facts: dict, facts_text: str,
         lines = [l.rstrip("\r") for l in text.split("\n")]
         if lines and lines[-1] == "":
             lines.pop()
-        present = {v: p for v, p in datums.items() if v in text}
+        present = datums_in(datums, text)
         rx = build_datum_regex(present)
         sections = doc_sections(text)
         for s in sections:

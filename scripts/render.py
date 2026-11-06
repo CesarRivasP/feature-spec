@@ -40,6 +40,60 @@ except ImportError:  # pragma: no cover
         "failure this skill exists to prevent."
     )
 
+
+
+def slow_path() -> bool:
+    """`FEATURE_SPEC_SLOW=1` runs the three speed paths the way they were written
+    before v1.26 (a `git show` per file, one regex of every datum, the pure YAML
+    loader). It exists so `tests/test_perf.py` can hold the fast path to the old
+    one's output, byte for byte, on a set big enough to feel the difference."""
+    return os.environ.get("FEATURE_SPEC_SLOW") == "1"
+
+
+class _Yaml:
+    """`yaml`, with the C loader and dumper behind `safe_load` / `safe_load_all` /
+    `safe_dump` when libyaml is there (parsing a 300 KB registry: 0.4 s pure, a
+    fraction of that in C). Every other name is PyYAML's own. A document the C parser
+    rejects is parsed again by the pure one so the error that surfaces, and its
+    `line:col` in `yaml_error_report`, is the pure parser's: the two disagree on a
+    mark's column and context for some malformed input, and the message must not
+    depend on whether libyaml is installed."""
+
+    def __init__(self, module) -> None:
+        self._m = module
+        self.accelerated = bool(getattr(module, "__with_libyaml__", False)) \
+            and not slow_path()
+
+    def __getattr__(self, name):
+        return getattr(self._m, name)
+
+    def safe_load(self, stream):
+        m = self._m
+        if not self.accelerated:
+            return m.safe_load(stream)
+        try:
+            return m.load(stream, Loader=m.CSafeLoader)
+        except m.YAMLError:
+            return m.safe_load(stream)
+
+    def safe_load_all(self, stream):
+        m = self._m
+        if not self.accelerated:
+            return m.safe_load_all(stream)
+        try:
+            return list(m.load_all(stream, Loader=m.CSafeLoader))
+        except m.YAMLError:
+            return m.safe_load_all(stream)
+
+    def safe_dump(self, data, *args, **kwargs):
+        m = self._m
+        if not self.accelerated:
+            return m.safe_dump(data, *args, **kwargs)
+        return m.dump(data, *args, Dumper=m.CSafeDumper, **kwargs)
+
+
+yaml = _Yaml(yaml)
+
 # ---------------------------------------------------------------------------
 # markdown -> html (subset: what the templates actually emit)
 # ---------------------------------------------------------------------------
@@ -502,6 +556,17 @@ def status_gate(facts: dict, claims: list[dict],
 # ---------------------------------------------------------------------------
 
 _TAG_SPLIT = re.compile(r"(<[^>]+>)")
+
+
+def datums_in(datums: dict[str, list[str]], text: str) -> dict[str, list[str]]:
+    """The datums whose value occurs in `text`, in the registry's own order. A value
+    absent from the text can never match inside it, and an alternative that cannot
+    match never wins an alternation, so a regex built from this subset finds exactly
+    the matches of one built from every value, minus compiling and trying the
+    thousands that were never going to hit."""
+    if slow_path():
+        return datums
+    return {v: p for v, p in datums.items() if v in text}
 
 
 def build_datum_regex(datums: dict[str, list[str]]) -> re.Pattern | None:
@@ -1222,7 +1287,6 @@ def trace_datums(facts: dict, docs: list[dict]) -> tuple[
     that agree today."""
     datums = {v: p for v, p in collect_datums(facts).items()
               if not all(x.startswith(STOP_PATH_PREFIXES) for x in p)}
-    rx = build_datum_regex(datums)
 
     # pass 1: markdown -> html, collecting headings for cross-ref resolution
     sections: dict[str, dict[str, str]] = {}
@@ -1239,7 +1303,8 @@ def trace_datums(facts: dict, docs: list[dict]) -> tuple[
     for d in docs:
         d["html"] = link_crossrefs(d["html"], d["id"], sections, dangling, doc_ids)
         hits: dict[str, int] = {}
-        d["html"] = mark_provenance(d["html"], datums, rx, hits)
+        d["html"] = mark_provenance(
+            d["html"], datums, build_datum_regex(datums_in(datums, d["html"])), hits)
         per_doc[d["id"]] = hits
     return datums, per_doc, dangling
 
