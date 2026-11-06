@@ -758,6 +758,22 @@ def findings_group_without_loss() -> list[str]:
     one check and message template once, with ALL members listed; `--full` prints
     each; `--json` and the verdict count members either way."""
     errs: list[str] = []
+    # unit: the header keeps values every member shares (an instruction like
+    # `(<n> lines, blob <sha7>)` must not become <v>); dates stay whole tokens
+    import io, contextlib
+    sys.path.insert(0, str(AUDIT.parent))
+    import audit as _a
+    grp = [{"severity": "DRIFT", "check": 16, "where": f"d{i}.md",
+            "what": f"`v{i}` dated 2026-09-0{i}, last at _log.md:{100 + i}",
+            "fix": "record `(<n> lines, blob <sha7>)` for every file"} for i in (1, 2, 3)]
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _a.print_grouped(grp)
+    out = buf.getvalue()
+    if "record `(<n> lines, blob <sha7>)` for every file" not in out:
+        errs.append(f"grouping: a value every member shares was abstracted in the header:\n{out}")
+    if "d1.md v1 2026-09-01 101" not in out or "2026 09" in out:
+        errs.append(f"grouping: member line lost a date or a value:\n{out}")
     fx = "log-between-rounds"
     grouped, full = run_text(fx), run_text(fx, ["--full"])
     if "DRIFT \u00d73:" not in grouped:

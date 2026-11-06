@@ -5581,8 +5581,9 @@ HUMAN_PASS = [
 
 
 _GROUP_TOKEN = re.compile(
-    r"(?P<file>`[^`\s]+\.(?:md|ya?ml|py|json)`)|(?P<r>\bR\d+\b)"
-    r"|(?P<sha>\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b)|(?P<n>\d+)")
+    r"(?P<file>`[^`\s]+\.(?:md|ya?ml|py|json)`)|(?P<date>\b\d{4}-\d{2}-\d{2}\b)"
+    r"|(?P<tick>`[^`\n]+`)|(?P<r>\bR\d+\b)"
+    r"|(?P<sha>\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b)|(?P<n>(?<![\w<.-])\d+(?![\w>]))")
 GROUP_MIN = 3
 GROUP_WRAP = 100
 
@@ -5594,8 +5595,9 @@ def _abstract(text: str) -> tuple[str, list[str]]:
 
     def rep(m: re.Match) -> str:
         vals.append(m.group(0))
-        return "<file>" if m.group("file") else "R#" if m.group("r") \
-            else "<sha>" if m.group("sha") else "<n>"
+        return ("<file>" if m.group("file") else "<date>" if m.group("date")
+                else "<v>" if m.group("tick") else "R#" if m.group("r")
+                else "<sha>" if m.group("sha") else "<n>")
     return _GROUP_TOKEN.sub(rep, text), vals
 
 
@@ -5623,15 +5625,31 @@ def group_findings(items: list[dict]) -> list[list[dict]]:
 
 def print_grouped(group: list[dict]) -> None:
     first = group[0]
-    what_t, _ = _abstract(first["what"])
-    fix_t, _ = _abstract(first["fix"])
+    all_vals = [_abstract(m["what"])[1] + _abstract(m["fix"])[1] for m in group]
+    width = min(len(v) for v in all_vals)
+    varying = [i for i in range(width) if len({v[i] for v in all_vals}) > 1]
+
+    def header(text: str, offset: int) -> str:
+        """Placeholders only where members differ; a value every member shares is
+        printed as it is (`(<n> lines, blob <sha7>)` stays an instruction)."""
+        i = [offset]
+
+        def rep(m: re.Match) -> str:
+            k = i[0]
+            i[0] += 1
+            return _abstract(m.group(0))[0] if k in varying or k >= width else m.group(0)
+        return _GROUP_TOKEN.sub(rep, text)
+    n_what = len(_abstract(first["what"])[1])
+    what_t, fix_t = header(first["what"], 0), header(first["fix"], n_what)
     wheres = {m["where"] for m in group}
     where = first["where"] if len(wheres) == 1 else "(various)"
     print(f"{where}: {first['severity']} \u00d7{len(group)}: {what_t}. {fix_t}.")
+    # each member shows only the values that differ across the group: the ones every
+    # member shares are already in the header, and repeating them hid the ones that matter
     labels = []
-    for m in group:
-        vals = _abstract(m["what"])[1] + _abstract(m["fix"])[1]
-        labels.append(" ".join([m["where"]] + [v.strip("`") for v in vals]))
+    for m, vals in zip(group, all_vals):
+        shown = [vals[i] for i in varying] + vals[width:]
+        labels.append(" ".join([m["where"]] + [v.strip("`") for v in shown]))
     line = "    "
     for lab in labels:
         piece = lab if line.strip() == "" else " \u00b7 " + lab
