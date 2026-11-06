@@ -4849,9 +4849,13 @@ def _truncate_finding_line(line: str, maxlen: int = 160) -> str:
     return s[:maxlen - 1] + "…" if len(s) > maxlen else s
 
 
+IN_LINE_CAP = 3
+
+
 def open_items(facts: dict, spec_dir: Path, repo_root: Path,
                today: datetime.date | None = None,
-               as_json: bool = False, compact: bool = False) -> None:
+               as_json: bool = False, compact: bool = False,
+               facts_text: str | None = None) -> None:
     """Print only what still demands action in a spec set, exiting without auditing.
 
     In a long-running spec set with tens of log entries, reading _log.md and the
@@ -5063,6 +5067,54 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
                 "reopens_when": str(c.get("reopens_when", "")).strip(),
             })
 
+    # 6b. where each registry entry above is discussed: the sections `--doc-index` finds
+    # citing it, from one doc_index() pass (the same cites as `--doc-index --cites`)
+    entry_keys: list[str] = []
+    for prefix, group in (("defects", open_defects), ("defects", due_risks),
+                          ("acceptance", unsigned_acceptance),
+                          ("changes", deferred_changes)):
+        for e in group:
+            k = f"{prefix}.{e['id']}"
+            if k not in entry_keys:
+                entry_keys.append(k)
+    sections_of: dict[str, list[dict]] = {}
+    if entry_keys:
+        if facts_text is None:
+            ftxt_path = spec_dir / "_facts.yml"
+            facts_text = ftxt_path.read_text(encoding="utf-8") if ftxt_path.is_file() else ""
+        docs_idx, _skipped = doc_index(facts, facts_text, spec_dir)
+        sections_of = print_doc_cites(docs_idx, entry_keys)
+
+    def sections_for(prefix: str, entry_id: str) -> list[dict]:
+        return sections_of.get(f"{prefix}.{entry_id}", [])
+
+    def in_line(rows: list[dict]) -> str:
+        if not rows:
+            return "      in: not cited in any doc"
+        shown = [f"{r['file']} L{r['start']}-{r['own_end']} § {r['title']}"
+                 + (" (maybe)" if r.get("maybe") else "") for r in rows[:IN_LINE_CAP]]
+        more = len(rows) - len(shown)
+        return "      in: " + "; ".join(shown) + (f" (+{more} more)" if more else "")
+
+    def sec_count(rows: list[dict]) -> str:
+        return f" · {len(rows)} sections" if rows else " · not cited"
+
+    def emit(line: str, prefix: str, entry_id: str) -> None:
+        rows = sections_for(prefix, entry_id)
+        if compact:
+            print(line + sec_count(rows))
+        else:
+            print(line)
+            print(in_line(rows))
+
+    for prefix, group in (("defects", open_defects), ("defects", due_risks),
+                          ("acceptance", unsigned_acceptance),
+                          ("changes", deferred_changes)):
+        for e in group:
+            e["sections"] = [{k: r.get(k, False) if k == "maybe" else r[k]
+                              for k in ("file", "start", "own_end", "end", "title", "maybe")}
+                             for r in sections_for(prefix, e["id"])]
+
     # 7. where the scripts are
     prof_rel = facts.get("profile")
     prof_file = profile_path(str(prof_rel), spec_dir, repo_root) if prof_rel else None
@@ -5132,7 +5184,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
             if d["accepted"]:
                 days_str = f", {d['days_left']} days left" if d["days_left"] is not None else ""
                 line += f" · accepted until: {d['until']}{days_str}"
-            print(line)
+            emit(line, "defects", d["id"])
     else:
         print("  none")
     print()
@@ -5142,9 +5194,13 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
         for r in sorted(due_risks, key=lambda x: x["days_left"] if x["days_left"] is not None else 999):
             days = r["days_left"]
             when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
-            print(f"  defects.{r['id']} — expires {when} ({clip(r['detail'])})")
+            rows = sections_for("defects", r["id"])
+            head = f"  defects.{r['id']} — expires {when} ({clip(r['detail'])})"
+            print(head + (sec_count(rows) if compact else ""))
             for c in r.get("closing_criteria") or []:
                 print(f"      {format_closing_criterion(c)}")
+            if not compact:
+                print(in_line(rows))
     else:
         print("  none")
     print()
@@ -5156,7 +5212,8 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
             closes = f" · closes {a['closes']}" if a.get("closes") else ""
             n = a.get("attempts_count") or 0
             tries = f" · {n} attempt{'s' if n != 1 else ''}" if n else ""
-            print(f"  acceptance.{a['id']} — status: {a['status']}{v_on}{closes}{tries} · {clip(a['item'])}")
+            emit(f"  acceptance.{a['id']} — status: {a['status']}{v_on}{closes}{tries} · {clip(a['item'])}",
+                 "acceptance", a["id"])
     else:
         print("  none")
     print()
@@ -5164,7 +5221,8 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
     print("## Changes deferred")
     if deferred_changes:
         for c in deferred_changes:
-            print(f"  changes.{c['id']} ({c['file']}) — reopens when: {clip(c['reopens_when'])}")
+            emit(f"  changes.{c['id']} ({c['file']}) — reopens when: {clip(c['reopens_when'])}",
+                 "changes", c["id"])
     else:
         print("  none")
     print()
@@ -5681,7 +5739,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.open:
         open_items(facts, spec_dir, repo_root, today=today, as_json=args.json,
-                   compact=args.compact)
+                   compact=args.compact,
+                   facts_text=facts_path.read_text(encoding="utf-8"))
         return 0
 
     if args.doc_index:

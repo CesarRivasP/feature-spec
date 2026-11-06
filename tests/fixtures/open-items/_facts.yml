@@ -46,3 +46,7 @@ docs:
     file: 01-master-plan.md
     role: master-plan
     stage: draft
+  - id: "02"
+    file: 02-detail.md
+    role: detail
+    stage: draft
