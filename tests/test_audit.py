@@ -997,6 +997,11 @@ def git(cwd: Path, *args: str) -> str:
     return out.stdout.strip()
 
 
+# the real case (16) plus the review of v1.26: reordered code, a plain comment that
+# starts with 'before', a file named old-*, CSS custom properties
+STALE46 = ["02-implementation.md:16", "02-implementation.md:142", "02-implementation.md:150", "02-implementation.md:168", "02-implementation.md:185"]
+
+
 def doc02_code_drift_modes() -> list[str]:
     """Check 46 needs the registry's status and the branch the set names: a draft set
     does not run it, and a block is compared with the tree at `tracking.branch`, not
@@ -1020,7 +1025,7 @@ def doc02_code_drift_modes() -> list[str]:
         facts = spec / "_facts.yml"
         base = facts.read_text(encoding="utf-8").replace("../_profile", "_profile")
         facts.write_text(base, encoding="utf-8")
-        if n46(spec, root) != ["02-implementation.md:16"]:
+        if n46(spec, root) != STALE46:
             problems.append(f"implementing: expected only the stale block, got {n46(spec, root)}")
         facts.write_text(base.replace("status: implementing", "status: draft"),
                          encoding="utf-8")
@@ -1037,7 +1042,7 @@ def doc02_code_drift_modes() -> list[str]:
             "const doubled = x * 2", "const doubled = x * 3"), encoding="utf-8")
         git(root, "commit", "-q", "-am", "main moves on")
         got = n46(spec, root)
-        if got != ["02-implementation.md:16"]:
+        if got != STALE46:
             problems.append(f"branch: block compared with the checkout, not feat/x: {got}")
     return problems
 

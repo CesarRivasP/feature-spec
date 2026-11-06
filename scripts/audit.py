@@ -3851,9 +3851,35 @@ def check_contract_code(facts: dict, repo_root: Path, f: Findings,
 
 
 _OPEN_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
-_PRE_CHANGE_RE = re.compile(r"\b(antes|before|old|actual|current)\b", re.I)
+# a pre-change marker OPENS the line (`antes:`, `before:` — implementable.md); a word in
+# the middle ("el finally actual", "release the lock before returning") or inside a path
+# (`old-api.ts`) is not one: review of v1.26 found both silencing the real case
+_PRE_CHANGE_RE = re.compile(r"^\W*(antes|before|old)\b\s*[:(]", re.I)
 _ELISION_RE = re.compile(r"^(\.{3}|…)$")
-_COMMENT_ONLY = ("//", "#", "/*", "*", "--")
+# comment prefixes depend on the language: `#define`, `#[derive]`, `#count`, CSS `--var`
+# and shell `--force` are code
+_SLASH_LANGS = {"js", "jsx", "ts", "tsx", "mjs", "cjs", "java", "kt", "kotlin", "swift", "go",
+                "c", "h", "cpp", "cc", "hpp", "cs", "rs", "rust", "dart", "scala", "php",
+                "javascript", "typescript", "css", "scss", "less", "jsonc"}
+_HASH_LANGS = {"py", "python", "sh", "bash", "zsh", "shell", "yaml", "yml", "rb", "ruby",
+               "toml", "ini", "conf", "cfg", "dockerfile", "make", "makefile", "r", "pl",
+               "perl", "properties", "env", "gitignore"}
+_DASH_LANGS = {"sql", "lua", "hs", "haskell"}
+# data/config files: an excerpt of keys is normal there, so lines that are all present but
+# spread are not stale; in code the same shape hides reorderings and removed lines
+_DATA_LANGS = {"json", "jsonc", "yaml", "yml", "toml", "ini", "env", "properties", "xml",
+               "plist", "conf", "cfg"}
+
+
+def _comment_prefixes(lang: str) -> tuple[str, ...]:
+    lang = lang.lower().lstrip(".")
+    if lang in _SLASH_LANGS:
+        return ("//", "/*", "*/", "* ") if lang not in ("css", "scss", "less") else ("/*", "*/", "* ")
+    if lang in _HASH_LANGS:
+        return ("# ", "#\t") if lang not in ("yaml", "yml", "toml", "ini", "conf", "cfg") else ("#",)
+    if lang in _DASH_LANGS:
+        return ("--",)
+    return ()
 
 
 def _code_fences(text: str):
@@ -3881,7 +3907,7 @@ def _code_fences(text: str):
         i = j + 1
 
 
-def _code_segments(lines: list[str]) -> list[list[str]]:
+def _code_segments(lines: list[str], lang: str = "") -> list[list[str]]:
     """Check 46's normal form: stripped, no empty lines, no comment-only lines. An
     elision marker (`...`, `…`) ends a segment instead of vanishing, because what it
     stands for is code the block chose not to show."""
@@ -3890,8 +3916,10 @@ def _code_segments(lines: list[str]) -> list[list[str]]:
         line = raw.strip()
         # a comment that elides (`// … body identical to X`, `# ... rest`) stands for
         # omitted code exactly like a bare `…`: it splits, it does not vanish
-        elides = line.startswith(_COMMENT_ONLY) and ("…" in line or "..." in line)
-        if not line or (line.startswith(_COMMENT_ONLY) and not elides):
+        prefixes = _comment_prefixes(lang)
+        is_comment = bool(prefixes) and (line.startswith(prefixes) or line in ("#", "*", "//"))
+        elides = is_comment and ("…" in line or "..." in line)
+        if not line or (is_comment and not elides):
             continue
         if elides or _ELISION_RE.match(line):
             if segs[-1]:
@@ -3901,8 +3929,11 @@ def _code_segments(lines: list[str]) -> list[list[str]]:
     return [s for s in segs if s]
 
 
-_IN_BLOCK_BEFORE = re.compile(r"^\s*(?://|#|/\*|\*|--)\s*(antes|before|old|actual|current)\b", re.I)
-_IN_BLOCK_AFTER = re.compile(r"^\s*(?://|#|/\*|\*|--)\s*(despu[eé]s|after|new|nuevo|ahora|now)\b", re.I)
+# an in-block marker is a comment that is ONLY the marker (`// antes`, `// before:`,
+# `# antes (:1-2)`), never a comment that happens to start with the word
+# (`// before returning, free the lock`)
+_IN_BLOCK_BEFORE = re.compile(r"^\s*(?://|#|/\*|--)\s*(antes|before|old)\s*(?:\([^)]*\))?\s*:?\s*(?:\*/)?\s*$", re.I)
+_IN_BLOCK_AFTER = re.compile(r"^\s*(?://|#|/\*|--)\s*(despu[eé]s|after|new|nuevo|ahora|now)\s*(?:\([^)]*\))?\s*:?\s*(?:\*/)?\s*$", re.I)
 
 
 def _after_part(body: list[str]) -> list[str] | None:
@@ -3979,12 +4010,16 @@ def check_doc02_code_drift(facts: dict, prose: dict[str, str], in_scope: list[di
     def load(rel: str) -> tuple[list[str], set[str]]:
         if rel not in cache:
             text = tree.read_text(confined(repo_root, rel))
-            flat = [ln for seg in _code_segments(text.splitlines()) for ln in seg]
+            ext = Path(rel).suffix.lstrip(".") or Path(rel).name.lower()
+            flat = [ln for seg in _code_segments(text.splitlines(), ext) for ln in seg]
             cache[rel] = (flat, set(flat))
         return cache[rel]
 
-    def match(rel: str, segs: list[list[str]], n: int) -> tuple[bool, int, str | None]:
-        """(matches, lines found anywhere, first missing line) of a block against a file."""
+    def match(rel: str, segs: list[list[str]], n: int, data: bool = False,
+              strict: bool = False) -> tuple[bool, int, str | None]:
+        """(matches, lines found anywhere, first missing line) of a block against a file.
+        `data`: a config/data block, where an excerpt of keys is normal. `strict`: only a
+        contiguous run counts (used for the changes[] alternative)."""
         flat, have = load(rel)
         found = sum(1 for s in segs for ln in s if ln in have)
         contiguous, pos, first_missing = True, 0, None
@@ -4006,7 +4041,9 @@ def check_doc02_code_drift(facts: dict, prose: dict[str, str], in_scope: list[di
             pos = at + len(seg)
         if contiguous and found / n >= 0.6:
             return True, found, None
-        if found == n and all(_in_order_window(flat, seg) is None for seg in segs):
+        if strict:
+            return False, found, first_missing
+        if data and found == n:
             # every line exists but spread across the file: an excerpt (keys of a JSON, a
             # few lines from far apart), not a region that changed — real sets had dozens
             return True, found, None
@@ -4031,8 +4068,9 @@ def check_doc02_code_drift(facts: dict, prose: dict[str, str], in_scope: list[di
             if lang in ("", "text", "txt", "log", "console", "output", "plaintext",
                         "shell-session", "sh-session"):
                 continue
-            if lang in ("diff", "patch") or _PRE_CHANGE_RE.search(info) \
-                    or _PRE_CHANGE_RE.search(above):
+            plain_above = re.sub(r"`[^`]*`", "", above)
+            if lang in ("diff", "patch") or _PRE_CHANGE_RE.search(" ".join(info.split()[1:])) \
+                    or _PRE_CHANGE_RE.search(plain_above):
                 continue
             tokens = _path_tokens(info)
             source = tokens if tokens else re.findall(r"`([^`\n]+)`", above)
@@ -4043,17 +4081,20 @@ def check_doc02_code_drift(facts: dict, prose: dict[str, str], in_scope: list[di
             body = _after_part(body)
             if body is None:
                 continue
-            segs = _code_segments(body)
+            segs = _code_segments(body, lang)
             n = sum(len(s) for s in segs)
             if n < 3:
                 continue
-            ok, found, first_missing = match(rel, segs, n)
+            ext = Path(rel).suffix.lstrip(".").lower()
+            ok, found, first_missing = match(rel, segs, n,
+                                             data=lang in _DATA_LANGS or ext in _DATA_LANGS)
             if ok:
                 continue
             # the line above may name the SOURCE of a move ("the block of Layout.js moves
             # to the hook, with this signature") while the block shows the destination:
             # a block matching another file the registry declares in changes[] is not stale
-            if any(match(other, segs, n)[0] for other in changed_files if other != rel):
+            if any(match(other, segs, n, strict=True)[0]
+                   for other in changed_files if other != rel):
                 continue
             c.add("46", f"{doc}:{lineno}",
                   f"block for `{rel}` no longer matches the tree ({found}/{n} lines "
