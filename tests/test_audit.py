@@ -1648,6 +1648,34 @@ def open_items_lists_pending_actions() -> list[str]:
                 problems.append(f"open-items: --json changes_deferred != ['C1']: {data.get('changes_deferred')}")
         except json.JSONDecodeError as exc:
             problems.append(f"open-items: --json did not return valid JSON: {exc}")
+        else:
+            d1 = (data.get("defects_open") or [{}])[0].get("sections")
+            if not d1 or len(d1) != 5 or set(d1[0]) != {"file", "start", "own_end", "end", "title", "maybe"}:
+                problems.append(f"open-items: --json defects_open[0].sections: {d1}")
+            elif (d1[1]["file"], d1[1]["start"], d1[1]["own_end"], d1[1]["title"]) != ("02-detail.md", 3, 6, "Reintentos"):
+                problems.append(f"open-items: --json D1 second section wrong: {d1[1]}")
+            ac2 = (data.get("acceptance_unsigned") or [{}])[0].get("sections")
+            if not ac2 or [r["title"] for r in ac2][-1] != "Cierre del riesgo":
+                problems.append(f"open-items: --json AC2 sections: {ac2}")
+            if (data.get("changes_deferred") or [{}])[0].get("sections") != []:
+                problems.append("open-items: --json uncited C1 must have sections: []")
+
+    # `in:` lines: first 3 sections, then (+N more); uncited says so
+    if "      in: 01-master-plan.md L1-4 § Plan maestro — open-items; 02-detail.md L3-6 § Reintentos; 02-detail.md L11-14 § Alcance (+2 more)" not in text:
+        problems.append("open-items: D1 must list 3 sections then '(+2 more)' on an 'in:' line")
+    if "      in: 01-master-plan.md L1-4 § Plan maestro — open-items; 02-detail.md L7-10 § Cierre del riesgo" not in text:
+        problems.append("open-items: AC2 'in:' line missing or wrong")
+    if "changes.C1" in text and "      in: not cited in any doc" not in text:
+        problems.append("open-items: uncited C1 must say 'in: not cited in any doc'")
+    if "R4-F1" in text and any("in:" in l for l in text.splitlines() if "R4-F1" in l or "R2-F3" in l):
+        problems.append("open-items: findings must not carry an 'in:' line")
+
+    out_c = subprocess.run(base + ["--open", "--compact"], capture_output=True, text=True)
+    if out_c.returncode != 0 or "      in:" in out_c.stdout:
+        problems.append("open-items: --compact must have no 'in:' lines")
+    elif ("· 5 sections" not in out_c.stdout or "· 2 sections" not in out_c.stdout
+          or "(src/cache.ts) — reopens when: cuando el volumen supere 1000 req/s · not cited" not in out_c.stdout):
+        problems.append(f"open-items: --compact counts wrong:\n{out_c.stdout}")
 
     return problems
 

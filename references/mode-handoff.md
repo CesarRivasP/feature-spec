@@ -7,7 +7,7 @@ A rejected finding states the evidence that killed it and **stays in the log** โ
 
 ## Session brief (`handoff <slug> --session`)
 
-`handoff <slug> --session` produces an opening brief for the next session without re-reading the entire log: it runs `python3 scripts/audit.py docs/features/<slug>/ --open` (the full output, never `--compact`: a clipped line can drop the condition that makes a criterion verifiable) plus two lines the registry cannot know: `git status --short` of the spec dir and the working branch vs `tracking.branch`. The incoming agent pastes this output as the opening of the next session, and only writes by hand what `--open` cannot derive. It is NOT a log entry and is never written to `_log.md`.
+`handoff <slug> --session` produces an opening brief for the next session without re-reading the entire log: it runs `python3 scripts/audit.py docs/features/<slug>/ --open` (the full output, never `--compact`: a clipped line can drop the condition that makes a criterion verifiable) plus two lines the registry cannot know: `git status --short` of the spec dir and the working branch vs `tracking.branch`. Each open entry in it carries an `in: <file> L<a>-<b> ยง <title>` line: the incoming agent reads those spans by offset (`offset = a, limit = b - a + 1`) rather than whole docs. The incoming agent pastes this output as the opening of the next session, and only writes by hand what `--open` cannot derive. It is NOT a log entry and is never written to `_log.md`.
 
 Format, disposition rules, and the round protocol: `references/handoff.md`.
 
