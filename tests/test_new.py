@@ -57,7 +57,8 @@ def creates_three_files() -> None:
         facts = yaml.safe_load((d / "_facts.yml").read_text())
         assert facts["feature"] == "login" and facts["status"] == "draft"
         assert [x["stage"] for x in facts["docs"]] == ["draft", "reviewed", "reviewed", "reviewed"]
-        assert facts["profile"] == "_profile.yml", facts["profile"]
+        # repo-root relative, as every real set spells it
+        assert facts["profile"] == "docs/features/_profile.yml", facts["profile"]
         log = (d / "_log.md").read_text()
         assert "## R1 · 2026-11-06 · test-agent · author" in log and "<!--" not in log
         assert "**Edits:** `_facts.yml`" in res.stdout, res.stdout
@@ -138,8 +139,8 @@ def profile_walk() -> None:
         assert res.returncode == 0, res.stdout + res.stderr
         assert "prose_language: en" in res.stdout
         facts = yaml.safe_load((app / "_facts.yml").read_text())
-        # a profile inside the spec dir is reachable by audit only from its parent
-        assert facts["profile"] == "app/_profile.yml", facts["profile"]
+        # a profile inside the spec dir: nearest wins, still spelled from the repo root
+        assert facts["profile"] == "docs/features/app/_profile.yml", facts["profile"]
         res = subprocess.run(
             [sys.executable, str(NEW), "docs/features/other/deep", "--title", "T", "--agent", "a"],
             cwd=r, capture_output=True, text=True)

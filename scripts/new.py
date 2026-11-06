@@ -58,12 +58,12 @@ def find_profile(spec: Path, root: Path) -> Path | None:
 
 
 def profile_ref(profile: Path, spec: Path, root: Path) -> str | None:
-    """`profile:` as the registry must spell it. Relative to the spec dir when audit
-    (check 15) resolves it from there; else relative to the spec dir's parent or to
-    the repo root, the two other bases audit's `profile_path` accepts."""
+    """`profile:` as the registry must spell it: relative to the repo root, the form
+    real sets use (`docs/features/_profile.yml`); else relative to the spec dir or its
+    parent, the two other bases audit's `profile_path` accepts."""
     sys.path.insert(0, str(SKILL / "scripts"))
     from audit import profile_path
-    for base in (spec, spec.parent, root):
+    for base in (root, spec, spec.parent):
         cand = Path(os.path.relpath(profile, base)).as_posix()
         got = profile_path(cand, spec, root)
         if got is not None and got.resolve() == profile.resolve():
