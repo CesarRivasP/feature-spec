@@ -166,7 +166,7 @@ The brief holds everything the worker needs and nothing it does not:
 - Profile path (`docs/features/_profile.yml`)
 - The checklist file it runs (e.g. `references/gap-sweep.md` or a layer)
 - The registry spans: `audit.py <dir> --index` lines pasted, not paraphrased — or the entries themselves from `audit.py <dir> --get KEY ...`
-- The doc sections it reads: `audit.py <dir> --doc-index --cites KEY ...` spans pasted (file, `L<a>-<b>`, heading) for the entries it covers, so it reads those sections by offset and not the docs whole
+- The doc sections it reads: `audit.py <dir> --doc-index --cites KEY ...` own spans pasted (file, `L<a>-<own_end>`, heading — the lines where the cite sits, not the whole section; keep a `(maybe)` mark so the worker knows it is a guess) for the entries it covers, so it reads those sections by offset and not the docs whole
 - What to return: the output delivery file path
 - The output shape from §Output shape
 - The invariant rule that the worker edits nothing in the set
