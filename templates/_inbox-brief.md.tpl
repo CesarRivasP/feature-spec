@@ -13,7 +13,7 @@ Return your findings as an inbox delivery file at:
 
 ## Registry Spans
 
-The following table of contents and line spans from `python3 scripts/audit.py {{spec_dir}} --index` define the relevant registry sections for your task:
+The following table of contents and line spans from `python3 scripts/audit.py {{spec_dir}} --index` define the relevant registry sections for your task (or, for a handful of entries, their exact text from `--get KEY ...`):
 
 ```
 {{registry_spans}}

@@ -1359,6 +1359,66 @@ def registry_index_spans() -> list[str]:
     return problems
 
 
+def compact_output_and_get() -> list[str]:
+    """`--open` is whole unless `--compact` (one clipped line per item); the human-pass
+    block prints checks with candidates in full and every other check as one
+    `check <id> <name>` line, `--full` restoring the descriptions; `--get` returns exact registry
+    text for the keys named, and exits 2 on a key that is not there."""
+    problems = []
+    fx = str(FIXTURES / "open-items")
+    base = [sys.executable, str(AUDIT), fx, "--repo-root", fx, "--today", "2026-10-15"]
+    full = subprocess.run(base + ["--open"], capture_output=True, text=True).stdout
+    compact = subprocess.run(base + ["--open", "--compact"], capture_output=True, text=True).stdout
+    if any(len(l.strip()) > 80 for l in compact.splitlines() if l.strip().startswith("- R4")):
+        problems.append("compact: an --open --compact finding line is longer than 80 characters")
+    if "…" not in compact or "bucket table never prunes" in compact:
+        problems.append("compact: --open --compact did not clip R4-F1's text with '…'")
+    if "bucket table never prunes" not in full or "…" in full:
+        problems.append("compact: plain --open did not print the whole text")
+    if len(full) <= len(compact):
+        problems.append("compact: --open is not longer than --open --compact")
+    bad_c = subprocess.run(base[:-2] + ["--compact"], capture_output=True, text=True)
+    if bad_c.returncode != 2 or "--compact" not in bad_c.stderr:
+        problems.append(f"compact: --compact without --open must exit 2, got {bad_c.returncode}")
+    for h in ("## Findings without a disposition", "## Defects open",
+              "## Where the scripts are"):
+        if h not in compact:
+            problems.append(f"compact: --open lost the heading {h!r}")
+
+    shape = [sys.executable, str(AUDIT), str(FIXTURES / "contract-shape"), "--no-matrix"]
+    hp = subprocess.run(shape, capture_output=True, text=True).stdout
+    hp_full = subprocess.run(shape + ["--full"], capture_output=True, text=True).stdout
+    if "  check 3   contract shape" not in hp or "  check 8   prose-orphan" not in hp:
+        problems.append("compact: a check with candidates must print in full")
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from audit import HUMAN_PASS  # noqa: E402
+    for num, name, _, _ in HUMAN_PASS:
+        if f"  check {num:<3} {name}" in hp_full and f"  check {num:<3} {name}" not in hp:
+            problems.append(f"compact: check {num} appears in --full but lost its name by default")
+    if "  check 1b  re-run" not in hp:
+        problems.append("compact: check 1b has no one-line entry")
+    if "also by hand" in hp_full:
+        problems.append("compact: stale 'also by hand' line")
+    if "  check 1b  re-run `evidence.cmd` — " in hp or "  check 1   data-vs-registry wording —" in hp:
+        problems.append("compact: a check without candidates printed its description")
+    if "  check 1b  re-run `evidence.cmd` — " not in hp_full:
+        problems.append("compact: --full did not print the whole human-pass block")
+
+    ri = str(FIXTURES / "registry-index")
+    got = subprocess.run([sys.executable, str(AUDIT), ri, "--get", "defects.D2",
+                          "limits.resend"], capture_output=True, text=True)
+    text = (FIXTURES / "registry-index" / "_facts.yml").read_text(encoding="utf-8").split("\n")
+    want = ("# defects.D2 L17-20\n" + "\n".join(text[16:20]) + "\n"
+            "# limits.resend L23-25\n" + "\n".join(text[22:25]) + "\n")
+    if got.returncode != 0 or got.stdout != want:
+        problems.append(f"get: output differs from the registry lines: {got.stdout!r}")
+    bad = subprocess.run([sys.executable, str(AUDIT), ri, "--get", "defects.D1", "nope.x"],
+                         capture_output=True, text=True)
+    if bad.returncode != 2 or "nope.x" not in bad.stderr or bad.stdout:
+        problems.append(f"get: missing key must exit 2 on stderr, got {bad.returncode}")
+    return problems
+
+
 def open_items_lists_pending_actions() -> list[str]:
     """`--open` derives what still demands action mechanically without running an audit:
     findings without dispositions, open defects with days left on accepted risks,
@@ -1936,6 +1996,8 @@ def main() -> int:
     failures += baseline_default_json_shape()
     total += 1
     failures += open_items_lists_pending_actions()
+    total += 1
+    failures += compact_output_and_get()
     total += 1
     failures += registry_index_spans()
     total += 1
