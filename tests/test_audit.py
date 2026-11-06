@@ -1661,9 +1661,9 @@ def open_items_lists_pending_actions() -> list[str]:
                 problems.append("open-items: --json uncited C1 must have sections: []")
 
     # `in:` lines: first 3 sections, then (+N more); uncited says so
-    if "      in: 01-master-plan.md L1-4 § Plan maestro — open-items; 02-detail.md L3-6 § Reintentos; 02-detail.md L11-14 § Alcance (+2 more)" not in text:
+    if "      in: 01-master-plan.md L1-4; 02-detail.md L3-6, L11-14 (+2 more)" not in text:
         problems.append("open-items: D1 must list 3 sections then '(+2 more)' on an 'in:' line")
-    if "      in: 01-master-plan.md L1-4 § Plan maestro — open-items; 02-detail.md L7-10 § Cierre del riesgo" not in text:
+    if "      in: 01-master-plan.md L1-4; 02-detail.md L7-10" not in text:
         problems.append("open-items: AC2 'in:' line missing or wrong")
     if "changes.C1" in text and "      in: not cited in any doc" not in text:
         problems.append("open-items: uncited C1 must say 'in: not cited in any doc'")

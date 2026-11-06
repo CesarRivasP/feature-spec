@@ -5091,13 +5091,20 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
     def in_line(rows: list[dict]) -> str:
         if not rows:
             return "      in: not cited in any doc"
-        shown = [f"{r['file']} L{r['start']}-{r['own_end']} § {r['title']}"
-                 + (" (maybe)" if r.get("maybe") else "") for r in rows[:IN_LINE_CAP]]
-        more = len(rows) - len(shown)
-        return "      in: " + "; ".join(shown) + (f" (+{more} more)" if more else "")
+        # spans only, grouped by file: titles are long (a real set's line grew --open from 32
+        # to 49 KB); `--doc-index` or `--doc-index --cites KEY` gives the headings
+        by_file: dict[str, list[str]] = {}
+        for r in rows[:IN_LINE_CAP]:
+            by_file.setdefault(r["file"], []).append(
+                f"L{r['start']}-{r['own_end']}" + (" (maybe)" if r.get("maybe") else ""))
+        more = len(rows) - min(len(rows), IN_LINE_CAP)
+        return ("      in: " + "; ".join(f"{f} {', '.join(spans)}" for f, spans in by_file.items())
+                + (f" (+{more} more)" if more else ""))
 
     def sec_count(rows: list[dict]) -> str:
-        return f" · {len(rows)} sections" if rows else " · not cited"
+        if not rows:
+            return " · not cited"
+        return f" · {len(rows)} section{'s' if len(rows) != 1 else ''}"
 
     def emit(line: str, prefix: str, entry_id: str) -> None:
         rows = sections_for(prefix, entry_id)
