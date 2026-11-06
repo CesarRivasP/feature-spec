@@ -2177,6 +2177,69 @@ def rotate_plan_cut_rule() -> list[str]:
     return problems
 
 
+def rotate_stub_nested_comments_open_in() -> list[str]:
+    """Review fixes: the rotate stub must END in `· rotate` (an ordinary round that
+    mentions the word is not one); nested `<!-- … <!-- … --> … -->` in the log's
+    preamble hide their example headings; `--open`'s `in:` line lists sure cites before
+    short-id guesses, and `--compact` counts sure ones, then `+ M maybe`."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "matrix"
+        shutil.copytree(FIXTURES / "matrix", spec)
+        base = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec), "--rotate-plan"]
+        entries = "".join(
+            f"## R{i} · 2026-09-30 · test · review\n**Read:** none\n"
+            f"**Log read through:** R{i - 1}\n" + "x" * 1500 + "\n\n" for i in range(37, 97))
+        pre = "# Handoff log — matrix\n\nAppend-only log.\n"
+        log = spec / "_log.md"
+
+        def plan(text: str) -> str:
+            log.write_text(text, encoding="utf-8")
+            return subprocess.run(base + ["--today", "2026-10-26"], capture_output=True, text=True).stdout
+
+        for head, want in (("## R97 · 2026-10-26 · test · rotate\n", True),
+                           ("## R97 · 2026-10-26 · test · rotate — opened by hand\n", True),
+                           ("## R97 · 2026-10-26 · test · review of the rotate flow\n", False),
+                           ("## R97 · 2026-10-26 · test · rotate-check\n", False)):
+            got = "rotate round already open" in plan(pre + entries + head)
+            if got != want:
+                problems.append(f"rotate-stub: {head.strip()!r} open={got}, want {want}")
+
+        nested = ("<!--\n## R2 · example\n<!-- inner -->\n## R3 · example\n-->\n")
+        out = plan(pre + nested + entries + "## R97 · 2026-10-26 · test · rotate\n")
+        m = re.search(r"^archive: (\S+)", out, re.M)
+        if not m or not m.group(1).startswith("_log-R37-"):
+            problems.append(f"nested-comments: example heading counted as a round: {m and m.group(1)}")
+        flat = pre + "<!--\n## R2 · example\n-->\n" + entries + "## R97 · 2026-10-26 · test · rotate\n"
+        if plan(flat) != plan(flat):
+            problems.append("nested-comments: output not stable")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "open-items"
+        shutil.copytree(FIXTURES / "open-items", spec)
+        d = spec / "02-detail.md"
+        d.write_text(d.read_text(encoding="utf-8").replace(
+            "## Reintentos", "## Previo\n\nCloudflare D1 y nada mas.\n\n## Reintentos", 1), encoding="utf-8")
+        f = spec / "_facts.yml"
+        ft = f.read_text(encoding="utf-8")
+        if "el fallback de red reintenta una sola vez" not in ft:
+            problems.append("open-in: fixture AC2 item changed")
+        f.write_text(ft.replace("el fallback de red reintenta una sola vez", "palabra " * 20), encoding="utf-8")
+        cmd = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec), "--today", "2026-10-15", "--open"]
+        full = subprocess.run(cmd, capture_output=True, text=True).stdout
+        d1 = next((l for l in full.splitlines() if l.startswith("      in: 01-master-plan.md")), "")
+        if "(maybe)" in d1 or "(+3 more)" not in d1:
+            problems.append(f"open-in: D1 line shows a maybe ahead of sure cites: {d1!r}")
+        comp = subprocess.run(cmd + ["--compact"], capture_output=True, text=True).stdout
+        if "· 5 sections + 1 maybe" not in comp:
+            problems.append(f"open-in: compact does not count sure + maybe:\n{comp}")
+        ac = next((l for l in comp.splitlines() if "acceptance.AC2" in l), "")
+        tail = ac.split("1 attempt · ", 1)[-1]
+        if len(tail) > 80 or "…" not in tail or not tail.endswith("sections"):
+            problems.append(f"open-in: compact item text + suffix is {len(tail)} chars (>80) or unclipped: {tail!r}")
+    return problems
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     failures, total = [], 0
@@ -2219,6 +2282,8 @@ def main() -> int:
     failures += rotate_plan_round_trips()
     total += 1
     failures += rotate_plan_cut_rule()
+    total += 1
+    failures += rotate_stub_nested_comments_open_in()
     total += 1
     failures += rotate_plan_quotes_paths()
     total += 1
