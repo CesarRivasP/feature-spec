@@ -3152,6 +3152,55 @@ def check_placeholders(facts: dict, f: Findings) -> None:
                       "10 placeholders")
 
 
+DATED_KEY = re.compile(r"[_-]\d{4}[_-]\d{2}[_-]\d{2}$")
+HISTORY_NOTE_MAX = 600
+
+
+def check_history_in_registry(facts: dict, f: Findings) -> None:
+    """Check 45. Narrative history inside a registry entry is read twice every round:
+    once in `_facts.yml`, once in `_log.md`, which already holds it. Real registries
+    reached 307 KB that way (`outcome_2026_09_04:`, a `note:` that tells the story of
+    an era). Only fields that are CLEARLY history fire: a key whose name ends in a
+    date, and a `note:` over 600 characters. `outcome`, `correction`,
+    `retired_because`, `falsified_by`, `accepted.*`, `conditions`, `claim`, `item` and
+    `value` are prose the rules require in the registry and are never read here."""
+    def size(v: object) -> int:
+        return len(v) if isinstance(v, str) else len(json.dumps(v, ensure_ascii=False,
+                                                                default=str))
+
+    def walk(label: str, node: object, path: str) -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                key = str(k)
+                here = f"{path}.{key}" if path else key
+                if DATED_KEY.search(key):
+                    f.add(POLISH, label,
+                          f"`{here}` is dated history ({size(v)} chars)",
+                          "move it verbatim to the `_log.md` round that produced it "
+                          "and leave `see: _log.md R<n>` in its place — never delete "
+                          "or summarize it (rules.md)",
+                          "45 history in registry")
+                elif key == "note" and isinstance(v, str) and len(v) > HISTORY_NOTE_MAX:
+                    f.add(POLISH, label,
+                          f"`{here}` is {len(v)} chars (over {HISTORY_NOTE_MAX})",
+                          "move it verbatim to the `_log.md` round that produced it "
+                          "and leave `see: _log.md R<n>` in its place — never delete "
+                          "or summarize it (rules.md)",
+                          "45 history in registry")
+                else:
+                    walk(label, v, here)
+        elif isinstance(node, list):
+            for i, v in enumerate(node):
+                walk(label, v, f"{path}[{i}]")
+
+    for container, body in facts.items():
+        if not isinstance(body, (dict, list)):
+            continue
+        for name, entry in registry_container_entries(facts, str(container)).items():
+            if isinstance(entry, dict):
+                walk(f"{container}.{name}", entry, "")
+
+
 def check_doc_size(in_scope: list[dict], f: Findings) -> None:
     """Check 17."""
     for d in in_scope:
@@ -5531,6 +5580,70 @@ HUMAN_PASS = [
 ]
 
 
+_GROUP_TOKEN = re.compile(
+    r"(?P<file>`[^`\s]+\.(?:md|ya?ml|py|json)`)|(?P<r>\bR\d+\b)"
+    r"|(?P<sha>\b(?=[0-9a-f]*\d)[0-9a-f]{7,40}\b)|(?P<n>\d+)")
+GROUP_MIN = 3
+GROUP_WRAP = 100
+
+
+def _abstract(text: str) -> tuple[str, list[str]]:
+    """Message with its round ids, files, hashes and numbers replaced by
+    placeholders, and those values in order — template + values rebuild the text."""
+    vals: list[str] = []
+
+    def rep(m: re.Match) -> str:
+        vals.append(m.group(0))
+        return "<file>" if m.group("file") else "R#" if m.group("r") \
+            else "<sha>" if m.group("sha") else "<n>"
+    return _GROUP_TOKEN.sub(rep, text), vals
+
+
+def group_findings(items: list[dict]) -> list[list[dict]]:
+    """Findings of the same severity, check and message template, in report order.
+    A group sits where its first member sat. Lossless: every member is kept, and
+    only groups of GROUP_MIN or more are worth a header."""
+    keyed: dict[tuple, list[dict]] = {}
+    order: list[tuple | int] = []
+    for i, x in enumerate(items):
+        k = (x["severity"], x["check"], _abstract(x["what"])[0], _abstract(x["fix"])[0])
+        if k not in keyed:
+            keyed[k] = []
+            order.append(k)
+        keyed[k].append(x)
+    out: list[list[dict]] = []
+    for k in order:
+        members = keyed[k]
+        if len(members) >= GROUP_MIN:
+            out.append(members)
+        else:
+            out.extend([m] for m in members)
+    return out
+
+
+def print_grouped(group: list[dict]) -> None:
+    first = group[0]
+    what_t, _ = _abstract(first["what"])
+    fix_t, _ = _abstract(first["fix"])
+    wheres = {m["where"] for m in group}
+    where = first["where"] if len(wheres) == 1 else "(various)"
+    print(f"{where}: {first['severity']} \u00d7{len(group)}: {what_t}. {fix_t}.")
+    labels = []
+    for m in group:
+        vals = _abstract(m["what"])[1] + _abstract(m["fix"])[1]
+        labels.append(" ".join([m["where"]] + [v.strip("`") for v in vals]))
+    line = "    "
+    for lab in labels:
+        piece = lab if line.strip() == "" else " \u00b7 " + lab
+        if line.strip() and len(line) + len(piece) > GROUP_WRAP:
+            print(line)
+            line, piece = "    ", lab
+        line += piece
+    if line.strip():
+        print(line)
+    print(f"    \u2514 check {first['check']}")
+
+
 def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
            prose, as_json: bool, declared_status: str | None = None,
            audited_as: str | None = None,
@@ -5594,7 +5707,11 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
 
     if new_items:
         print("## Findings\n")
-        for x in new_items:
+        for grp in ([[x] for x in new_items] if full else group_findings(new_items)):
+            if len(grp) > 1:
+                print_grouped(grp)
+                continue
+            x = grp[0]
             print(f"{x['where']}: {x['severity']}: {x['what']}. {x['fix']}.")
             print(f"    └ check {x['check']}")
         print()
@@ -5749,7 +5866,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--full", action="store_true",
                     help="in the audit report: print every human-pass check with its "
                          "full description, not only the name of those without "
-                         "candidates")
+                         "candidates, and every finding on its own line (no "
+                         "grouping of findings sharing a check and message)")
     ap.add_argument("--get", nargs="+", default=None, metavar="KEY",
                     help="print the exact _facts.yml text of each KEY (defects.D2, "
                          "limits.foo, acceptance.AC1, or a top-level key), each "
@@ -6039,6 +6157,7 @@ def main(argv: list[str] | None = None) -> int:
     check_derived_evidence(facts, spec_dir, repo_root, f)
     check_corrections(facts, prose, spec_dir, repo_root, f, c)
     check_cross_set_value_parity(facts, prose, spec_dir, repo_root, f)
+    check_history_in_registry(facts, f)
     check_doc_size(in_scope, f)
     check_profile_and_log(facts, spec_dir, repo_root, root_is_real, f)
     if not args.as_status or norm(args.as_status) == norm(declared_status):
