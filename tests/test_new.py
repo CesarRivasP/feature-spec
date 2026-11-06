@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """test_new.py — tests for scripts/new.py (the `new <slug>` scaffold).
 
-Seven cases:
+Twelve cases:
   1. creates_three_files(): _facts.yml, _log.md, 01-master-plan.md; audit has no CONTRADICTION
   2. refuses_existing(): exit 2 when _facts.yml exists, nothing overwritten
   3. no_profile_exit_2(): exit 2 with the intake-set-A message
@@ -9,6 +9,11 @@ Seven cases:
   5. dry_writes_nothing(): --dry prints the plan and creates no directory
   6. prose_language_en(): English headings from the doc-pattern map; es keeps the template's
   7. profile_walk(): nearest _profile.yml wins; recorded relative to where audit resolves it
+  8. refuses_partial(): any of the three files present -> exit 2, nothing overwritten
+  9. audit_exit_2(): audit exit 2 -> new.py exit 1 with audit's stderr
+ 10. serialization(): accents literal, yes stays a string, bad slug/title refused
+ 11. en_no_spanish(): en scaffold has no Spanish template line; title not translated
+ 12. siblings_matching(): slug-precise matching, spec.parent based (monorepo)
 
     python3 tests/test_new.py [-v]
 """
@@ -148,8 +153,112 @@ def profile_walk() -> None:
         assert "prose_language: es" in res.stdout
 
 
+def run_raw(r: Path, rel: str, title: str = "T") -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(NEW), rel, "--title", title, "--agent", "a",
+         "--today", "2026-11-06"], cwd=r, capture_output=True, text=True)
+
+
+def refuses_partial() -> None:
+    for name in ("_log.md", "01-master-plan.md"):
+        with tempfile.TemporaryDirectory() as t:
+            r = repo(t)
+            d = r / "docs" / "features" / "login"
+            d.mkdir()
+            (d / name).write_text("mine\n")
+            res = run_new(r)
+            assert res.returncode == 2 and name in res.stderr, res.stderr
+            assert (d / name).read_text() == "mine\n"
+            assert sorted(p.name for p in d.iterdir()) == [name]
+
+
+def audit_exit_2() -> None:
+    import importlib.util
+    with tempfile.TemporaryDirectory() as t:
+        r = repo(t)
+        stub = Path(t) / "stub_audit.py"
+        stub.write_text("import sys\nprint('boom: broken yaml', file=sys.stderr)\nsys.exit(2)\n")
+        spec = importlib.util.spec_from_file_location("new_under_test", NEW)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        mod.AUDIT = stub
+        cwd = Path.cwd()
+        import os, io, contextlib
+        os.chdir(r)
+        try:
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), contextlib.redirect_stdout(io.StringIO()):
+                rc = mod.main(["docs/features/login", "--title", "T", "--agent", "a",
+                               "--today", "2026-11-06"])
+        finally:
+            os.chdir(cwd)
+        assert rc == 1, rc
+        assert "boom: broken yaml" in err.getvalue(), err.getvalue()
+
+
+def serialization() -> None:
+    with tempfile.TemporaryDirectory() as t:
+        r = repo(t)
+        res = run_raw(r, "docs/features/yes", "Migración de datos")
+        assert res.returncode == 0, res.stdout + res.stderr
+        txt = (r / "docs/features/yes/_facts.yml").read_text()
+        assert "Migración" in txt and "\\u" not in txt, txt
+        facts = yaml.safe_load(txt)
+        assert facts["feature"] == "yes" and facts["title"] == "Migración de datos", facts
+        res = run_raw(r, "docs/features/ok", "line one\nline two")
+        assert res.returncode == 2 and not (r / "docs/features/ok").exists(), res.stderr
+        for bad in ("x: y", "123", "[w]", "Up"):
+            res = run_raw(r, f"docs/features/{bad}")
+            assert res.returncode == 2, (bad, res.stdout, res.stderr)
+            assert not (r / "docs/features" / bad).exists(), bad
+        res = run_raw(r, "docs/features/colon", "a: b # c")
+        assert res.returncode == 0, res.stderr
+        f = yaml.safe_load((r / "docs/features/colon/_facts.yml").read_text())
+        assert f["title"] == "a: b # c", f
+
+
+def en_no_spanish() -> None:
+    with tempfile.TemporaryDirectory() as t:
+        r = repo(t, "en")
+        res = run_raw(r, "docs/features/login", "Riesgos de Migración")
+        assert res.returncode == 0, res.stderr
+        doc = (r / "docs/features/login/01-master-plan.md").read_text()
+        assert "# Master Plan — Riesgos de Migración" in doc, doc[:200]
+        for es in ("plan de implementación", "plan de pruebas", "requerimientos para",
+                   "Todo dato compartido", "Objetivo", "Estado:", "Fecha:", "mitigación"):
+            assert es not in doc, es
+        assert "Every shared datum" in doc
+
+
+def siblings_matching() -> None:
+    with tempfile.TemporaryDirectory() as t:
+        r = repo(t)
+        f = r / "docs" / "features"
+        for n in ("legacy", "yes", "oauth-login", "login-v1", "relogin"):
+            (f / n).mkdir()
+        (f / "e.md").write_text("x")
+        res = run_new(r, "e")
+        assert res.returncode == 0, res.stderr
+        sib = [ln for ln in res.stdout.splitlines() if ln.startswith("sibling:")]
+        assert len(sib) == 1 and sib[0].startswith("sibling: docs/features/e.md —"), sib
+        res = run_new(r, "login")
+        sib = " ".join(ln.split("—")[0] for ln in res.stdout.splitlines()
+                       if ln.startswith("sibling:"))
+        assert "oauth-login" in sib and "login-v1" in sib, sib
+        assert "relogin" not in sib and "_profile" not in sib, sib
+    with tempfile.TemporaryDirectory() as t:
+        r = repo(t)
+        feats = r / "apps" / "web" / "docs" / "features"
+        (feats / "checkout-old").mkdir(parents=True)
+        shutil.copy(FIX / "profile.es.yml", feats / "_profile.yml")
+        res = run_raw(r, "apps/web/docs/features/checkout")
+        assert res.returncode == 0, res.stderr
+        assert "sibling: apps/web/docs/features/checkout-old" in res.stdout, res.stdout
+
+
 CASES = [creates_three_files, refuses_existing, no_profile_exit_2, sibling_listed,
-         dry_writes_nothing, prose_language_en, profile_walk]
+         dry_writes_nothing, prose_language_en, profile_walk, refuses_partial,
+         audit_exit_2, serialization, en_no_spanish, siblings_matching]
 
 
 def main() -> int:

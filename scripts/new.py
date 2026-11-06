@@ -10,8 +10,10 @@ headings (4) and the log (6) are mechanical; the siblings decision, the intake
 questions, the gap sweep and the prose stay with the agent. Siblings are listed,
 never decided.
 
-Refuses (exit 2) when `<dir>/_facts.yml` exists, or when no `_profile.yml` is found
-walking up to the git root. Stdlib + PyYAML only.
+Refuses (exit 2, nothing written) when any of `_facts.yml`, `_log.md` or
+`01-master-plan.md` exists in the dir, when the slug is not `^[a-z][a-z0-9-]*$`, when the
+title spans several lines, or when no `_profile.yml` is found walking up to the git root.
+Exit 1 when the post-write audit fails (contradictions, or audit exit 2). Stdlib + PyYAML only.
 """
 from __future__ import annotations
 
@@ -71,13 +73,25 @@ def profile_ref(profile: Path, spec: Path, root: Path) -> str | None:
     return None
 
 
+SLUG_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
 def siblings(spec: Path, root: Path, slug: str) -> list[Path]:
-    feats = root / "docs" / "features"
+    """Entries next to the spec dir that look like the same feature: `{slug}`,
+    `{slug}-*`, `*-{slug}`, `{slug}.md`, `{slug}-*.md`, `*-{slug}.md`. `_`-prefixed
+    names (`_profile.yml`, registry files) never match."""
+    feats = spec.parent
     if not feats.is_dir():
         return []
-    found = {p for p in feats.glob(f"*{slug}*")}
-    found |= {p for p in feats.glob(f"{slug}-*.md")}
-    return sorted(p for p in found if p.resolve() != spec.resolve())
+    out = []
+    for p in feats.iterdir():
+        n = p.name
+        if n.startswith("_") or p.resolve() == spec.resolve():
+            continue
+        stem = n[:-3] if n.endswith(".md") else n
+        if stem == slug or stem.startswith(slug + "-") or stem.endswith("-" + slug):
+            out.append(p)
+    return sorted(out)
 
 
 def heading_map() -> dict[str, str]:
@@ -113,18 +127,33 @@ EN_EXTRA = [
 ]
 
 
+# Fixed Spanish prose lines of 01-master-plan.md.tpl outside the heading table.
+EN_PROSE = [
+    ("plan de implementación, fase por fase", "implementation plan, phase by phase"),
+    ("plan de pruebas, E2E y Definition of Done", "test plan, E2E and Definition of Done"),
+    ("requerimientos para", "requirements for"),
+    ("Todo dato compartido de este doc proviene de `_facts.yml`; todo comando, de "
+     "`_profile.yml`. No editar números/nombres/comandos aquí a mano — cambiarlos en el "
+     "registry (o el profile) y correr `sync`.",
+     "Every shared datum in this doc comes from `_facts.yml`; every command, from "
+     "`_profile.yml`. Do not hand-edit numbers/names/commands here — change them in the "
+     "registry (or the profile) and run `sync`."),
+    ("riesgo | mitigación", "risk | mitigation"),
+]
+
+
 def render_doc01(tpl: str, lang: str, title: str, slug: str, today: str) -> str:
-    text = (tpl.replace("{{title}}", title)
-               .replace("{{status}}", "draft")
-               .replace("{{dates.drafted}}", today)
-               .replace("{{revision.date}}", today)
-               .replace("{{revision.tag}}", "v1")
-               .replace("{{revision.note}}", "scaffold by new.py"))
-    if lang == "en":
-        pairs = list(heading_map().items()) + EN_EXTRA
+    text = tpl
+    if lang == "en":  # translate the template FIRST: the title is user text, never translated
+        pairs = list(heading_map().items()) + EN_EXTRA + EN_PROSE
         for es, en in sorted(pairs, key=lambda p: -len(p[0])):
             text = text.replace(es, en)
-    return text
+    return (text.replace("{{title}}", title)
+                .replace("{{status}}", "draft")
+                .replace("{{dates.drafted}}", today)
+                .replace("{{revision.date}}", today)
+                .replace("{{revision.tag}}", "v1")
+                .replace("{{revision.note}}", "scaffold by new.py"))
 
 
 def build_facts(slug: str, title: str, profile_rel: str, today: str, template_header: str) -> str:
@@ -132,9 +161,9 @@ def build_facts(slug: str, title: str, profile_rel: str, today: str, template_he
         f'  - {{ id: "{i}", file: {f}, role: {r}, stage: {s} }}' for i, f, r, s in DOCS)
     return (
         f"{template_header}\n\n"
-        f"feature: {slug}\n"
+        f'feature: "{slug}"\n'
         f"profile: {profile_rel}\n"
-        f"title: {yaml.safe_dump(title, default_flow_style=True, width=10**6).splitlines()[0]}\n"
+        f"title: {yaml.safe_dump(title, default_flow_style=True, width=10**6, allow_unicode=True).splitlines()[0]}\n"
         f"status: draft\n\n"
         f"owners:\n  technical: null\n  external: null\n\n"
         f"dates:\n  drafted: {today}\n  revisions:\n"
@@ -161,8 +190,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"--today: not a YYYY-MM-DD date: {today}", file=sys.stderr)
         return 2
 
-    if (spec / "_facts.yml").exists():
-        print(f"refused: {spec / '_facts.yml'} already exists", file=sys.stderr)
+    if not SLUG_RE.match(slug):
+        print(f"refused: slug {slug!r} must match ^[a-z][a-z0-9-]*$", file=sys.stderr)
+        return 2
+    if "\n" in args.title or "\r" in args.title or not args.title.strip():
+        print("refused: --title must be a single non-empty line", file=sys.stderr)
+        return 2
+    existing = [n for n in ("_facts.yml", "_log.md", "01-master-plan.md")
+                if (spec / n).exists()]
+    if existing:
+        print("refused: already exists: " + ", ".join(str(spec / n) for n in existing),
+              file=sys.stderr)
         return 2
     root = git_root(spec)
     if root is None:
@@ -220,6 +258,10 @@ def main(argv: list[str] | None = None) -> int:
 
     res = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root", str(root)],
                          capture_output=True, text=True)
+    if res.returncode == 2:
+        print("audit: failed (exit 2)")
+        print(res.stderr or res.stdout, file=sys.stderr)
+        return 1
     lines = [ln for ln in res.stdout.splitlines() if ln.strip()]
     summary = next((ln for ln in reversed(lines)
                     if re.search(r"\d+ contradictions|^clean — ", ln)), None)
