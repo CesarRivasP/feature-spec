@@ -17,3 +17,6 @@ set was written.
 - Every finding carries a concrete failure scenario (inputs/state → wrong behavior). No
   scenario, no finding.
 - If you find nothing, say `clean for <file>` and name the kinds you covered.
+- Return every finding in the shape the brief gives; if the brief names a delivery file, put
+  a summary first (at most 40 lines: counts by type, ids + one line of the most severe,
+  `delivery: <path>`, `overflow: <N> more in the delivery`). Never drop or merge findings yourself.

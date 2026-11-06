@@ -88,6 +88,30 @@ A line with no `scenario:` is dropped at merge, as the serial sweep drops it. A 
 finds nothing says `clean for <file>` and names the kinds it covered — the same rule as a
 missing layer, one level down.
 
+## Return contract
+
+A subagent's whole return lands in the orchestrator's context. Condensing it saves that
+context, but a cap that drops findings hides the one the merge needed. So the return is
+split in two: the **delivery** holds everything, the **summary** is what the orchestrator
+sees. Merge, dedupe and escalation (rule 5, rule 6) — never truncation.
+
+**File runners** (`orca`, `agy`, any runner that writes `_inbox/R-<n>-<task>.md`):
+
+- The delivery file holds EVERY finding, in the §Output shape.
+- The message/return text is only a summary block of at most 40 lines: counts by type
+  (`FUNCTIONAL`, `SECURITY`), the ids plus one line of each of the most severe findings,
+  `delivery: <path>`, and `overflow: <N> more in the delivery` when the summary lists fewer
+  findings than the delivery holds.
+- The same summary block sits at the top of the delivery file, above the full findings
+  (`templates/_inbox-delivery.md.tpl`).
+- The merge reads the delivery file, never the summary. The summary is for the orchestrator's
+  eyes; it is not an input to rule 5.
+
+**Runner `claude`:** subagents stay read-only (no `Write`; rule 1 is held by permissions, and
+the agent definitions do not gain tools). Their text return IS the delivery and is merged
+whole. Saving orchestrator context needs a file runner; with `claude` the full return
+enters the context.
+
 ## Runners
 
 `_profile.yml parallel.runner` names how a tier becomes a running subagent.
@@ -169,6 +193,7 @@ The brief holds everything the worker needs and nothing it does not:
 - The doc sections it reads: `audit.py <dir> --doc-index --cites KEY ...` own spans pasted (file, `L<a>-<own_end>`, heading — the lines where the cite sits, not the whole section; keep a `(maybe)` mark so the worker knows it is a guess) for the entries it covers, so it reads those sections by offset and not the docs whole
 - What to return: the output delivery file path
 - The output shape from §Output shape
+- The return contract from §Return contract: the delivery holds every finding, the returned message is a summary of at most 40 lines
 - The invariant rule that the worker edits nothing in the set
 
 ### Delivery template (`templates/_inbox-delivery.md.tpl`)
@@ -176,7 +201,7 @@ The brief holds everything the worker needs and nothing it does not:
 The worker records:
 - The worker's identity: agent + model (e.g. `antigravity · gemini-3.8-flash-high`)
 - `**Read:**` line from `python3 scripts/audit.py <dir> --read-line` for each file it opened
-- Findings formatted in the exact output shape from §Output shape
+- A `SUMMARY` block at the top (§Return contract), then every finding formatted in the exact output shape from §Output shape
 - `clean for <file>` when no gaps are found, naming the kinds covered
 
 ### How a delivery becomes a round

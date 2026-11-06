@@ -29,6 +29,10 @@ Format your findings exactly as required by `references/parallel.md` §Output sh
   fix: <registry entry to add or change> | accepted risk: <why>
 ```
 
+## Return Contract
+
+Per `references/parallel.md` §Return contract: the delivery file holds EVERY finding, none dropped or merged by you. Put a `SUMMARY` block at its top, and return only that summary as your message: at most 40 lines — counts by type, ids plus one line of the most severe findings, `delivery: {{delivery_path}}`, and `overflow: <N> more in the delivery` if the summary lists fewer than all.
+
 A finding without a `scenario:` will be dropped at merge.
 If you find no gaps for the scope you reviewed, write:
 `clean for {{checklist_file}}`
