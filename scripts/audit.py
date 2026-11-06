@@ -4523,10 +4523,14 @@ def _resolve_named(names: list[str], spec_dir: Path,
     return files, missing
 
 
-def rotate_plan(facts: dict, spec_dir: Path,
-                today: datetime.date | None = None) -> tuple[int, str]:
-    """Derive the cut, archive name, stage carry and exact shell commands to
-    rotate `_log.md` without summarizing or losing a byte. Exits without auditing."""
+def rotate_plan_data(facts: dict, spec_dir: Path,
+                     today: datetime.date | None = None) -> tuple[int, "str | dict"]:
+    """The rotation of `_log.md` as data: the cut, archive name and header, the bytes
+    that move and the bytes that stay, the stage carry, the sha7 guards.
+
+    -> (0, plan dict) when there is something to rotate; (0, why) when there is not;
+    (1, why) on a refusal. `rotate_plan` prints it and scripts/rotate.py executes it,
+    so the cut is derived once."""
     log_path = spec_dir / "_log.md"
     if not log_path.is_file():
         return 0, f"nothing to rotate — 0 lines, 0KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
@@ -4592,7 +4596,9 @@ def rotate_plan(facts: dict, spec_dir: Path,
         return 0, f"nothing to rotate — {total_lines} lines, {total_kb}KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
 
     preamble_lines = groups[0].start_line - 1
-    preamble_bytes = len(raw[:groups[0].start_pos].encode("utf-8"))
+    raw_lines_ke = re.findall(r"[^\n]*\n", raw)  # the file ends in \n; same lines as `text`
+    preamble_text = "".join(raw_lines_ke[:preamble_lines])
+    preamble_bytes = len(preamble_text.encode("utf-8"))
 
     # Stage transitions
     stage_pattern = re.compile(r"^\*\*Stage:\*\*\s*(\S+)\s*(?:→|->)\s*(\S+)", re.M)
@@ -4620,9 +4626,9 @@ def rotate_plan(facts: dict, spec_dir: Path,
         last_trans_idx, last_trans_round, trans_from, trans_to, _ = real_transitions[-1]
         if last_trans_idx > 0:
             trans_cut_line = groups[last_trans_idx].start_line
-            trans_cut_pos = groups[last_trans_idx].start_pos
             trans_kept_lines = preamble_lines + (total_lines - trans_cut_line + 1)
-            trans_kept_bytes = preamble_bytes + len(raw[trans_cut_pos:].encode("utf-8"))
+            trans_kept_bytes = preamble_bytes + len(
+                "".join(raw_lines_ke[trans_cut_line - 1:]).encode("utf-8"))
             if trans_kept_lines <= budget_lines and trans_kept_bytes <= budget_bytes:
                 cut_group_idx = last_trans_idx
                 cut_reason = f"last Stage transition at R{last_trans_round} (kept part fits budget)"
@@ -4649,7 +4655,6 @@ def rotate_plan(facts: dict, spec_dir: Path,
 
     cut_group = groups[cut_group_idx]
     cut_line = cut_group.start_line
-    cut_pos = cut_group.start_pos
     arch_start = preamble_lines + 1
     arch_end = cut_line - 1
 
@@ -4657,44 +4662,35 @@ def rotate_plan(facts: dict, spec_dir: Path,
     last_arch_n = groups[cut_group_idx - 1].num
     archive_name = f"_log-R{first_arch_n}-R{last_arch_n}.md"
     # quoted where it enters the printed commands; the plan is pasted into a shell
-    archive_q = shlex.quote(archive_name)
 
     # - the archive name already exists
     if (spec_dir / archive_name).exists():
         return 1, f"--rotate-plan: archive {archive_name} already exists"
 
     arch_lines_count = arch_end - arch_start + 1
-    arch_bytes = len(raw[groups[0].start_pos:cut_pos].encode("utf-8"))
+    archived_text = "".join(raw_lines_ke[preamble_lines:cut_line - 1])
+    kept_tail_text = "".join(raw_lines_ke[cut_line - 1:])
+    arch_bytes = len(archived_text.encode("utf-8"))
     arch_kb = round(arch_bytes / 1000)
 
     kept_lines_count = preamble_lines + (total_lines - cut_line + 1)
-    kept_bytes = preamble_bytes + len(raw[cut_pos:].encode("utf-8"))
+    kept_bytes = preamble_bytes + len(kept_tail_text.encode("utf-8"))
     kept_kb = round(kept_bytes / 1000)
 
-    raw_lines = raw.splitlines()
+    raw_lines = [ln[:-1] for ln in raw_lines_ke]
     cut_head_line = raw_lines[cut_line - 1]
     m_head = re.match(r"^(## \S+)", cut_head_line)
     head_stub = (m_head.group(1) if m_head else f"## R{cut_group.num}") + " · …"
 
-    if preamble_lines > 0:
-        keep_span = f"lines 1–{preamble_lines} + {cut_line}–{total_lines}"
-    else:
-        keep_span = f"lines {cut_line}–{total_lines}"
-    keep_str = f"keep:    {keep_span} — {kept_lines_count} lines, {kept_kb}KB"
-
     last_head_line = raw_lines[groups[-1].start_line - 1]
-    if re.search(r"\brotate\b", last_head_line):
-        round_str = f"round:   rotate round already open: `{last_head_line.strip()}`"
-    else:
-        today_val = today or datetime.date.today()
-        today_str = today_val.isoformat()
-        next_n = groups[-1].num + 1
-        round_str = f"round:   open the stub first: `## R{next_n} · {today_str} · <agent> · rotate`"
+    rotate_open = bool(re.search(r"\brotate\b", last_head_line))
+    today_str = (today or datetime.date.today()).isoformat()
+    next_n = groups[-1].num + 1
 
     status = norm(facts.get("status")) or "draft"
-    stage_str = None
+    carry_content = None
     if status != "draft":
-        kept_text = raw[:groups[0].start_pos] + raw[cut_pos:]
+        kept_text = preamble_text + kept_tail_text
         kept_stages = stage_pattern.findall(kept_text)
         if not kept_stages:
             archived_real = [t for t in real_transitions if t[0] < cut_group_idx]
@@ -4714,26 +4710,90 @@ def rotate_plan(facts: dict, spec_dir: Path,
                         carry_content = f"**Stage:** {status} → {status} — carried, not a transition; in {archive_name}"
                 else:
                     carry_content = f"**Stage:** {status} → {status} — carried, not a transition; in {archive_name}"
-            stage_str = f"stage:   carry `{carry_content}` in the rotate entry"
+
+    archive_header = (
+        f"# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}\n"
+        "\n"
+        "Archived rounds from _log.md. Historical record — never edited,\n"
+        "never summarized. New rounds continue in _log.md.\n"
+        "Read this file when a carried finding points into it.\n"
+        "\n"
+        "---\n"
+        "\n"
+    )
+    return 0, {
+        "slug": slug,
+        "raw_bytes": raw_bytes,
+        "total_lines": total_lines,
+        "total_kb": total_kb,
+        "blob7": git_blob(raw_bytes)[:7],
+        "cut_line": cut_line,
+        "head_stub": head_stub,
+        "cut_reason": cut_reason,
+        "first_arch_n": first_arch_n,
+        "last_arch_n": last_arch_n,
+        "archive_name": archive_name,
+        "arch_start": arch_start,
+        "arch_end": arch_end,
+        "arch_kb": arch_kb,
+        "preamble_lines": preamble_lines,
+        "kept_lines": kept_lines_count,
+        "kept_bytes": kept_bytes,
+        "kept_kb": kept_kb,
+        "rotate_open": rotate_open,
+        "last_head_line": last_head_line,
+        "next_n": next_n,
+        "today": today_str,
+        "stage_carry": carry_content,
+        "prefix_sha7": git_blob((preamble_text + archived_text).encode("utf-8"))[:7],
+        "archive_header": archive_header,
+        "archived_text": archived_text,
+        "kept_text": preamble_text + kept_tail_text,
+    }
+
+
+def rotate_plan(facts: dict, spec_dir: Path,
+                today: datetime.date | None = None) -> tuple[int, str]:
+    """Print the cut, archive name, stage carry and exact shell commands to rotate
+    `_log.md` without summarizing or losing a byte. Exits without auditing. The plan
+    itself is `rotate_plan_data`; scripts/rotate.py runs it instead of printing it."""
+    code, plan = rotate_plan_data(facts, spec_dir, today=today)
+    if not isinstance(plan, dict):
+        return code, plan
+    P = plan
+    archive_name = P["archive_name"]
+    archive_q = shlex.quote(archive_name)  # quoted where it enters the commands; the plan is pasted into a shell
+    cut_line, arch_end, preamble_lines = P["cut_line"], P["arch_end"], P["preamble_lines"]
+    first_n, last_n = P["first_arch_n"], P["last_arch_n"]
+    total_lines = P["total_lines"]
+
+    if preamble_lines > 0:
+        keep_span = f"lines 1–{preamble_lines} + {cut_line}–{total_lines}"
+    else:
+        keep_span = f"lines {cut_line}–{total_lines}"
+    keep_str = f"keep:    {keep_span} — {P['kept_lines']} lines, {P['kept_kb']}KB"
+    if P["rotate_open"]:
+        round_str = f"round:   rotate round already open: `{P['last_head_line'].strip()}`"
+    else:
+        round_str = f"round:   open the stub first: `## R{P['next_n']} · {P['today']} · <agent> · rotate`"
 
     before_str = "before:  `audit.py <dir> --open` — its open findings are the `Carried open:` index"
     after_str = f"after:   `audit.py <dir> --read-line {archive_name}` → the record for `Archived:` and `Edits:`; then the audit"
 
     header_lines = [
-        f"# rotate plan — _log.md ({total_lines} lines, {total_kb}KB, blob {git_blob(raw_bytes)[:7]})",
-        f"cut:     line {cut_line}, before `{head_stub}` — {cut_reason}",
-        f"archive: {archive_name} — R{first_arch_n}–R{last_arch_n}, lines {arch_start}–{arch_end}, {arch_kb}KB",
+        f"# rotate plan — _log.md ({total_lines} lines, {P['total_kb']}KB, blob {P['blob7']})",
+        f"cut:     line {cut_line}, before `{P['head_stub']}` — {P['cut_reason']}",
+        f"archive: {archive_name} — R{first_n}–R{last_n}, lines {P['arch_start']}–{arch_end}, {P['arch_kb']}KB",
         keep_str,
         round_str,
     ]
-    if stage_str:
-        header_lines.append(stage_str)
+    if P["stage_carry"]:
+        header_lines.append(f"stage:   carry `{P['stage_carry']}` in the rotate entry")
     header_lines.append(before_str)
 
-    prefix_lines = raw.splitlines(keepends=True)[:arch_end]
-    prefix_data = "".join(prefix_lines).encode("utf-8")
-    prefix_sha7 = git_blob(prefix_data)[:7]
-
+    prefix_sha7 = P["prefix_sha7"]
+    slug = P["slug"]
+    arch_start = P["arch_start"]
     fixed_header_lines = (
         "'Archived rounds from _log.md. Historical record — never edited,' "
         "'never summarized. New rounds continue in _log.md.' "
@@ -4741,11 +4801,11 @@ def rotate_plan(facts: dict, spec_dir: Path,
     )
 
     if preamble_lines > 0:
-        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}' '' {fixed_header_lines} '' '---' ''; sed -n '{arch_start},{arch_end}p' _log.md; }} > {archive_q} && \\"
+        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_n}–R{last_n}' '' {fixed_header_lines} '' '---' ''; sed -n '{arch_start},{arch_end}p' _log.md; }} > {archive_q} && \\"
         cmd_kept = f"{{ sed -n '1,{preamble_lines}p' _log.md; sed -n '{cut_line},$p' _log.md; }} > _log.md.kept && \\"
         cmd_cmp = f"{{ sed -n '1,{preamble_lines}p' _log.md.kept; sed '1,8d' {archive_q}; sed '1,{preamble_lines}d' _log.md.kept; }} | cmp - _log.md && \\"
     else:
-        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}' '' {fixed_header_lines} '' '---' ''; sed -n '1,{arch_end}p' _log.md; }} > {archive_q} && \\"
+        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_n}–R{last_n}' '' {fixed_header_lines} '' '---' ''; sed -n '1,{arch_end}p' _log.md; }} > {archive_q} && \\"
         cmd_kept = f"{{ sed -n '{cut_line},$p' _log.md; }} > _log.md.kept && \\"
         cmd_cmp = f"{{ sed '1,8d' {archive_q}; cat _log.md.kept; }} | cmp - _log.md && \\"
 
