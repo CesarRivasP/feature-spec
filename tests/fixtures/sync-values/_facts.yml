@@ -1,0 +1,26 @@
+# sync.py fixture — OLD registry (committed by the test). _facts.new.yml is the
+# edited copy the test drops on disk. Covers: a simple value, a value shared by two
+# paths, a value that is part of another datum, a short value, a changed decision.
+feature: sync-values
+status: implementing
+profile: ../_profile.fixture.yml
+limits:
+  timeout_ms: 30000
+  retry_window: 'twelve minutes'
+  cache_ttl: 600
+  session_ttl: 600
+  cache_tier: 'edge cache'
+  warm_tier: 'edge cache warmup'
+  retries: 5
+decisions:
+  queue:
+    date: 2026-09-01
+    basis: decided
+    what: 'a durable queue backs the retries'
+    cited_in: ['01 §2', '02 Fase 1']
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-implementation.md, role: implementation, stage: reviewed }
+  - { id: "03", file: 03-runbook.md, role: tests, stage: shipped }
+  - { id: "L1", file: legacy-notes.md, role: legacy, stage: draft }
+  - { id: "D1", file: release-notes.md, role: derived, stage: draft }
