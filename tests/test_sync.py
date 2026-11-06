@@ -18,6 +18,12 @@ Cases:
      the others are written; writes are atomic (permissions kept, no temp left)
   8. base_equals_disk_warns(): REF == disk and registry clean = warning naming --from
   9. untracked_registry_exit_2(): registry not tracked = exit 2 asking for --from
+  10. no_git_snapshot_flow(): set in a dir with no git: --init-base, edit, dry run
+      (snapshot untouched), --apply updates doc and snapshot; no snapshot, no git = 2
+  11. init_base_refuses_overwrite(): --init-base on an existing snapshot = 2, --force ok
+  12. snapshot_kept_when_not_clean(): an ambiguous value left = snapshot stays
+  13. from_file_and_snapshot_precedence(): --from-file works; snapshot beats HEAD;
+      git-only apply does not create a snapshot
 
     python3 tests/test_sync.py
 """
@@ -287,13 +293,157 @@ def untracked_registry_exit_2() -> list[str]:
     return problems
 
 
+OLD_FACTS = """feature: tiny
+status: implementing
+profile: ../_profile.fixture.yml
+limits:
+  timeout_ms: 45000
+  retries: 6
+docs:
+  - { id: "01", file: 01-plan.md, role: master-plan, stage: draft }
+"""
+TINY_DOC = "# Plan\n\nTimeout is 45000 ms.\n\nWe allow up to 6 retries.\n"
+
+
+def make_tiny(tmp: str) -> Path:
+    """A set in a directory with NO git at all."""
+    root = Path(tmp)
+    shutil.copy(FIXTURES / "_profile.fixture.yml", root / "_profile.fixture.yml")
+    spec = root / "tiny"
+    spec.mkdir()
+    (spec / "_facts.yml").write_text(OLD_FACTS, encoding="utf-8")
+    (spec / "01-plan.md").write_text(TINY_DOC, encoding="utf-8")
+    return spec
+
+
+def no_git_snapshot_flow() -> list[str]:
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = make_tiny(tmp)
+        out = sync(spec)
+        if (out.returncode != 2 or "--init-base" not in out.stderr
+                or "--from-file" not in out.stderr):
+            problems.append(f"no base: want exit 2 naming --init-base and --from-file, "
+                            f"got {out.returncode}: {out.stderr!r}")
+        out = sync(spec, "--init-base")
+        snap = spec / "_facts.synced.yml"
+        if out.returncode != 0 or not snap.is_file() or str(snap) not in out.stdout:
+            problems.append(f"--init-base: want exit 0, path printed, file written: "
+                            f"{out.returncode} {out.stdout!r} {out.stderr!r}")
+        elif snap.read_bytes() != (spec / "_facts.yml").read_bytes():
+            problems.append("--init-base: snapshot is not a byte copy")
+        (spec / "_facts.yml").write_text(OLD_FACTS.replace("45000", "60000"),
+                                         encoding="utf-8")
+        before = snapshot(spec)
+        out = sync(spec)
+        first = out.stdout.splitlines()[0] if out.stdout else ""
+        if "_facts.synced.yml" not in first:
+            problems.append(f"dry run: first line should name the snapshot base: {first!r}")
+        if out.returncode != 0 or "45000" not in out.stdout or "1 replacement" not in out.stdout:
+            problems.append(f"dry run: plan missing: {out.returncode} {out.stdout!r}")
+        if snapshot(spec) != before:
+            problems.append("dry run wrote something")
+        out = sync(spec, "--apply")
+        doc = (spec / "01-plan.md").read_text(encoding="utf-8")
+        if out.returncode != 0 or "60000 ms" not in doc or "45000" in doc:
+            problems.append(f"apply: doc not updated: {out.returncode} {out.stderr!r}")
+        if snap.read_bytes() != (spec / "_facts.yml").read_bytes():
+            problems.append("apply: snapshot not updated to the current registry")
+        again = sync(spec, "--apply")
+        if "0 changed values" not in again.stdout:
+            problems.append(f"second run should find nothing: {again.stdout!r}")
+        if list(spec.glob(".*.tmp")):
+            problems.append("a temp file was left behind")
+    return problems
+
+
+def init_base_refuses_overwrite() -> list[str]:
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = make_tiny(tmp)
+        sync(spec, "--init-base")
+        (spec / "_facts.yml").write_text(OLD_FACTS.replace("45000", "60000"),
+                                         encoding="utf-8")
+        snap = spec / "_facts.synced.yml"
+        old_bytes = snap.read_bytes()
+        out = sync(spec, "--init-base")
+        if out.returncode != 2 or snap.read_bytes() != old_bytes:
+            problems.append(f"--init-base on existing: want exit 2, untouched: "
+                            f"{out.returncode} {out.stderr!r}")
+        out = sync(spec, "--init-base", "--force")
+        if out.returncode != 0 or snap.read_bytes() != (spec / "_facts.yml").read_bytes():
+            problems.append(f"--force: want exit 0 and a fresh copy: {out.returncode}")
+    return problems
+
+
+def snapshot_kept_when_not_clean() -> list[str]:
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = make_tiny(tmp)
+        sync(spec, "--init-base")
+        snap = spec / "_facts.synced.yml"
+        old_bytes = snap.read_bytes()
+        # 6 -> 7 is shorter than 3 characters: ambiguous, and the doc carries it
+        (spec / "_facts.yml").write_text(
+            OLD_FACTS.replace("45000", "60000").replace("retries: 6", "retries: 7"),
+            encoding="utf-8")
+        out = sync(spec, "--apply")
+        doc = (spec / "01-plan.md").read_text(encoding="utf-8")
+        if out.returncode != 1 or "Ambiguous" not in out.stdout:
+            problems.append(f"want exit 1 with an ambiguous value: {out.returncode}")
+        if "60000 ms" not in doc:
+            problems.append("the safe value should still be written")
+        if snap.read_bytes() != old_bytes or "kept" not in out.stdout:
+            problems.append("snapshot must stay and the run must say so")
+        again = sync(spec)
+        if "limits.retries" not in again.stdout:
+            problems.append(f"next run should still show the unapplied change: "
+                            f"{again.stdout!r}")
+    return problems
+
+
+def from_file_and_snapshot_precedence() -> list[str]:
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = make_tiny(tmp)
+        old = Path(tmp) / "old-facts.yml"
+        old.write_text(OLD_FACTS, encoding="utf-8")
+        (spec / "_facts.yml").write_text(OLD_FACTS.replace("45000", "60000"),
+                                         encoding="utf-8")
+        out = sync(spec, "--from-file", str(old))
+        first = out.stdout.splitlines()[0] if out.stdout else ""
+        if out.returncode != 0 or "file" not in first or "1 replacement" not in out.stdout:
+            problems.append(f"--from-file: {out.returncode} {out.stdout!r} {out.stderr!r}")
+        if sync(spec, "--from-file", str(Path(tmp) / "nope.yml")).returncode != 2:
+            problems.append("--from-file on a missing file should exit 2")
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = make_repo(tmp)  # HEAD = old, disk = new
+        out = sync(spec)
+        if "base: git HEAD" not in out.stdout:
+            problems.append(f"git without snapshot must keep using HEAD: {out.stdout[:80]!r}")
+        applied = sync(spec, "--apply")
+        if (spec / "_facts.synced.yml").exists():
+            problems.append("git-only apply must not create a snapshot")
+        del applied
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = make_repo(tmp)
+        shutil.copy(spec / "_facts.yml", spec / "_facts.synced.yml")  # snapshot = disk
+        out = sync(spec)
+        first = out.stdout.splitlines()[0] if out.stdout else ""
+        if "_facts.synced.yml" not in first or "0 changed values" not in out.stdout:
+            problems.append(f"snapshot should win over HEAD: {out.stdout[:200]!r}")
+    return problems
+
+
 def main() -> int:
     failures = []
     checks = (simple_replacement, dry_run_writes_nothing,
               legacy_derived_and_log_untouched, ambiguous_reported_not_applied,
               decisions_listed_for_a_human, scope_and_usage,
               stale_doc_not_written, base_equals_disk_warns,
-              untracked_registry_exit_2)
+              untracked_registry_exit_2, no_git_snapshot_flow,
+              init_base_refuses_overwrite, snapshot_kept_when_not_clean,
+              from_file_and_snapshot_precedence)
     for check in checks:
         failures += check()
     print(f"\n{len(checks) - bool(failures)}/{len(checks)} checks passed"

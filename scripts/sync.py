@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """sync.py — propagate changed registry values into the docs, as a command.
 
-    python3 scripts/sync.py docs/features/<slug>/ [--from REF] [--apply]
-                            [--repo-root DIR]
+    python3 scripts/sync.py docs/features/<slug>/ [--from REF | --from-file PATH]
+                            [--apply] [--repo-root DIR]
+    python3 scripts/sync.py docs/features/<slug>/ --init-base [--force]
 
 `sync` moves data, not shape (`references/mode-sync.md`). The data half is
 mechanical, so it is a script and not an agent reading every doc:
 
-1. Old values come from `_facts.yml` at REF (default HEAD, via `git show`), new
-   values from the file on disk. Both go through `render.collect_datums` / `render.walk`
+1. Old values come from the first base that exists: `--from-file PATH`, `--from REF`
+   (`git show`), `_facts.yml`'s snapshot `_facts.synced.yml` beside it, or git HEAD when
+   `_facts.yml` is tracked and not ignored. The first output line names the base used.
+   `--init-base` writes the snapshot (a byte copy of the registry). New values come
+   from the file on disk. Both go through `render.collect_datums` / `render.walk`
    — the same notion of "a datum cited in prose" the provenance view and the audit use.
 2. Every registry path whose value changed has its old value searched in the docs
    whose stage the set has reached (`audit.resolve_stage`), with the word boundaries
@@ -31,6 +35,10 @@ written ("changed since plan, re-run", exit 1) while the others are. Each write 
 a temp file in the same directory and is moved over the doc with `os.replace`, keeping
 the doc's permissions.
 
+After `--apply` the snapshot, if there is one, is overwritten with the current
+registry ONLY when the run was fully clean (exit 0); otherwise it is kept, so the
+unapplied changes stay visible next run. A dry run never writes it.
+
 Exit 0 = ok (applied or nothing to do), 1 = ambiguous values left unapplied or a doc
 changed since the plan, 2 = usage / git / YAML error.
 """
@@ -51,7 +59,8 @@ from audit import (confined, load_facts, norm, repo_root_for,  # noqa: E402
 from ship import Edit  # noqa: E402
 
 UNWRITABLE_ROLES = {"legacy", "derived"}
-NEVER_WRITTEN = {"_log.md", "_facts.yml"}
+NEVER_WRITTEN = {"_log.md", "_facts.yml", "_facts.synced.yml"}
+SNAPSHOT = "_facts.synced.yml"
 MIN_LEN = 3
 
 
@@ -63,23 +72,14 @@ def git_ok(spec_dir: Path, *cmd: str) -> bool:
         return False
 
 
-def untracked_hint(spec_dir: Path) -> str:
-    """Non-empty when _facts.yml is not tracked by git or is ignored by it."""
-    if (not git_ok(spec_dir, "ls-files", "--error-unmatch", "--", "_facts.yml")
-            or git_ok(spec_dir, "check-ignore", "-q", "--", "_facts.yml")):
-        return ("_facts.yml is not tracked by git (or is ignored), so there is no "
-                "committed registry to compare with — pass --from <ref> naming a ref "
-                "where it exists")
-    return ""
-
-
-def write_atomic(path: Path, text: str) -> None:
+def write_atomic(path: Path, text: str | bytes) -> None:
     """Temp file in the same directory + os.replace, keeping the doc's permissions."""
-    mode = path.stat().st_mode & 0o7777
+    data = text if isinstance(text, bytes) else text.encode("utf-8")
+    mode = path.stat().st_mode & 0o7777 if path.exists() else 0o644
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as fh:
-            fh.write(text.encode("utf-8"))
+            fh.write(data)
             fh.flush()
             os.fsync(fh.fileno())
         os.chmod(tmp, mode)
@@ -92,6 +92,20 @@ def write_atomic(path: Path, text: str) -> None:
         raise
 
 
+def parse_old(text: str, label: str) -> tuple[dict | None, str]:
+    try:
+        loaded = yaml.safe_load(text) or {}
+    except yaml.YAMLError:
+        try:
+            docs = [d for d in yaml.safe_load_all(text) if isinstance(d, dict)]
+        except yaml.YAMLError as exc:
+            return None, f"_facts.yml at {label} is not valid YAML — {exc}"
+        loaded = docs[-1] if docs else {}
+    if not isinstance(loaded, dict):
+        return None, f"_facts.yml at {label} is not a mapping"
+    return loaded, ""
+
+
 def load_old(spec_dir: Path, ref: str) -> tuple[dict | None, str]:
     """-> (facts at REF, error). `./` makes git resolve the path against the cwd."""
     try:
@@ -102,17 +116,20 @@ def load_old(spec_dir: Path, ref: str) -> tuple[dict | None, str]:
     if out.returncode != 0:
         why = out.stderr.strip().splitlines()[-1] if out.stderr.strip() else "git show failed"
         return None, f"cannot read _facts.yml at {ref}: {why}"
+    return parse_old(out.stdout, ref)
+
+
+def load_file(path: Path) -> tuple[dict | None, str]:
     try:
-        loaded = yaml.safe_load(out.stdout) or {}
-    except yaml.YAMLError:
-        try:
-            docs = [d for d in yaml.safe_load_all(out.stdout) if isinstance(d, dict)]
-        except yaml.YAMLError as exc:
-            return None, f"_facts.yml at {ref} is not valid YAML — {exc}"
-        loaded = docs[-1] if docs else {}
-    if not isinstance(loaded, dict):
-        return None, f"_facts.yml at {ref} is not a mapping"
-    return loaded, ""
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, f"cannot read {path}: {exc}"
+    return parse_old(text, str(path))
+
+
+def git_tracked(spec_dir: Path) -> bool:
+    return (git_ok(spec_dir, "ls-files", "--error-unmatch", "--", "_facts.yml")
+            and not git_ok(spec_dir, "check-ignore", "-q", "--", "_facts.yml"))
 
 
 def scalar_text(node) -> str | None:
@@ -221,8 +238,14 @@ def main(argv: list[str] | None = None, before_write=None) -> int:
     the stale re-read, so a test can change a doc in between without sleeping."""
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("spec_dir")
-    ap.add_argument("--from", dest="ref", default="HEAD", metavar="REF",
-                    help="git ref holding the OLD _facts.yml (default: HEAD)")
+    ap.add_argument("--from", dest="ref", default=None, metavar="REF",
+                    help="git ref holding the OLD _facts.yml (explicit)")
+    ap.add_argument("--from-file", default=None, metavar="PATH",
+                    help="file holding the OLD _facts.yml")
+    ap.add_argument("--init-base", action="store_true",
+                    help=f"write {SNAPSHOT} as a byte copy of _facts.yml and exit")
+    ap.add_argument("--force", action="store_true",
+                    help="with --init-base: overwrite an existing snapshot")
     ap.add_argument("--apply", action="store_true",
                     help="write the replacements (default: dry run, print the plan)")
     ap.add_argument("--repo-root", default=None)
@@ -238,16 +261,46 @@ def main(argv: list[str] | None = None, before_write=None) -> int:
     except yaml.YAMLError as exc:
         print(yaml_error_report(facts_path, exc), file=sys.stderr)
         return 2
-    old, err = load_old(spec_dir, args.ref)
-    if old is None:
-        hint = untracked_hint(spec_dir)
-        print(f"{err}\n{hint}" if hint else err, file=sys.stderr)
+    snap_path = spec_dir / SNAPSHOT
+    if args.init_base:
+        if snap_path.exists() and not args.force:
+            print(f"{snap_path} already exists — pass --force to overwrite it.",
+                  file=sys.stderr)
+            return 2
+        write_atomic(snap_path, facts_path.read_bytes())
+        print(snap_path)
+        return 0
+    if args.ref is not None and args.from_file is not None:
+        print("pass --from or --from-file, not both.", file=sys.stderr)
         return 2
+    if args.from_file is not None:
+        base = f"file {args.from_file}"
+        old, err = load_file(Path(args.from_file))
+    elif args.ref is not None:
+        base = f"git {args.ref}"
+        old, err = load_old(spec_dir, args.ref)
+    elif snap_path.is_file():
+        base = f"snapshot {SNAPSHOT}"
+        old, err = load_file(snap_path)
+    elif git_tracked(spec_dir):
+        base = "git HEAD"
+        old, err = load_old(spec_dir, "HEAD")
+    else:
+        old, err = None, ("no base to compare with: _facts.yml is not tracked by git "
+                          "(or is ignored) and there is no " + SNAPSHOT + ". Run "
+                          "--init-base (only when the docs match the registry), pass "
+                          "--from-file PATH, or pass --from <ref> naming a ref where "
+                          "it exists")
+    if old is None:
+        print(err, file=sys.stderr)
+        return 2
+    ref_label = base
+    print(f"base: {base}")
     repo_root_for(spec_dir, args.repo_root)  # same root resolution as the other modes
 
     changes = changed_values(old, new)
-    base_same = old == new and git_ok(spec_dir, "diff", "--quiet", "HEAD", "--",
-                                      "_facts.yml")
+    base_same = old == new and base.startswith("git ") and git_ok(
+        spec_dir, "diff", "--quiet", "HEAD", "--", "_facts.yml")
     decisions = decisions_changed(old, new)
     safe, ambiguous = classify(changes, old, new)
 
@@ -264,13 +317,13 @@ def main(argv: list[str] | None = None, before_write=None) -> int:
 
     mode = "applied" if args.apply else "DRY RUN, nothing written"
     print(f"# sync — {new.get('feature', spec_dir.name)}: {len(changes)} changed "
-          f"value{'s' if len(changes) != 1 else ''} since {args.ref} ({mode})\n")
+          f"value{'s' if len(changes) != 1 else ''} since {ref_label} ({mode})\n")
     for ch in changes:
         print(f"  {ch['path']}: {ch['old']!r} → {ch['new']!r}")
     if changes:
         print()
     elif base_same:
-        print(f"WARNING: the registry at {args.ref} is identical to the one on disk, "
+        print(f"WARNING: the registry at {args.ref or "HEAD"} is identical to the one on disk, "
               "and _facts.yml has no uncommitted changes. If the change was already "
               "committed, pass --from <previous ref> (e.g. --from HEAD~1).\n")
 
@@ -354,6 +407,13 @@ def main(argv: list[str] | None = None, before_write=None) -> int:
                 version_stamp(ed.path.name, ed.after.encode("utf-8")) for ed in written))
         else:
             print("\nNothing written.")
+        if snap_path.is_file() or base.startswith("snapshot"):
+            if bites or stale:
+                print(f"\n{SNAPSHOT} kept as is: the run was not clean, so the "
+                      "unapplied changes show again next run.")
+            else:
+                write_atomic(snap_path, facts_path.read_bytes())
+                print(f"\n{SNAPSHOT} updated to the current registry.")
     elif edits:
         print("\nDry run — re-run with --apply to write "
               + ", ".join(f"{ed.path.name} ({n})" for ed, n, _ in edits) + ".")
