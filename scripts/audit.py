@@ -16,7 +16,7 @@ script FIRST, then the judgment pass over what it lists — in that order.
                              [--as-status STAGE] [--today YYYY-MM-DD]
                              [--no-matrix] [--read-line [FILE ...]]
                              [--edits-line FILE[=WHAT] ...]
-                             [--entry [R<n>] --agent NAME --mode ACTION] [--index]
+                             [--entry [R<n>] --agent NAME --mode ACTION] [--index] [--get KEY ...] [--compact] [--full]
                              [--rotate-plan]
 
 It never executes `evidence.cmd` (protocol check 1b). A registry is a data file that
@@ -4170,16 +4170,9 @@ def _scalar_fields(node) -> dict[str, str]:
             if isinstance(k, yaml.ScalarNode) and isinstance(v, yaml.ScalarNode)}
 
 
-def registry_index(text: str) -> list[str]:
-    """The registry's table of contents: every top-level key, and every entry inside a
-    container, with the lines it spans.
-
-    A real registry reached 307KB, and every round read it whole to touch three
-    entries. This is what lets a round read the entries it needs by offset instead —
-    `Read(offset=start, limit=end-start+1)` — and the whole file only when it means
-    to. Spans come from the YAML parser's own marks, not from a regex over the text,
-    so a flow-style entry spanning four lines and a block entry spanning forty are
-    measured the same way. Comments above an entry belong to no span."""
+def _registry_spans(text: str) -> list[tuple]:
+    """(top-level key, (first, last), [((first, last), name, scalar fields), ...]) per
+    top-level key. The one place spans are measured, shared by `--index` and `--get`."""
     lines = text.split("\n")
     docs = list(yaml.compose_all(text))
     root = docs[-1] if docs else None      # a vault-ingested registry: the last document
@@ -4187,7 +4180,6 @@ def registry_index(text: str) -> list[str]:
         return []
     out = []
     for key, value in root.value:
-        a, b = _node_lines(key, value, lines)
         inner = []
         if isinstance(value, yaml.SequenceNode):
             for i, item in enumerate(value.value):
@@ -4198,6 +4190,41 @@ def registry_index(text: str) -> list[str]:
                 isinstance(v, yaml.MappingNode) for _, v in value.value):
             for k, v in value.value:
                 inner.append((_node_lines(k, v, lines), k.value, _scalar_fields(v)))
+        out.append((key, _node_lines(key, value, lines), inner))
+    return out
+
+
+def get_entries(text: str, keys: list[str]) -> tuple[list[str], list[str]]:
+    """The exact registry lines of each KEY (`defects.D2`, `limits.foo`, or a bare
+    top-level key), each preceded by `# <key> L<a>-<b>`. Returns (blocks, missing)."""
+    lines = text.split("\n")
+    spans: dict[str, tuple[int, int]] = {}
+    for key, span, inner in _registry_spans(text):
+        spans.setdefault(key.value, span)
+        for sp, name, _ in inner:
+            spans.setdefault(f"{key.value}.{name}", sp)
+    blocks, missing = [], []
+    for k in keys:
+        if k not in spans:
+            missing.append(k)
+            continue
+        a, b = spans[k]
+        blocks.append(f"# {k} L{a}-{b}\n" + "\n".join(lines[a - 1:b]))
+    return blocks, missing
+
+
+def registry_index(text: str) -> list[str]:
+    """The registry's table of contents: every top-level key, and every entry inside a
+    container, with the lines it spans.
+
+    A real registry reached 307KB, and every round read it whole to touch three
+    entries. This is what lets a round read the entries it needs by offset instead —
+    `Read(offset=start, limit=end-start+1)` — and the whole file only when it means
+    to. Spans come from the YAML parser's own marks, not from a regex over the text,
+    so a flow-style entry spanning four lines and a block entry spanning forty are
+    measured the same way. Comments above an entry belong to no span."""
+    out = []
+    for key, (a, b), inner in _registry_spans(text):
         count = f" ({len(inner)})" if inner else ""
         out.append(f"L{a}-{b}".ljust(12) + f"{key.value}{count}")
         for (x, y), name, f in inner:
@@ -4564,7 +4591,7 @@ def _truncate_finding_line(line: str, maxlen: int = 160) -> str:
 
 def open_items(facts: dict, spec_dir: Path, repo_root: Path,
                today: datetime.date | None = None,
-               as_json: bool = False) -> None:
+               as_json: bool = False, compact: bool = False) -> None:
     """Print only what still demands action in a spec set, exiting without auditing.
 
     In a long-running spec set with tens of log entries, reading _log.md and the
@@ -4811,7 +4838,12 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
         print(json.dumps(data, indent=2, ensure_ascii=False, default=str))
         return
 
-    # Text output
+    # Text output. Whole by default (the handoff brief reads it); `compact` cuts
+    # each item's free text at 80 characters.
+    def clip(text: str) -> str:
+        text = str(text)
+        return text if not compact or len(text) <= 80 else text[:79].rstrip() + "…"
+
     parts = [f"status: {status}"]
     if tracking_branch:
         parts.append(f"tracking.branch: {tracking_branch}")
@@ -4823,13 +4855,13 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
     print("## Findings without a disposition")
     if open_findings:
         for f_item in open_findings:
-            print(f"  {f_item['line']}")
+            print(f"  {clip(f_item['line'])}")
     else:
         print("  none")
     if deferred_findings:
         print("\n  deferred, waiting on:")
         for f_item in deferred_findings:
-            waiting = f": {f_item['waiting_on']}" if f_item["waiting_on"] else ""
+            waiting = f": {clip(f_item['waiting_on'])}" if f_item["waiting_on"] else ""
             print(f"  - {f_item['id']}{waiting}")
     print()
 
@@ -4850,7 +4882,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
         for r in sorted(due_risks, key=lambda x: x["days_left"] if x["days_left"] is not None else 999):
             days = r["days_left"]
             when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
-            print(f"  defects.{r['id']} — expires {when} ({r['detail']})")
+            print(f"  defects.{r['id']} — expires {when} ({clip(r['detail'])})")
             for c in r.get("closing_criteria") or []:
                 print(f"      {format_closing_criterion(c)}")
     else:
@@ -4864,7 +4896,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
             closes = f" · closes {a['closes']}" if a.get("closes") else ""
             n = a.get("attempts_count") or 0
             tries = f" · {n} attempt{'s' if n != 1 else ''}" if n else ""
-            print(f"  acceptance.{a['id']} — status: {a['status']}{v_on}{closes}{tries} · {a['item']}")
+            print(f"  acceptance.{a['id']} — status: {a['status']}{v_on}{closes}{tries} · {clip(a['item'])}")
     else:
         print("  none")
     print()
@@ -4872,7 +4904,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
     print("## Changes deferred")
     if deferred_changes:
         for c in deferred_changes:
-            print(f"  changes.{c['id']} ({c['file']}) — reopens when: {c['reopens_when']}")
+            print(f"  changes.{c['id']} ({c['file']}) — reopens when: {clip(c['reopens_when'])}")
     else:
         print("  none")
     print()
@@ -5063,7 +5095,8 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
            today: datetime.date | None = None,
            matrix: dict | None = None,
            tree: tuple[str, str] | None = None,
-           baseline: dict | None = None) -> int:
+           baseline: dict | None = None,
+           full: bool = False) -> int:
     sort_findings(f)
     for x in f.items:
         if "fingerprint" not in x:
@@ -5179,8 +5212,12 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
 
     print("## Requires a human pass\n")
     emitted = set()
+    by_hand = []
     for num, name, why, gate in HUMAN_PASS:
         if gate and not have & set(gate.split("|")):
+            continue
+        if not full and not cands.by_check.get(num):
+            by_hand.append((num, name))
             continue
         print(f"  check {num:<3} {name} — {why}")
         for cand in cands.by_check.get(num, ()):
@@ -5195,6 +5232,11 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
         print(f"  check {num:<3} candidates (check not listed above)")
         for cand in items:
             print(f"      · {cand['where']}: {cand['what']}")
+    for num, name in by_hand:
+        print(f"  check {num:<3} {name}")
+    if by_hand:
+        print("  (no candidates for these; each still needs a person — "
+              "see references/audit-protocol.md)")
     print()
 
     if matrix:
@@ -5253,6 +5295,17 @@ def main(argv: list[str] | None = None) -> int:
                     help="print only what still demands action in the set — open "
                          "findings, open defects, unsigned criteria, deferred "
                          "changes, runnable scripts — and exit without auditing")
+    ap.add_argument("--compact", action="store_true",
+                    help="with --open: one line per item, free text cut at 80 "
+                         "characters (default is whole)")
+    ap.add_argument("--full", action="store_true",
+                    help="in the audit report: print every human-pass check with its "
+                         "full description, not only the name of those without "
+                         "candidates")
+    ap.add_argument("--get", nargs="+", default=None, metavar="KEY",
+                    help="print the exact _facts.yml text of each KEY (defects.D2, "
+                         "limits.foo, acceptance.AC1, or a top-level key), each "
+                         "preceded by `# KEY L<a>-<b>`, and exit without auditing")
     ap.add_argument("--read-line", nargs="*", default=None, metavar="FILE",
                     help="print the `**Read:**` line of a `_log.md` entry — line "
                          "count and blob of each FILE, or of every file of the set "
@@ -5274,6 +5327,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the cut, archive name, stage carry and exact shell "
                          "commands to rotate _log.md, and exit without auditing")
     args = ap.parse_args(argv)
+    if args.compact and not args.open:
+        ap.error("--compact only has effect with --open")
     if args.baseline or args.write_baseline:
         if args.open:
             ap.error("--baseline/--write-baseline cannot be used with --open")
@@ -5347,7 +5402,17 @@ def main(argv: list[str] | None = None) -> int:
     repo_root, root_is_real = repo_root_for(spec_dir, args.repo_root)
 
     if args.open:
-        open_items(facts, spec_dir, repo_root, today=today, as_json=args.json)
+        open_items(facts, spec_dir, repo_root, today=today, as_json=args.json,
+                   compact=args.compact)
+        return 0
+
+    if args.get is not None:
+        blocks, missing = get_entries(facts_path.read_text(encoding="utf-8"), args.get)
+        if missing:
+            print("--get: no such registry key: " + ", ".join(missing)
+                  + " (see --index)", file=sys.stderr)
+            return 2
+        print("\n".join(blocks))
         return 0
 
     if args.index:
@@ -5507,14 +5572,14 @@ def main(argv: list[str] | None = None) -> int:
                declared_status=declared_status, audited_as=audited_as, today=today,
                matrix=matrix,
                tree=(checkout, tree.label) if tree.label else None,
-               baseline=None)
+               baseline=None, full=args.full)
         return 0
 
     return report(f, c, facts, in_scope, deferred, prose, args.json,
                   declared_status=declared_status, audited_as=audited_as, today=today,
                   matrix=matrix,
                   tree=(checkout, tree.label) if tree.label else None,
-                  baseline=baseline_dict)
+                  baseline=baseline_dict, full=args.full)
 
 
 if __name__ == "__main__":
