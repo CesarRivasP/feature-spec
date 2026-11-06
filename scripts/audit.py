@@ -4523,10 +4523,49 @@ def _resolve_named(names: list[str], spec_dir: Path,
     return files, missing
 
 
-def rotate_plan(facts: dict, spec_dir: Path,
-                today: datetime.date | None = None) -> tuple[int, str]:
-    """Derive the cut, archive name, stage carry and exact shell commands to
-    rotate `_log.md` without summarizing or losing a byte. Exits without auditing."""
+def strip_html_comments(raw: str) -> str:
+    """Blank out `<!-- … -->` comments, keeping their newlines so line numbers hold.
+    Comments nest: `<!-- a <!-- b --> c -->` is one comment (the template's example
+    rounds sit in one that holds another). An opener with no matching closer falls
+    back to the first `-->`, as a plain non-greedy match would; none at all stays."""
+    out: list[str] = []
+    i, n = 0, len(raw)
+    while i < n:
+        start = raw.find("<!--", i)
+        if start < 0:
+            out.append(raw[i:])
+            break
+        out.append(raw[i:start])
+        depth, j = 1, start + 4
+        while depth:
+            o, c = raw.find("<!--", j), raw.find("-->", j)
+            if c < 0:
+                break
+            if 0 <= o < c:
+                depth, j = depth + 1, o + 4
+            else:
+                depth, j = depth - 1, c + 3
+        if depth:  # unbalanced: first closer, or the opener is plain text
+            c = raw.find("-->", start + 4)
+            if c < 0:
+                out.append(raw[start:start + 4])
+                i = start + 4
+                continue
+            j = c + 3
+        out.append("\n" * raw.count("\n", start, j))
+        i = j
+    return "".join(out)
+
+
+def rotate_plan_data(facts: dict, spec_dir: Path,
+                     today: datetime.date | None = None, *,
+                     allow_existing_archive: bool = False) -> tuple[int, "str | dict"]:
+    """The rotation of `_log.md` as data: the cut, archive name and header, the bytes
+    that move and the bytes that stay, the stage carry, the sha7 guards.
+
+    -> (0, plan dict) when there is something to rotate; (0, why) when there is not;
+    (1, why) on a refusal. `rotate_plan` prints it and scripts/rotate.py executes it,
+    so the cut is derived once."""
     log_path = spec_dir / "_log.md"
     if not log_path.is_file():
         return 0, f"nothing to rotate — 0 lines, 0KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
@@ -4546,7 +4585,7 @@ def rotate_plan(facts: dict, spec_dir: Path,
         return 0, f"nothing to rotate — {total_lines} lines, {total_kb}KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
 
     # Strip comments while preserving newlines for line counting
-    text = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), raw, flags=re.S)
+    text = strip_html_comments(raw)
     heads = list(re.finditer(r"^## (R(\d+))\b(.*)$", text, re.M))
 
     if not heads:
@@ -4592,7 +4631,9 @@ def rotate_plan(facts: dict, spec_dir: Path,
         return 0, f"nothing to rotate — {total_lines} lines, {total_kb}KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
 
     preamble_lines = groups[0].start_line - 1
-    preamble_bytes = len(raw[:groups[0].start_pos].encode("utf-8"))
+    raw_lines_ke = re.findall(r"[^\n]*\n", raw)  # the file ends in \n; same lines as `text`
+    preamble_text = "".join(raw_lines_ke[:preamble_lines])
+    preamble_bytes = len(preamble_text.encode("utf-8"))
 
     # Stage transitions
     stage_pattern = re.compile(r"^\*\*Stage:\*\*\s*(\S+)\s*(?:→|->)\s*(\S+)", re.M)
@@ -4620,9 +4661,9 @@ def rotate_plan(facts: dict, spec_dir: Path,
         last_trans_idx, last_trans_round, trans_from, trans_to, _ = real_transitions[-1]
         if last_trans_idx > 0:
             trans_cut_line = groups[last_trans_idx].start_line
-            trans_cut_pos = groups[last_trans_idx].start_pos
             trans_kept_lines = preamble_lines + (total_lines - trans_cut_line + 1)
-            trans_kept_bytes = preamble_bytes + len(raw[trans_cut_pos:].encode("utf-8"))
+            trans_kept_bytes = preamble_bytes + len(
+                "".join(raw_lines_ke[trans_cut_line - 1:]).encode("utf-8"))
             if trans_kept_lines <= budget_lines and trans_kept_bytes <= budget_bytes:
                 cut_group_idx = last_trans_idx
                 cut_reason = f"last Stage transition at R{last_trans_round} (kept part fits budget)"
@@ -4649,7 +4690,6 @@ def rotate_plan(facts: dict, spec_dir: Path,
 
     cut_group = groups[cut_group_idx]
     cut_line = cut_group.start_line
-    cut_pos = cut_group.start_pos
     arch_start = preamble_lines + 1
     arch_end = cut_line - 1
 
@@ -4657,44 +4697,36 @@ def rotate_plan(facts: dict, spec_dir: Path,
     last_arch_n = groups[cut_group_idx - 1].num
     archive_name = f"_log-R{first_arch_n}-R{last_arch_n}.md"
     # quoted where it enters the printed commands; the plan is pasted into a shell
-    archive_q = shlex.quote(archive_name)
 
     # - the archive name already exists
-    if (spec_dir / archive_name).exists():
+    archive_exists = (spec_dir / archive_name).exists()
+    if archive_exists and not allow_existing_archive:
         return 1, f"--rotate-plan: archive {archive_name} already exists"
 
     arch_lines_count = arch_end - arch_start + 1
-    arch_bytes = len(raw[groups[0].start_pos:cut_pos].encode("utf-8"))
+    archived_text = "".join(raw_lines_ke[preamble_lines:cut_line - 1])
+    kept_tail_text = "".join(raw_lines_ke[cut_line - 1:])
+    arch_bytes = len(archived_text.encode("utf-8"))
     arch_kb = round(arch_bytes / 1000)
 
     kept_lines_count = preamble_lines + (total_lines - cut_line + 1)
-    kept_bytes = preamble_bytes + len(raw[cut_pos:].encode("utf-8"))
+    kept_bytes = preamble_bytes + len(kept_tail_text.encode("utf-8"))
     kept_kb = round(kept_bytes / 1000)
 
-    raw_lines = raw.splitlines()
+    raw_lines = [ln[:-1] for ln in raw_lines_ke]
     cut_head_line = raw_lines[cut_line - 1]
     m_head = re.match(r"^(## \S+)", cut_head_line)
     head_stub = (m_head.group(1) if m_head else f"## R{cut_group.num}") + " · …"
 
-    if preamble_lines > 0:
-        keep_span = f"lines 1–{preamble_lines} + {cut_line}–{total_lines}"
-    else:
-        keep_span = f"lines {cut_line}–{total_lines}"
-    keep_str = f"keep:    {keep_span} — {kept_lines_count} lines, {kept_kb}KB"
-
     last_head_line = raw_lines[groups[-1].start_line - 1]
-    if re.search(r"\brotate\b", last_head_line):
-        round_str = f"round:   rotate round already open: `{last_head_line.strip()}`"
-    else:
-        today_val = today or datetime.date.today()
-        today_str = today_val.isoformat()
-        next_n = groups[-1].num + 1
-        round_str = f"round:   open the stub first: `## R{next_n} · {today_str} · <agent> · rotate`"
+    rotate_open = bool(re.search(r"·\s*rotate(?:\s+—.*)?\s*$", last_head_line))
+    today_str = (today or datetime.date.today()).isoformat()
+    next_n = groups[-1].num + 1
 
     status = norm(facts.get("status")) or "draft"
-    stage_str = None
+    carry_content = None
     if status != "draft":
-        kept_text = raw[:groups[0].start_pos] + raw[cut_pos:]
+        kept_text = preamble_text + kept_tail_text
         kept_stages = stage_pattern.findall(kept_text)
         if not kept_stages:
             archived_real = [t for t in real_transitions if t[0] < cut_group_idx]
@@ -4714,26 +4746,91 @@ def rotate_plan(facts: dict, spec_dir: Path,
                         carry_content = f"**Stage:** {status} → {status} — carried, not a transition; in {archive_name}"
                 else:
                     carry_content = f"**Stage:** {status} → {status} — carried, not a transition; in {archive_name}"
-            stage_str = f"stage:   carry `{carry_content}` in the rotate entry"
+
+    archive_header = (
+        f"# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}\n"
+        "\n"
+        "Archived rounds from _log.md. Historical record — never edited,\n"
+        "never summarized. New rounds continue in _log.md.\n"
+        "Read this file when a carried finding points into it.\n"
+        "\n"
+        "---\n"
+        "\n"
+    )
+    return 0, {
+        "slug": slug,
+        "raw_bytes": raw_bytes,
+        "total_lines": total_lines,
+        "total_kb": total_kb,
+        "blob7": git_blob(raw_bytes)[:7],
+        "cut_line": cut_line,
+        "head_stub": head_stub,
+        "cut_reason": cut_reason,
+        "first_arch_n": first_arch_n,
+        "last_arch_n": last_arch_n,
+        "archive_name": archive_name,
+        "archive_exists": archive_exists,
+        "arch_start": arch_start,
+        "arch_end": arch_end,
+        "arch_kb": arch_kb,
+        "preamble_lines": preamble_lines,
+        "kept_lines": kept_lines_count,
+        "kept_bytes": kept_bytes,
+        "kept_kb": kept_kb,
+        "rotate_open": rotate_open,
+        "last_head_line": last_head_line,
+        "next_n": next_n,
+        "today": today_str,
+        "stage_carry": carry_content,
+        "prefix_sha7": git_blob((preamble_text + archived_text).encode("utf-8"))[:7],
+        "archive_header": archive_header,
+        "archived_text": archived_text,
+        "kept_text": preamble_text + kept_tail_text,
+    }
+
+
+def rotate_plan(facts: dict, spec_dir: Path,
+                today: datetime.date | None = None) -> tuple[int, str]:
+    """Print the cut, archive name, stage carry and exact shell commands to rotate
+    `_log.md` without summarizing or losing a byte. Exits without auditing. The plan
+    itself is `rotate_plan_data`; scripts/rotate.py runs it instead of printing it."""
+    code, plan = rotate_plan_data(facts, spec_dir, today=today)
+    if not isinstance(plan, dict):
+        return code, plan
+    P = plan
+    archive_name = P["archive_name"]
+    archive_q = shlex.quote(archive_name)  # quoted where it enters the commands; the plan is pasted into a shell
+    cut_line, arch_end, preamble_lines = P["cut_line"], P["arch_end"], P["preamble_lines"]
+    first_n, last_n = P["first_arch_n"], P["last_arch_n"]
+    total_lines = P["total_lines"]
+
+    if preamble_lines > 0:
+        keep_span = f"lines 1–{preamble_lines} + {cut_line}–{total_lines}"
+    else:
+        keep_span = f"lines {cut_line}–{total_lines}"
+    keep_str = f"keep:    {keep_span} — {P['kept_lines']} lines, {P['kept_kb']}KB"
+    if P["rotate_open"]:
+        round_str = f"round:   rotate round already open: `{P['last_head_line'].strip()}`"
+    else:
+        round_str = f"round:   open the stub first: `## R{P['next_n']} · {P['today']} · <agent> · rotate`"
 
     before_str = "before:  `audit.py <dir> --open` — its open findings are the `Carried open:` index"
     after_str = f"after:   `audit.py <dir> --read-line {archive_name}` → the record for `Archived:` and `Edits:`; then the audit"
 
     header_lines = [
-        f"# rotate plan — _log.md ({total_lines} lines, {total_kb}KB, blob {git_blob(raw_bytes)[:7]})",
-        f"cut:     line {cut_line}, before `{head_stub}` — {cut_reason}",
-        f"archive: {archive_name} — R{first_arch_n}–R{last_arch_n}, lines {arch_start}–{arch_end}, {arch_kb}KB",
+        f"# rotate plan — _log.md ({total_lines} lines, {P['total_kb']}KB, blob {P['blob7']})",
+        f"cut:     line {cut_line}, before `{P['head_stub']}` — {P['cut_reason']}",
+        f"archive: {archive_name} — R{first_n}–R{last_n}, lines {P['arch_start']}–{arch_end}, {P['arch_kb']}KB",
         keep_str,
         round_str,
     ]
-    if stage_str:
-        header_lines.append(stage_str)
+    if P["stage_carry"]:
+        header_lines.append(f"stage:   carry `{P['stage_carry']}` in the rotate entry")
     header_lines.append(before_str)
 
-    prefix_lines = raw.splitlines(keepends=True)[:arch_end]
-    prefix_data = "".join(prefix_lines).encode("utf-8")
-    prefix_sha7 = git_blob(prefix_data)[:7]
-
+    prefix_sha7 = P["prefix_sha7"]
+    slug = P["slug"]
+    arch_start = P["arch_start"]
     fixed_header_lines = (
         "'Archived rounds from _log.md. Historical record — never edited,' "
         "'never summarized. New rounds continue in _log.md.' "
@@ -4741,11 +4838,11 @@ def rotate_plan(facts: dict, spec_dir: Path,
     )
 
     if preamble_lines > 0:
-        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}' '' {fixed_header_lines} '' '---' ''; sed -n '{arch_start},{arch_end}p' _log.md; }} > {archive_q} && \\"
+        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_n}–R{last_n}' '' {fixed_header_lines} '' '---' ''; sed -n '{arch_start},{arch_end}p' _log.md; }} > {archive_q} && \\"
         cmd_kept = f"{{ sed -n '1,{preamble_lines}p' _log.md; sed -n '{cut_line},$p' _log.md; }} > _log.md.kept && \\"
         cmd_cmp = f"{{ sed -n '1,{preamble_lines}p' _log.md.kept; sed '1,8d' {archive_q}; sed '1,{preamble_lines}d' _log.md.kept; }} | cmp - _log.md && \\"
     else:
-        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_arch_n}–R{last_arch_n}' '' {fixed_header_lines} '' '---' ''; sed -n '1,{arch_end}p' _log.md; }} > {archive_q} && \\"
+        cmd_printf_sed = f"{{ printf '%s\\n' '# Handoff log — {slug} — archive R{first_n}–R{last_n}' '' {fixed_header_lines} '' '---' ''; sed -n '1,{arch_end}p' _log.md; }} > {archive_q} && \\"
         cmd_kept = f"{{ sed -n '{cut_line},$p' _log.md; }} > _log.md.kept && \\"
         cmd_cmp = f"{{ sed '1,8d' {archive_q}; cat _log.md.kept; }} | cmp - _log.md && \\"
 
@@ -4849,9 +4946,13 @@ def _truncate_finding_line(line: str, maxlen: int = 160) -> str:
     return s[:maxlen - 1] + "…" if len(s) > maxlen else s
 
 
+IN_LINE_CAP = 3
+
+
 def open_items(facts: dict, spec_dir: Path, repo_root: Path,
                today: datetime.date | None = None,
-               as_json: bool = False, compact: bool = False) -> None:
+               as_json: bool = False, compact: bool = False,
+               facts_text: str | None = None) -> None:
     """Print only what still demands action in a spec set, exiting without auditing.
 
     In a long-running spec set with tens of log entries, reading _log.md and the
@@ -5063,6 +5164,69 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
                 "reopens_when": str(c.get("reopens_when", "")).strip(),
             })
 
+    # 6b. where each registry entry above is discussed: the sections `--doc-index` finds
+    # citing it, from one doc_index() pass (the same cites as `--doc-index --cites`)
+    entry_keys: list[str] = []
+    for prefix, group in (("defects", open_defects), ("defects", due_risks),
+                          ("acceptance", unsigned_acceptance),
+                          ("changes", deferred_changes)):
+        for e in group:
+            k = f"{prefix}.{e['id']}"
+            if k not in entry_keys:
+                entry_keys.append(k)
+    sections_of: dict[str, list[dict]] = {}
+    if entry_keys:
+        if facts_text is None:
+            ftxt_path = spec_dir / "_facts.yml"
+            facts_text = ftxt_path.read_text(encoding="utf-8") if ftxt_path.is_file() else ""
+        docs_idx, _skipped = doc_index(facts, facts_text, spec_dir)
+        sections_of = print_doc_cites(docs_idx, entry_keys)
+
+    def sections_for(prefix: str, entry_id: str) -> list[dict]:
+        return sections_of.get(f"{prefix}.{entry_id}", [])
+
+    def in_line(rows: list[dict]) -> str:
+        if not rows:
+            return "      in: not cited in any doc"
+        # spans only, grouped by file: titles are long (a real set's line grew --open from 32
+        # to 49 KB); `--doc-index` or `--doc-index --cites KEY` gives the headings
+        by_file: dict[str, list[str]] = {}
+        rows = sorted(rows, key=lambda r: bool(r.get("maybe")))  # sure cites first
+        for r in rows[:IN_LINE_CAP]:
+            by_file.setdefault(r["file"], []).append(
+                f"L{r['start']}-{r['own_end']}" + (" (maybe)" if r.get("maybe") else ""))
+        more = len(rows) - min(len(rows), IN_LINE_CAP)
+        return ("      in: " + "; ".join(f"{f} {', '.join(spans)}" for f, spans in by_file.items())
+                + (f" (+{more} more)" if more else ""))
+
+    def sec_count(rows: list[dict]) -> str:
+        if not rows:
+            return " · not cited"
+        maybe = sum(1 for r in rows if r.get("maybe"))
+        sure = len(rows) - maybe
+        return (f" · {sure} section{'s' if sure != 1 else ''}"
+                + (f" + {maybe} maybe" if maybe else ""))
+
+    def emit(line: str, prefix: str, entry_id: str) -> None:
+        rows = sections_for(prefix, entry_id)
+        if compact:
+            # the 80 covers the whole line: id, status and suffix, not only the item text
+            suffix = sec_count(rows)
+            if len(line) + len(suffix) > 80:
+                line = line[:max(80 - len(suffix) - 1, 20)].rstrip() + "…"
+            print(line + suffix)
+        else:
+            print(line)
+            print(in_line(rows))
+
+    for prefix, group in (("defects", open_defects), ("defects", due_risks),
+                          ("acceptance", unsigned_acceptance),
+                          ("changes", deferred_changes)):
+        for e in group:
+            e["sections"] = [{k: r.get(k, False) if k == "maybe" else r[k]
+                              for k in ("file", "start", "own_end", "end", "title", "maybe")}
+                             for r in sections_for(prefix, e["id"])]
+
     # 7. where the scripts are
     prof_rel = facts.get("profile")
     prof_file = profile_path(str(prof_rel), spec_dir, repo_root) if prof_rel else None
@@ -5100,9 +5264,15 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
 
     # Text output. Whole by default (the handoff brief reads it); `compact` cuts
     # each item's free text at 80 characters.
-    def clip(text: str) -> str:
+    def clip(text: str, reserve: int = 0) -> str:
+        """`reserve`: width of the suffix printed after the text, so text + suffix
+        stays within the 80."""
         text = str(text)
-        return text if not compact or len(text) <= 80 else text[:79].rstrip() + "…"
+        limit = max(80 - reserve, 20)
+        return text if not compact or len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+    def room(prefix: str, entry_id: str) -> int:
+        return len(sec_count(sections_for(prefix, entry_id))) if compact else 0
 
     parts = [f"status: {status}"]
     if tracking_branch:
@@ -5132,7 +5302,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
             if d["accepted"]:
                 days_str = f", {d['days_left']} days left" if d["days_left"] is not None else ""
                 line += f" · accepted until: {d['until']}{days_str}"
-            print(line)
+            emit(line, "defects", d["id"])
     else:
         print("  none")
     print()
@@ -5142,9 +5312,19 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
         for r in sorted(due_risks, key=lambda x: x["days_left"] if x["days_left"] is not None else 999):
             days = r["days_left"]
             when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
-            print(f"  defects.{r['id']} — expires {when} ({clip(r['detail'])})")
+            rows = sections_for("defects", r["id"])
+            head = f"  defects.{r['id']} — expires {when} ({clip(r['detail'], room('defects', r['id']) + 1)})"
+            if compact:
+                suffix = sec_count(rows)
+                if len(head) + len(suffix) > 80:
+                    head = head[:max(80 - len(suffix) - 1, 20)].rstrip() + "…"
+                print(head + suffix)
+            else:
+                print(head)
             for c in r.get("closing_criteria") or []:
                 print(f"      {format_closing_criterion(c)}")
+            if not compact:
+                print(in_line(rows))
     else:
         print("  none")
     print()
@@ -5156,7 +5336,8 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
             closes = f" · closes {a['closes']}" if a.get("closes") else ""
             n = a.get("attempts_count") or 0
             tries = f" · {n} attempt{'s' if n != 1 else ''}" if n else ""
-            print(f"  acceptance.{a['id']} — status: {a['status']}{v_on}{closes}{tries} · {clip(a['item'])}")
+            emit(f"  acceptance.{a['id']} — status: {a['status']}{v_on}{closes}{tries} · {clip(a['item'], room('acceptance', a['id']))}",
+                 "acceptance", a["id"])
     else:
         print("  none")
     print()
@@ -5164,7 +5345,8 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
     print("## Changes deferred")
     if deferred_changes:
         for c in deferred_changes:
-            print(f"  changes.{c['id']} ({c['file']}) — reopens when: {clip(c['reopens_when'])}")
+            emit(f"  changes.{c['id']} ({c['file']}) — reopens when: {clip(c['reopens_when'], room('changes', c['id']))}",
+                 "changes", c["id"])
     else:
         print("  none")
     print()
@@ -5681,7 +5863,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.open:
         open_items(facts, spec_dir, repo_root, today=today, as_json=args.json,
-                   compact=args.compact)
+                   compact=args.compact,
+                   facts_text=facts_path.read_text(encoding="utf-8"))
         return 0
 
     if args.doc_index:

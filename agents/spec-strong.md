@@ -17,3 +17,5 @@ set was written.
 - Every finding carries a concrete failure scenario (inputs/state → wrong behavior). No
   scenario, no finding.
 - If you find nothing, say `clean for <file>` and name the kinds you covered.
+- You have no Write tool: return every finding as text in the shape the brief gives, never a
+  summary with overflow. Never drop or merge findings yourself.

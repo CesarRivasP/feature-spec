@@ -1648,6 +1648,41 @@ def open_items_lists_pending_actions() -> list[str]:
                 problems.append(f"open-items: --json changes_deferred != ['C1']: {data.get('changes_deferred')}")
         except json.JSONDecodeError as exc:
             problems.append(f"open-items: --json did not return valid JSON: {exc}")
+        else:
+            d1 = (data.get("defects_open") or [{}])[0].get("sections")
+            if not d1 or len(d1) != 5 or set(d1[0]) != {"file", "start", "own_end", "end", "title", "maybe"}:
+                problems.append(f"open-items: --json defects_open[0].sections: {d1}")
+            elif (d1[1]["file"], d1[1]["start"], d1[1]["own_end"], d1[1]["title"]) != ("02-detail.md", 3, 6, "Reintentos"):
+                problems.append(f"open-items: --json D1 second section wrong: {d1[1]}")
+            ac2 = (data.get("acceptance_unsigned") or [{}])[0].get("sections")
+            if not ac2 or [r["title"] for r in ac2][-1] != "Cierre del riesgo":
+                problems.append(f"open-items: --json AC2 sections: {ac2}")
+            if (data.get("changes_deferred") or [{}])[0].get("sections") != []:
+                problems.append("open-items: --json uncited C1 must have sections: []")
+
+    # `in:` lines: first 3 sections, then (+N more); uncited says so
+    if "      in: 01-master-plan.md L1-4; 02-detail.md L3-6, L11-14 (+2 more)" not in text:
+        problems.append("open-items: D1 must list 3 sections then '(+2 more)' on an 'in:' line")
+    if "      in: 01-master-plan.md L1-4; 02-detail.md L7-10" not in text:
+        problems.append("open-items: AC2 'in:' line missing or wrong")
+    if "changes.C1" in text and "      in: not cited in any doc" not in text:
+        problems.append("open-items: uncited C1 must say 'in: not cited in any doc'")
+    if "R4-F1" in text and any("in:" in l for l in text.splitlines() if "R4-F1" in l or "R2-F3" in l):
+        problems.append("open-items: findings must not carry an 'in:' line")
+
+    out_c = subprocess.run(base + ["--open", "--compact"], capture_output=True, text=True)
+    if out_c.returncode != 0 or "      in:" in out_c.stdout:
+        problems.append("open-items: --compact must have no 'in:' lines")
+    elif ("· 5 sections" not in out_c.stdout or "· 2 sections" not in out_c.stdout
+          or not any(l.startswith("  changes.C1 (src/cache.ts) — reopens when: cuando")
+                     and l.endswith("· not cited") for l in out_c.stdout.splitlines())):
+        problems.append(f"open-items: --compact counts wrong:\n{out_c.stdout}")
+    # the 80 covers the whole item line (id, status, text, suffix), not only the text:
+    # real case, acceptance lines came out at 123 characters
+    long_items = [l for l in out_c.stdout.splitlines()
+                  if l.startswith("  ") and " · " in l and len(l) > 80]
+    if long_items:
+        problems.append(f"open-items: --compact item lines over 80: {long_items}")
 
     return problems
 
@@ -2149,6 +2184,69 @@ def rotate_plan_cut_rule() -> list[str]:
     return problems
 
 
+def rotate_stub_nested_comments_open_in() -> list[str]:
+    """Review fixes: the rotate stub must END in `· rotate` (an ordinary round that
+    mentions the word is not one); nested `<!-- … <!-- … --> … -->` in the log's
+    preamble hide their example headings; `--open`'s `in:` line lists sure cites before
+    short-id guesses, and `--compact` counts sure ones, then `+ M maybe`."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "matrix"
+        shutil.copytree(FIXTURES / "matrix", spec)
+        base = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec), "--rotate-plan"]
+        entries = "".join(
+            f"## R{i} · 2026-09-30 · test · review\n**Read:** none\n"
+            f"**Log read through:** R{i - 1}\n" + "x" * 1500 + "\n\n" for i in range(37, 97))
+        pre = "# Handoff log — matrix\n\nAppend-only log.\n"
+        log = spec / "_log.md"
+
+        def plan(text: str) -> str:
+            log.write_text(text, encoding="utf-8")
+            return subprocess.run(base + ["--today", "2026-10-26"], capture_output=True, text=True).stdout
+
+        for head, want in (("## R97 · 2026-10-26 · test · rotate\n", True),
+                           ("## R97 · 2026-10-26 · test · rotate — opened by hand\n", True),
+                           ("## R97 · 2026-10-26 · test · review of the rotate flow\n", False),
+                           ("## R97 · 2026-10-26 · test · rotate-check\n", False)):
+            got = "rotate round already open" in plan(pre + entries + head)
+            if got != want:
+                problems.append(f"rotate-stub: {head.strip()!r} open={got}, want {want}")
+
+        nested = ("<!--\n## R2 · example\n<!-- inner -->\n## R3 · example\n-->\n")
+        out = plan(pre + nested + entries + "## R97 · 2026-10-26 · test · rotate\n")
+        m = re.search(r"^archive: (\S+)", out, re.M)
+        if not m or not m.group(1).startswith("_log-R37-"):
+            problems.append(f"nested-comments: example heading counted as a round: {m and m.group(1)}")
+        flat = pre + "<!--\n## R2 · example\n-->\n" + entries + "## R97 · 2026-10-26 · test · rotate\n"
+        if plan(flat) != plan(flat):
+            problems.append("nested-comments: output not stable")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "open-items"
+        shutil.copytree(FIXTURES / "open-items", spec)
+        d = spec / "02-detail.md"
+        d.write_text(d.read_text(encoding="utf-8").replace(
+            "## Reintentos", "## Previo\n\nCloudflare D1 y nada mas.\n\n## Reintentos", 1), encoding="utf-8")
+        f = spec / "_facts.yml"
+        ft = f.read_text(encoding="utf-8")
+        if "el fallback de red reintenta una sola vez" not in ft:
+            problems.append("open-in: fixture AC2 item changed")
+        f.write_text(ft.replace("el fallback de red reintenta una sola vez", "palabra " * 20), encoding="utf-8")
+        cmd = [sys.executable, str(AUDIT), str(spec), "--repo-root", str(spec), "--today", "2026-10-15", "--open"]
+        full = subprocess.run(cmd, capture_output=True, text=True).stdout
+        d1 = next((l for l in full.splitlines() if l.startswith("      in: 01-master-plan.md")), "")
+        if "(maybe)" in d1 or "(+3 more)" not in d1:
+            problems.append(f"open-in: D1 line shows a maybe ahead of sure cites: {d1!r}")
+        comp = subprocess.run(cmd + ["--compact"], capture_output=True, text=True).stdout
+        if "· 5 sections + 1 maybe" not in comp:
+            problems.append(f"open-in: compact does not count sure + maybe:\n{comp}")
+        ac = next((l for l in comp.splitlines() if "acceptance.AC2" in l), "")
+        tail = ac.split("1 attempt · ", 1)[-1]
+        if len(tail) > 80 or "…" not in tail or not tail.endswith("sections"):
+            problems.append(f"open-in: compact item text + suffix is {len(tail)} chars (>80) or unclipped: {tail!r}")
+    return problems
+
+
 def main() -> int:
     verbose = "-v" in sys.argv
     failures, total = [], 0
@@ -2191,6 +2289,8 @@ def main() -> int:
     failures += rotate_plan_round_trips()
     total += 1
     failures += rotate_plan_cut_rule()
+    total += 1
+    failures += rotate_stub_nested_comments_open_in()
     total += 1
     failures += rotate_plan_quotes_paths()
     total += 1
