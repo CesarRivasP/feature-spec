@@ -4523,8 +4523,43 @@ def _resolve_named(names: list[str], spec_dir: Path,
     return files, missing
 
 
+def strip_html_comments(raw: str) -> str:
+    """Blank out `<!-- … -->` comments, keeping their newlines so line numbers hold.
+    Comments nest: `<!-- a <!-- b --> c -->` is one comment (the template's example
+    rounds sit in one that holds another). An opener with no matching closer falls
+    back to the first `-->`, as a plain non-greedy match would; none at all stays."""
+    out: list[str] = []
+    i, n = 0, len(raw)
+    while i < n:
+        start = raw.find("<!--", i)
+        if start < 0:
+            out.append(raw[i:])
+            break
+        out.append(raw[i:start])
+        depth, j = 1, start + 4
+        while depth:
+            o, c = raw.find("<!--", j), raw.find("-->", j)
+            if c < 0:
+                break
+            if 0 <= o < c:
+                depth, j = depth + 1, o + 4
+            else:
+                depth, j = depth - 1, c + 3
+        if depth:  # unbalanced: first closer, or the opener is plain text
+            c = raw.find("-->", start + 4)
+            if c < 0:
+                out.append(raw[start:start + 4])
+                i = start + 4
+                continue
+            j = c + 3
+        out.append("\n" * raw.count("\n", start, j))
+        i = j
+    return "".join(out)
+
+
 def rotate_plan_data(facts: dict, spec_dir: Path,
-                     today: datetime.date | None = None) -> tuple[int, "str | dict"]:
+                     today: datetime.date | None = None, *,
+                     allow_existing_archive: bool = False) -> tuple[int, "str | dict"]:
     """The rotation of `_log.md` as data: the cut, archive name and header, the bytes
     that move and the bytes that stay, the stage carry, the sha7 guards.
 
@@ -4550,7 +4585,7 @@ def rotate_plan_data(facts: dict, spec_dir: Path,
         return 0, f"nothing to rotate — {total_lines} lines, {total_kb}KB, under {LOG_MAX_LINES} lines / {LOG_MAX_BYTES // 1000}KB"
 
     # Strip comments while preserving newlines for line counting
-    text = re.sub(r"<!--.*?-->", lambda m: "\n" * m.group(0).count("\n"), raw, flags=re.S)
+    text = strip_html_comments(raw)
     heads = list(re.finditer(r"^## (R(\d+))\b(.*)$", text, re.M))
 
     if not heads:
@@ -4664,7 +4699,8 @@ def rotate_plan_data(facts: dict, spec_dir: Path,
     # quoted where it enters the printed commands; the plan is pasted into a shell
 
     # - the archive name already exists
-    if (spec_dir / archive_name).exists():
+    archive_exists = (spec_dir / archive_name).exists()
+    if archive_exists and not allow_existing_archive:
         return 1, f"--rotate-plan: archive {archive_name} already exists"
 
     arch_lines_count = arch_end - arch_start + 1
@@ -4683,7 +4719,7 @@ def rotate_plan_data(facts: dict, spec_dir: Path,
     head_stub = (m_head.group(1) if m_head else f"## R{cut_group.num}") + " · …"
 
     last_head_line = raw_lines[groups[-1].start_line - 1]
-    rotate_open = bool(re.search(r"\brotate\b", last_head_line))
+    rotate_open = bool(re.search(r"·\s*rotate(?:\s+—.*)?\s*$", last_head_line))
     today_str = (today or datetime.date.today()).isoformat()
     next_n = groups[-1].num + 1
 
@@ -4733,6 +4769,7 @@ def rotate_plan_data(facts: dict, spec_dir: Path,
         "first_arch_n": first_arch_n,
         "last_arch_n": last_arch_n,
         "archive_name": archive_name,
+        "archive_exists": archive_exists,
         "arch_start": arch_start,
         "arch_end": arch_end,
         "arch_kb": arch_kb,
@@ -5154,6 +5191,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
         # spans only, grouped by file: titles are long (a real set's line grew --open from 32
         # to 49 KB); `--doc-index` or `--doc-index --cites KEY` gives the headings
         by_file: dict[str, list[str]] = {}
+        rows = sorted(rows, key=lambda r: bool(r.get("maybe")))  # sure cites first
         for r in rows[:IN_LINE_CAP]:
             by_file.setdefault(r["file"], []).append(
                 f"L{r['start']}-{r['own_end']}" + (" (maybe)" if r.get("maybe") else ""))
@@ -5164,7 +5202,10 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
     def sec_count(rows: list[dict]) -> str:
         if not rows:
             return " · not cited"
-        return f" · {len(rows)} section{'s' if len(rows) != 1 else ''}"
+        maybe = sum(1 for r in rows if r.get("maybe"))
+        sure = len(rows) - maybe
+        return (f" · {sure} section{'s' if sure != 1 else ''}"
+                + (f" + {maybe} maybe" if maybe else ""))
 
     def emit(line: str, prefix: str, entry_id: str) -> None:
         rows = sections_for(prefix, entry_id)
@@ -5219,9 +5260,15 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
 
     # Text output. Whole by default (the handoff brief reads it); `compact` cuts
     # each item's free text at 80 characters.
-    def clip(text: str) -> str:
+    def clip(text: str, reserve: int = 0) -> str:
+        """`reserve`: width of the suffix printed after the text, so text + suffix
+        stays within the 80."""
         text = str(text)
-        return text if not compact or len(text) <= 80 else text[:79].rstrip() + "…"
+        limit = max(80 - reserve, 20)
+        return text if not compact or len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+    def room(prefix: str, entry_id: str) -> int:
+        return len(sec_count(sections_for(prefix, entry_id))) if compact else 0
 
     parts = [f"status: {status}"]
     if tracking_branch:
@@ -5262,7 +5309,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
             days = r["days_left"]
             when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
             rows = sections_for("defects", r["id"])
-            head = f"  defects.{r['id']} — expires {when} ({clip(r['detail'])})"
+            head = f"  defects.{r['id']} — expires {when} ({clip(r['detail'], room('defects', r['id']) + 1)})"
             print(head + (sec_count(rows) if compact else ""))
             for c in r.get("closing_criteria") or []:
                 print(f"      {format_closing_criterion(c)}")
@@ -5279,7 +5326,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
             closes = f" · closes {a['closes']}" if a.get("closes") else ""
             n = a.get("attempts_count") or 0
             tries = f" · {n} attempt{'s' if n != 1 else ''}" if n else ""
-            emit(f"  acceptance.{a['id']} — status: {a['status']}{v_on}{closes}{tries} · {clip(a['item'])}",
+            emit(f"  acceptance.{a['id']} — status: {a['status']}{v_on}{closes}{tries} · {clip(a['item'], room('acceptance', a['id']))}",
                  "acceptance", a["id"])
     else:
         print("  none")
@@ -5288,7 +5335,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
     print("## Changes deferred")
     if deferred_changes:
         for c in deferred_changes:
-            emit(f"  changes.{c['id']} ({c['file']}) — reopens when: {clip(c['reopens_when'])}",
+            emit(f"  changes.{c['id']} ({c['file']}) — reopens when: {clip(c['reopens_when'], room('changes', c['id']))}",
                  "changes", c["id"])
     else:
         print("  none")

@@ -15,8 +15,10 @@ All of it runs on temporary copies of tests/fixtures/matrix — the fixture the
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -289,10 +291,141 @@ def entry_lines_pass_check_16() -> list[str]:
     return problems
 
 
+def modes_are_kept() -> list[str]:
+    """mkstemp makes 0600: the rotated log must keep the original's mode, the archive
+    gets the umask default (what write_text gives)."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = make_spec(tmp)
+        (spec / "_log.md").chmod(0o644)
+        res = run(spec)
+        if res.returncode != 0:
+            return [f"modes_are_kept: exit {res.returncode}: {res.stderr}"]
+        got = stat.S_IMODE((spec / "_log.md").stat().st_mode)
+        if got != 0o644:
+            problems.append(f"modes_are_kept: _log.md is {oct(got)}, was 0o644")
+        umask = os.umask(0)
+        os.umask(umask)
+        arch = next(spec.glob("_log-R*.md"))
+        got_a = stat.S_IMODE(arch.stat().st_mode)
+        if got_a != 0o666 & ~umask:
+            problems.append(f"modes_are_kept: archive is {oct(got_a)}, umask default is {oct(0o666 & ~umask)}")
+        if (spec / "_log.md.orig").exists():
+            problems.append("modes_are_kept: _log.md.orig left after a good run")
+    return problems
+
+
+def symlink_log_refused() -> list[str]:
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = make_spec(tmp)
+        real = Path(tmp) / "real_log.md"
+        shutil.move(str(spec / "_log.md"), real)
+        (spec / "_log.md").symlink_to(real)
+        before = real.read_bytes()
+        res = run(spec)
+        if res.returncode != 2 or "symlink" not in res.stderr:
+            problems.append(f"symlink_log_refused: expected 2 + 'symlink', got {res.returncode}: {res.stderr}")
+        if not (spec / "_log.md").is_symlink() or real.read_bytes() != before:
+            problems.append("symlink_log_refused: the link or its target changed")
+        if list(spec.glob("_log-R*.md")) or stray_files(spec):
+            problems.append("symlink_log_refused: something was written")
+    return problems
+
+
+def log_changed_during_archive_write() -> list[str]:
+    """The compare happens again right before the replace, not only before the archive."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = make_spec(tmp)
+        plan = plan_of(spec)
+
+        def edit(d: Path) -> None:
+            with (d / "_log.md").open("a", encoding="utf-8") as fh:
+                fh.write("late line\n")
+
+        code, lines = rotate.execute(spec, plan, before_replace=edit)
+        if code != 2:
+            problems.append(f"log_changed_during_archive_write: expected 2, got {code}: {lines}")
+        if not (spec / "_log.md").read_bytes().endswith(b"late line\n"):
+            problems.append("log_changed_during_archive_write: the concurrent edit was lost")
+        if (spec / plan["archive_name"]).exists() or stray_files(spec) or (spec / "_log.md.orig").exists():
+            problems.append("log_changed_during_archive_write: archive / temp / .orig left behind")
+    return problems
+
+
+def leftover_archive_is_named() -> list[str]:
+    """An archive equal to header + moved bytes is an interrupted run: say it is safe
+    to delete. A different one is just 'exists'. Stale temp files of ours are cleaned."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = make_spec(tmp)
+        plan = plan_of(spec)
+        arch = spec / plan["archive_name"]
+        arch.write_bytes((plan["archive_header"] + plan["archived_text"]).encode("utf-8"))
+        before = (spec / "_log.md").read_bytes()
+        res = run(spec)
+        if res.returncode != 2 or "leftover" not in res.stderr or "safe to delete" not in res.stderr:
+            problems.append(f"leftover_archive_is_named: no leftover message ({res.returncode}): {res.stderr}")
+        if (spec / "_log.md").read_bytes() != before:
+            problems.append("leftover_archive_is_named: _log.md changed")
+        arch.write_bytes(b"other")
+        res = run(spec)
+        if "leftover" in res.stderr or res.returncode != 2:
+            problems.append(f"leftover_archive_is_named: a different archive was called a leftover: {res.stderr}")
+        arch.unlink()
+        (spec / "_log.md.abc123.tmp").write_bytes(b"junk")
+        (spec / (plan["archive_name"] + ".zz.tmp")).write_bytes(b"junk")
+        res = run(spec)
+        if res.returncode != 0 or stray_files(spec):
+            problems.append(f"leftover_archive_is_named: stale tmp files kept ({res.returncode}): {stray_files(spec)}")
+    return problems
+
+
+def oserror_restores_from_orig() -> list[str]:
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = make_spec(tmp)
+        plan = plan_of(spec)
+        original = (spec / "_log.md").read_bytes()
+
+        def boom(d: Path) -> None:
+            raise OSError("disk went away")
+
+        code, lines = rotate.execute(spec, plan, after_write=boom)
+        if code != 1 or "disk went away" not in " ".join(lines):
+            problems.append(f"oserror_restores_from_orig: expected 1 + the error, got {code}: {lines}")
+        if (spec / "_log.md").read_bytes() != original:
+            problems.append("oserror_restores_from_orig: _log.md was not restored")
+        if (spec / plan["archive_name"]).exists() or stray_files(spec):
+            problems.append("oserror_restores_from_orig: archive / temp left behind")
+        # a leftover backup of an earlier run is never overwritten
+        (spec / "_log.md.orig").write_bytes(b"precious")
+        res = run(spec)
+        if res.returncode != 2 or "_log.md.orig" not in res.stderr or (spec / "_log.md.orig").read_bytes() != b"precious":
+            problems.append(f"oserror_restores_from_orig: existing .orig not protected ({res.returncode}): {res.stderr}")
+    return problems
+
+
+def dry_prints_no_shell_block() -> list[str]:
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = make_spec(tmp)
+        out = run(spec, "--dry").stdout
+        if "```" in out or "sed -n" in out:
+            problems.append(f"dry_prints_no_shell_block: the sh block was printed:\n{out}")
+        for word in ("cut:", "archive:", "keep:", "round:", "stage:", "**Archived:**"):
+            if word not in out:
+                problems.append(f"dry_prints_no_shell_block: {word!r} missing")
+    return problems
+
+
 CHECKS = [
     rotates_and_reassembles, dry_writes_nothing, archive_exists_refused,
     log_changed_since_plan, no_open_stub_refused, unsafe_path_is_just_a_path,
     nothing_to_rotate_exits_0, failed_verification_restores, entry_lines_pass_check_16,
+    modes_are_kept, symlink_log_refused, log_changed_during_archive_write,
+    leftover_archive_is_named, oserror_restores_from_orig, dry_prints_no_shell_block,
 ]
 
 
