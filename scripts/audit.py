@@ -5314,7 +5314,13 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
             when = "today" if days == 0 else "tomorrow" if days == 1 else f"in {days} days"
             rows = sections_for("defects", r["id"])
             head = f"  defects.{r['id']} — expires {when} ({clip(r['detail'], room('defects', r['id']) + 1)})"
-            print(head + (sec_count(rows) if compact else ""))
+            if compact:
+                suffix = sec_count(rows)
+                if len(head) + len(suffix) > 80:
+                    head = head[:max(80 - len(suffix) - 1, 20)].rstrip() + "…"
+                print(head + suffix)
+            else:
+                print(head)
             for c in r.get("closing_criteria") or []:
                 print(f"      {format_closing_criterion(c)}")
             if not compact:
