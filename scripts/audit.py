@@ -16,7 +16,7 @@ script FIRST, then the judgment pass over what it lists — in that order.
                              [--as-status STAGE] [--today YYYY-MM-DD]
                              [--no-matrix] [--read-line [FILE ...]]
                              [--edits-line FILE[=WHAT] ...]
-                             [--entry [R<n>] --agent NAME --mode ACTION] [--index] [--get KEY ...] [--compact] [--full]
+                             [--entry [R<n>] --agent NAME --mode ACTION] [--index] [--doc-index [--cites KEY ...]] [--get KEY ...] [--compact] [--full]
                              [--rotate-plan]
 
 It never executes `evidence.cmd` (protocol check 1b). A registry is a data file that
@@ -43,7 +43,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from render import (accepted_state, collect_claims, confined, norm,
+    from render import (accepted_state, build_datum_regex, collect_claims,
+                        collect_datums, confined, norm,
                         status_gate, trace_datums, walk, yaml)
 except ImportError as exc:  # pragma: no cover
     sys.exit(
@@ -4237,6 +4238,195 @@ def registry_index(text: str) -> list[str]:
     return out
 
 
+_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)[ \t]*#*[ \t]*$")
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+
+def doc_sections(text: str) -> list[dict]:
+    """Sections of one markdown doc, with 1-based line spans.
+
+    ATX headings only, none inside a fenced block (closing fence: same character,
+    at least as long) or an HTML comment. A section runs from its heading to the
+    line before the next heading of the same or a higher level, so a parent contains
+    its children. `own_end` stops at the first heading of any level — the lines the
+    section itself wrote. Non-empty lines before the first heading form a
+    `(preamble)` pseudo-section."""
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    heads: list[tuple[int, int, str]] = []          # (line, level, title)
+    fence = None                                    # (char, length)
+    in_comment = False
+    for n, line in enumerate(lines, 1):
+        if in_comment:
+            if "-->" in line:
+                in_comment = False
+            continue
+        if fence:
+            m = _FENCE_RE.match(line)
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1] \
+                    and not line.strip().strip(fence[0]):
+                fence = None
+            continue
+        m = _FENCE_RE.match(line)
+        if m:
+            fence = (m.group(1)[0], len(m.group(1)))
+            continue
+        stripped = line
+        if "<!--" in stripped:
+            before, _, rest = stripped.partition("<!--")
+            if "-->" not in rest:
+                in_comment = True
+            stripped = before
+            if not stripped.strip():
+                continue
+        h = _HEADING_RE.match(stripped)
+        if h:
+            heads.append((n, len(h.group(1)), h.group(2).strip()))
+    total = len(lines)
+    out = []
+    first = heads[0][0] if heads else total + 1
+    if any(l.strip() for l in lines[:first - 1]):
+        out.append({"level": 0, "title": "(preamble)", "start": 1,
+                    "end": first - 1, "own_end": first - 1})
+    for i, (n, level, title) in enumerate(heads):
+        end = total
+        for n2, l2, _ in heads[i + 1:]:
+            if l2 <= level:
+                end = n2 - 1
+                break
+        own_end = (heads[i + 1][0] - 1) if i + 1 < len(heads) else total
+        out.append({"level": level, "title": title, "start": n, "end": end,
+                    "own_end": own_end})
+    return out
+
+
+def _registry_keys(facts: dict, text: str) -> tuple[set[str], dict[str, list[str]],
+                                                    dict[str, list[str]]]:
+    """(entry keys as `--get` names them, {list id: [top.id]}, {list top: [names]})."""
+    keys: set[str] = set()
+    ids: dict[str, list[str]] = {}
+    names: dict[str, list[str]] = {}
+    for key, _span, inner in _registry_spans(text):
+        top = str(key.value)
+        keys.add(top)
+        names[top] = []
+        for _sp, name, f in inner:
+            full = f"{top}.{name}"
+            keys.add(full)
+            names[top].append(name)
+            if f.get("id"):
+                ids.setdefault(str(f["id"]), []).append(full)
+    return keys, ids, names
+
+
+def _entry_key(path: str, keys: set[str], names: dict[str, list[str]]) -> str | None:
+    """A datum's registry path trimmed to its entry key (`defects[1].claim` ->
+    `defects.D2`, `limits.foo.max` -> `limits.foo`, `status` -> `status`)."""
+    m = re.match(r"([^.\[]+)(?:\[(\d+)\])?", path)
+    if not m:
+        return None
+    top = m.group(1)
+    if top not in keys:
+        return None
+    if m.group(2) is not None:
+        lst = names.get(top) or []
+        i = int(m.group(2))
+        return f"{top}.{lst[i]}" if i < len(lst) else top
+    rest = path[m.end():]
+    if rest.startswith("."):
+        second = re.match(r"\.([^.\[]+)", rest)
+        if second and f"{top}.{second.group(1)}" in keys:
+            return f"{top}.{second.group(1)}"
+    return top
+
+
+def doc_index(facts: dict, facts_text: str, spec_dir: Path) -> list[dict]:
+    """Per doc of `docs[]` that exists in the set (any role, never `_`-prefixed):
+    its sections with line spans and the registry entries each cites on its own
+    lines. One pass per doc."""
+    keys, ids, names = _registry_keys(facts, facts_text)
+    tops = {k for k in keys if "." not in k}
+    qual_rx = re.compile(r"(?<![\w.])([A-Za-z_][\w-]*)\.([\w-]+)(?![\w])")
+    id_rx = re.compile(r"(?<![\w.])([A-Za-z]+\d+)(?![\w])") if ids else None
+    datums = collect_datums(facts)
+    docs = []
+    seen: set[str] = set()
+    for entry in facts.get("docs") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("file") or "")
+        if not name or Path(name).name.startswith("_") or name in seen:
+            continue
+        path = confined(spec_dir, name)
+        if path is None or not path.is_file():
+            continue
+        seen.add(name)
+        data = path.read_bytes()
+        text = data.decode("utf-8", errors="replace")
+        lines = text.split("\n")
+        if lines and lines[-1] == "":
+            lines.pop()
+        present = {v: p for v, p in datums.items() if v in text}
+        rx = build_datum_regex(present)
+        sections = doc_sections(text)
+        for s in sections:
+            body = "\n".join(lines[s["start"] - 1:s["own_end"]])
+            hits: list[tuple[int, str]] = []
+            for m in qual_rx.finditer(body):
+                k = f"{m.group(1)}.{m.group(2)}"
+                if m.group(1) in tops and k in keys:
+                    hits.append((m.start(), k))
+            if id_rx:
+                for m in id_rx.finditer(body):
+                    for k in ids.get(m.group(1), []):
+                        hits.append((m.start(), k))
+            if rx:
+                for m in rx.finditer(body):
+                    for p in present.get(m.group(0), []):
+                        k = _entry_key(p, keys, names)
+                        if k:
+                            hits.append((m.start(), k))
+            cites: list[str] = []
+            for _pos, k in sorted(hits, key=lambda h: h[0]):
+                if k not in cites:
+                    cites.append(k)
+            s["cites"] = cites
+        docs.append({"file": name, "lines": len(lines), "blob": git_blob(data)[:7],
+                     "role": str(entry.get("role") or ""), "sections": sections})
+    return docs
+
+
+DOC_INDEX_CITE_CAP = 12
+
+
+def print_doc_index(docs: list[dict], slug: str) -> None:
+    print(f"# doc-index — {slug}\n")
+    for d in docs:
+        role = f" role: {d['role']}" if d["role"] in ("legacy", "derived", "tests") else ""
+        print(f"## {d['file']} ({d['lines']} lines, blob {d['blob']}){role}")
+        for s in d["sections"]:
+            indent = "  " * max(s["level"] - 1, 0)
+            span = f"L{s['start']}-{s['end']}"
+            print(span.ljust(12) + f"{indent}§ {s['title']}")
+            if s["cites"]:
+                shown = s["cites"][:DOC_INDEX_CITE_CAP]
+                more = len(s["cites"]) - len(shown)
+                tail = f", +{more} more" if more else ""
+                print("    cites: " + ", ".join(shown) + tail)
+        print()
+    print("Read a section by its span: offset = a, limit = b - a + 1.")
+
+
+def print_doc_cites(docs: list[dict], keys: list[str]) -> dict[str, list[dict]]:
+    found: dict[str, list[dict]] = {}
+    for k in keys:
+        found[k] = [{"file": d["file"], "start": s["start"], "end": s["end"],
+                     "title": s["title"]}
+                    for d in docs for s in d["sections"] if k in s["cites"]]
+    return found
+
+
 def version_stamp(name: str, data: bytes, what: str | None = None) -> str:
     """`name` (N lines, blob abc1234[ — what]) — measured as check 16 re-measures."""
     if what is not None:
@@ -5291,6 +5481,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the registry's table of contents — each top-level "
                          "key and each entry with its line span — and exit without "
                          "auditing")
+    ap.add_argument("--doc-index", action="store_true",
+                    help="print each doc's sections with line spans and the registry "
+                         "entries each cites, and exit without auditing")
+    ap.add_argument("--cites", nargs="+", default=None, metavar="KEY",
+                    help="with --doc-index: list the sections citing each registry "
+                         "KEY instead of the index")
     ap.add_argument("--open", action="store_true",
                     help="print only what still demands action in the set — open "
                          "findings, open defects, unsigned criteria, deferred "
@@ -5329,6 +5525,18 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.compact and not args.open:
         ap.error("--compact only has effect with --open")
+    if args.cites is not None and not args.doc_index:
+        ap.error("--cites requires --doc-index")
+    if args.doc_index:
+        for flag, on in (("--index", args.index), ("--get", args.get is not None),
+                         ("--open", args.open), ("--rotate-plan", args.rotate_plan),
+                         ("--entry", args.entry is not None),
+                         ("--read-line", args.read_line is not None),
+                         ("--edits-line", args.edits_line is not None),
+                         ("--baseline/--write-baseline",
+                          bool(args.baseline or args.write_baseline))):
+            if on:
+                ap.error(f"--doc-index cannot be used with {flag}")
     if args.baseline or args.write_baseline:
         if args.open:
             ap.error("--baseline/--write-baseline cannot be used with --open")
@@ -5404,6 +5612,38 @@ def main(argv: list[str] | None = None) -> int:
     if args.open:
         open_items(facts, spec_dir, repo_root, today=today, as_json=args.json,
                    compact=args.compact)
+        return 0
+
+    if args.doc_index:
+        ftext = facts_path.read_text(encoding="utf-8")
+        docs = doc_index(facts, ftext, spec_dir)
+        if args.cites is not None:
+            known = _registry_keys(facts, ftext)[0]
+            bad = [k for k in args.cites if k not in known]
+            if bad:
+                print("--cites: no such registry key: " + ", ".join(bad)
+                      + " (see --index)", file=sys.stderr)
+                return 2
+            found = print_doc_cites(docs, args.cites)
+            if args.json:
+                print(json.dumps({"cites": found}, ensure_ascii=False, indent=2))
+            else:
+                for k, rows in found.items():
+                    print(k)
+                    if not rows:
+                        print("  not cited in any doc")
+                    for r in rows:
+                        print(f"  {r['file']} L{r['start']}-{r['end']} § {r['title']}")
+            return 0
+        if args.json:
+            print(json.dumps({"docs": [
+                {"file": d["file"], "lines": d["lines"], "blob": d["blob"],
+                 "role": d["role"],
+                 "sections": [{k: s[k] for k in ("level", "title", "start", "end",
+                                                 "cites")} for s in d["sections"]]}
+                for d in docs]}, ensure_ascii=False, indent=2))
+        else:
+            print_doc_index(docs, str(facts.get("feature") or spec_dir.name))
         return 0
 
     if args.get is not None:

@@ -1338,6 +1338,67 @@ def log_size_counts_bytes() -> list[str]:
     return problems
 
 
+def doc_index_spans_and_cites() -> list[str]:
+    """`--doc-index` is only worth having if a span read by offset returns exactly
+    the section. Each span below was counted by hand against the fixture: a fence
+    holding `# no es heading`, a ~~~ fence, an HTML comment holding a heading, three
+    nested levels and a preamble."""
+    fx = str(FIXTURES / "doc-index")
+
+    def call(*extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(AUDIT), fx, "--doc-index", *extra],
+                              capture_output=True, text=True)
+
+    problems = []
+    out = call("--json")
+    if out.returncode != 0:
+        return [f"doc-index: --json exited {out.returncode}: {out.stderr[:200]}"]
+    data = json.loads(out.stdout)
+    files = [d["file"] for d in data["docs"]]
+    if files != ["01-plan.md", "02-notes.md"]:
+        problems.append(f"doc-index: docs {files}, expected the two that exist, no _log.md")
+    plan = next(d for d in data["docs"] if d["file"] == "01-plan.md")
+    got = [(s["level"], s["title"], s["start"], s["end"], s["cites"])
+           for s in plan["sections"]]
+    want = [(0, "(preamble)", 1, 2, []), (1, "Plan", 3, 34, []),
+            (2, "Alcance", 7, 31, ["limits.gateway"]),
+            (3, "Detalle", 11, 31, ["defects.D2", "acceptance.AC5"]),
+            (4, "Fondo", 20, 31, ["limits.gateway"]), (2, "Cierre", 32, 34, [])]
+    if got != want:
+        problems.append(f"doc-index: sections {got}, expected {want}")
+    if plan["lines"] != 34:
+        problems.append(f"doc-index: 01-plan.md lines {plan['lines']}, expected 34")
+    notes = next(d for d in data["docs"] if d["file"] == "02-notes.md")
+    if notes["role"] != "legacy":
+        problems.append(f"doc-index: role {notes['role']!r}, expected legacy")
+    text = call().stdout
+    for needle in ("# doc-index — doc-index", "## 01-plan.md (34 lines, blob ",
+                   "role: legacy", "L11-31", "    cites: defects.D2, acceptance.AC5",
+                   "offset = a, limit = b - a + 1."):
+        if needle not in text:
+            problems.append(f"doc-index: text output lacks {needle!r}")
+    cites = json.loads(call("--cites", "defects.D2", "limits.gateway", "--json").stdout)["cites"]
+    if [(r["file"], r["start"], r["end"]) for r in cites["defects.D2"]] != \
+            [("01-plan.md", 11, 31), ("02-notes.md", 1, 3)]:
+        problems.append(f"doc-index: --cites defects.D2 gave {cites['defects.D2']}")
+    if "  01-plan.md L7-31 § Alcance" not in call("--cites", "limits.gateway").stdout:
+        problems.append("doc-index: --cites text line missing")
+    if "not cited in any doc" not in call("--cites", "limits").stdout:
+        problems.append("doc-index: an uncited key did not say so")
+    bad = call("--cites", "defects.D9")
+    if bad.returncode != 2 or "defects.D9" not in bad.stderr:
+        problems.append(f"doc-index: unknown key exit {bad.returncode}, expected 2")
+    for flag in (["--index"], ["--get", "defects.D2"], ["--open"], ["--rotate-plan"],
+                 ["--entry", "--agent", "a", "--mode", "author", "--read-line"]):
+        r = call(*flag)
+        if r.returncode != 2:
+            problems.append(f"doc-index: with {flag[0]} exit {r.returncode}, expected 2")
+    if subprocess.run([sys.executable, str(AUDIT), fx, "--cites", "defects.D2"],
+                      capture_output=True, text=True).returncode != 2:
+        problems.append("doc-index: --cites without --doc-index did not exit 2")
+    return problems
+
+
 def registry_index_spans() -> list[str]:
     """`--index` is only worth having if a span read by offset returns exactly the
     entry: not the comment above it, not the blank after it, not the next entry's
@@ -2000,6 +2061,8 @@ def main() -> int:
     failures += compact_output_and_get()
     total += 1
     failures += registry_index_spans()
+    total += 1
+    failures += doc_index_spans_and_cites()
     total += 1
     failures += log_size_counts_bytes()
 
