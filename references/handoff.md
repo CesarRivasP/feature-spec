@@ -11,7 +11,7 @@ A spec set is often worked by more than one model: one drafts, a second reviews 
 
 Everything else here exists to make that rule checkable.
 
-Reading from disk does not mean reading everything whole. `python3 scripts/audit.py <dir> --index` gives the registry's line spans per entry; a round that touches three entries reads those three by offset, and records the whole file's line count and blob in `Read:` only if it read the whole file.
+Reading from disk does not mean reading everything whole. `python3 scripts/audit.py <dir> --index` gives the registry's line spans per entry; a round that touches three entries reads those three by offset — or prints them directly with `audit.py <dir> --get KEY KEY KEY` — and records the whole file's line count and blob in `Read:` only if it read the whole file.
 
 ## Entry format
 

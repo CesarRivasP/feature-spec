@@ -64,7 +64,9 @@ when tokens are.
    of silence; that is the real case behind the stub rule (`references/handoff.md`).
 4. **The brief comes from disk, never from the conversation.** It is all the subagent knows.
    It holds: the spec dir path, the profile path, the checklist file it runs, the registry
-   spans it needs (`audit.py <dir> --index`), and the output shape below. Nothing about how
+   spans it needs (`audit.py <dir> --index`) or, when it needs a handful of entries, their
+   text (`audit.py <dir> --get KEY ...`, pasted — subagents have no `Bash`), and the output
+   shape below. Nothing about how
    the set was written — that is exactly the bias a fresh reader exists to avoid.
 5. **Merge, then gate.** The main session dedupes by (`changes[]` id or doc §, failure
    scenario), keeps the more specific scenario when two overlap, and tags each finding with
@@ -163,7 +165,7 @@ The brief holds everything the worker needs and nothing it does not:
 - Spec dir path (`docs/features/<slug>/`)
 - Profile path (`docs/features/_profile.yml`)
 - The checklist file it runs (e.g. `references/gap-sweep.md` or a layer)
-- The registry spans: `audit.py <dir> --index` lines pasted, not paraphrased
+- The registry spans: `audit.py <dir> --index` lines pasted, not paraphrased — or the entries themselves from `audit.py <dir> --get KEY ...`
 - What to return: the output delivery file path
 - The output shape from §Output shape
 - The invariant rule that the worker edits nothing in the set
