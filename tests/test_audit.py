@@ -35,7 +35,9 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("45", "outcome_2026_09_04"), ("45", "attempt-2026-09-05"),
       ("45", "`note` is 1439 chars")],
      [("45", "defects.D2"), ("45", "`outcome`"), ("45", "`correction`"),
-      ("45", "`retired_because`"), ("45", "`falsified_by`"), ("45", "`conditions`")]),
+      ("45", "`retired_because`"), ("45", "`falsified_by`"), ("45", "`conditions`"),
+      ("45", "defects.D3"), ("45", "until_2026-12-01"), ("45", "first_2026_09_04"),
+      ("45", "at_2026_09_04"), ("45", "measured_2026_09_04")]),
 
     # §1.1 — five anchors moved by the author's own later edits; eight bare ones.
     ("anchor-drift",
@@ -772,7 +774,7 @@ def findings_group_without_loss() -> list[str]:
     out = buf.getvalue()
     if "record `(<n> lines, blob <sha7>)` for every file" not in out:
         errs.append(f"grouping: a value every member shares was abstracted in the header:\n{out}")
-    if "d1.md v1 2026-09-01 101" not in out or "2026 09" in out:
+    if "d1.md `v1` 2026-09-01 101" not in out or "2026 09" in out:
         errs.append(f"grouping: member line lost a date or a value:\n{out}")
     fx = "log-between-rounds"
     grouped, full = run_text(fx), run_text(fx, ["--full"])

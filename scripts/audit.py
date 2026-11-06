@@ -3154,6 +3154,9 @@ def check_placeholders(facts: dict, f: Findings) -> None:
 
 DATED_KEY = re.compile(r"[_-]\d{4}[_-]\d{2}[_-]\d{2}$")
 HISTORY_NOTE_MAX = 600
+# prose the rules require in the registry: never fired on, never descended into
+HISTORY_EXEMPT = {"outcome", "correction", "retired_because", "falsified_by", "accepted",
+                  "conditions", "claim", "item", "value", "attempts"}
 
 
 def check_history_in_registry(facts: dict, f: Findings) -> None:
@@ -3170,17 +3173,26 @@ def check_history_in_registry(facts: dict, f: Findings) -> None:
 
     def walk(label: str, node: object, path: str) -> None:
         if isinstance(node, dict):
+            # evidence.md: next to a `correction:` (or a retraction) the long story goes in
+            # `note:`; attempts[] is history by design — neither is a note to move
+            story_note = any(str(k) == "correction" or str(k).startswith("retracted")
+                             for k in node)
             for k, v in node.items():
                 key = str(k)
                 here = f"{path}.{key}" if path else key
+                if key in HISTORY_EXEMPT:
+                    continue
                 if DATED_KEY.search(key):
+                    if isinstance(v, (int, float, bool)) or v is None:
+                        continue  # a dated datum (`measured_2026_09_04: 30`) is data, not history
                     f.add(POLISH, label,
                           f"`{here}` is dated history ({size(v)} chars)",
                           "move it verbatim to the `_log.md` round that produced it "
                           "and leave `see: _log.md R<n>` in its place — never delete "
                           "or summarize it (rules.md)",
                           "45 history in registry")
-                elif key == "note" and isinstance(v, str) and len(v) > HISTORY_NOTE_MAX:
+                elif (key == "note" and not story_note and isinstance(v, str)
+                      and len(v) > HISTORY_NOTE_MAX):
                     f.add(POLISH, label,
                           f"`{here}` is {len(v)} chars (over {HISTORY_NOTE_MAX})",
                           "move it verbatim to the `_log.md` round that produced it "
@@ -5649,7 +5661,7 @@ def print_grouped(group: list[dict]) -> None:
     labels = []
     for m, vals in zip(group, all_vals):
         shown = [vals[i] for i in varying] + vals[width:]
-        labels.append(" ".join([m["where"]] + [v.strip("`") for v in shown]))
+        labels.append(" ".join([m["where"]] + shown))
     line = "    "
     for lab in labels:
         piece = lab if line.strip() == "" else " \u00b7 " + lab
