@@ -520,6 +520,21 @@ FLAG_CASES: list[tuple[str, list[str], list[tuple[str, str]],
 # `reject` column is the one that matters: an over-reporting sweep costs the reader
 # more tokens than the check saves, which is the opposite of why it was mechanized.
 CANDIDATE_CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
+    # check 46 — doc 02 code blocks vs the file they name. The real case: the code got
+    # the guard in `finally`, the doc kept teaching the old one. Only the stale block
+    # is a candidate; the equal one, the `antes:` one, the ```diff, the one with
+    # comments and an elision, a block of < 3 lines, a line naming two files and
+    # doc 01 (not an implementation doc) stay quiet.
+    ("doc02-code-drift",
+     [("46", "02-implementation.md:16"),
+      ("46", "`await lock.release()`")],
+     [("46", "02-implementation.md:7"),       # equal to the file
+      ("46", "02-implementation.md:33"),      # `antes:` — the pre-change state
+      ("46", "02-implementation.md:47"),      # ```diff
+      ("46", "02-implementation.md:58"),      # comments + elision, same code
+      ("46", "02-implementation.md:76"),      # 2 normalized lines
+      ("46", "02-implementation.md:85"),      # two files named: ambiguous
+      ("46", "01-master-plan.md")]),
     # check 36 — a CORRECTED entry is usually fixed in place, so a citation written
     # after the fix is right as it stands. Measured on two real sets: 2 of 9 such
     # citations were stale, 7 cited the corrected version. The script cannot tell
@@ -980,6 +995,51 @@ def git(cwd: Path, *args: str) -> str:
     if out.returncode != 0:
         raise AssertionError(f"git {' '.join(args)} failed: {out.stderr}")
     return out.stdout.strip()
+
+
+def doc02_code_drift_modes() -> list[str]:
+    """Check 46 needs the registry's status and the branch the set names: a draft set
+    does not run it, and a block is compared with the tree at `tracking.branch`, not
+    with a checkout that has moved on."""
+    problems = []
+    src = FIXTURES / "doc02-code-drift"
+
+    def n46(spec: Path, root: Path) -> list[str]:
+        out = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root",
+                              str(root), "--json"], capture_output=True, text=True)
+        if out.returncode not in (0, 1):
+            raise AssertionError(out.stderr)
+        return [c["where"] for c in json.loads(out.stdout).get("candidates", {}).get("46", [])]
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "repo"
+        spec = root / "docs" / "features" / "drift"
+        shutil.copytree(src / "src", root / "src")
+        shutil.copytree(src, spec, ignore=shutil.ignore_patterns("src"))
+        shutil.copy(FIXTURES / "_profile.fixture.yml", spec / "_profile.fixture.yml")
+        facts = spec / "_facts.yml"
+        base = facts.read_text(encoding="utf-8").replace("../_profile", "_profile")
+        facts.write_text(base, encoding="utf-8")
+        if n46(spec, root) != ["02-implementation.md:16"]:
+            problems.append(f"implementing: expected only the stale block, got {n46(spec, root)}")
+        facts.write_text(base.replace("status: implementing", "status: draft"),
+                         encoding="utf-8")
+        if n46(spec, root):
+            problems.append("draft: check 46 ran before the set is implementing")
+
+        # the branch the set names wins over the checkout
+        facts.write_text(base + "tracking:\n  branch: feat/x\n", encoding="utf-8")
+        git(root, "init", "-q", "-b", "main")
+        git(root, "add", "."); git(root, "commit", "-q", "-m", "init")
+        git(root, "branch", "feat/x")
+        worker = root / "src" / "worker.ts"
+        worker.write_text(worker.read_text(encoding="utf-8").replace(
+            "const doubled = x * 2", "const doubled = x * 3"), encoding="utf-8")
+        git(root, "commit", "-q", "-am", "main moves on")
+        got = n46(spec, root)
+        if got != ["02-implementation.md:16"]:
+            problems.append(f"branch: block compared with the checkout, not feat/x: {got}")
+    return problems
 
 
 def paths_resolve_on_the_spec_branch() -> list[str]:
@@ -2371,6 +2431,8 @@ def main() -> int:
     failures += rotate_plan_quotes_paths()
     total += 1
     failures += paths_resolve_on_the_spec_branch()
+    total += 1
+    failures += doc02_code_drift_modes()
     total += 1
     failures += profile_identity_survives_worktrees()
     total += 1

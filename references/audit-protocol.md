@@ -277,6 +277,11 @@ Check 3 compares `contracts.*` with prose. Nothing compared it with the code tha
 - **`validated_in:` that does not resolve to a file → `CONTRADICTION`.**
 - **[script]** — each payload field the file never names, as a word, is a **candidate**. A grep, never an execution (§Run the script first).
 - **[human]** — a validator that loops over a list built elsewhere names no field and is still right. The durable bridge is a **contract parity test** in the repo, which reads `contracts.*` from the registry on every run: `references/implementable.md` §Contract parity.
+### 46. Doc 02 code blocks vs the tree — [script + human]
+Doc 02 stays paste-ready, so a block is a copy of code, and a copy can go stale while the code is fixed. Once the set is `implementing` or `shipped`, the script compares each fenced block of a `02*` doc that names exactly one repo file with that file (normalized: no blank or comment-only lines, `...` splits the block) and lists the ones that are no longer a contiguous run of it, or of which under 60% of the lines appear in it. Skipped: ```` ```diff ````, blocks marked `antes:` / `before:`, blocks under 3 lines. Full rules: `references/audit-checks-script.md` §46.
+- **[script]** — each such block is a **candidate**, with `k/n` lines found and the first line missing.
+- **[human]** — decide which side is stale. **The doc is stale** (the usual case): update the block from the code. **The code is wrong** (the doc is the intended behaviour and the fix never landed): that is a defect, not a doc edit. **The block is the pre-change state on purpose**: label it `antes:` / `before:` so the check skips it.
+
 
 ### Checks the script settles on its own — [script]
 

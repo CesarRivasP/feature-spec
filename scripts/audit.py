@@ -3850,6 +3850,151 @@ def check_contract_code(facts: dict, repo_root: Path, f: Findings,
                       f"{raw} never names {', '.join(f'`{k}`' for k in missing)}")
 
 
+_OPEN_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+_PRE_CHANGE_RE = re.compile(r"\b(antes|before|old|actual|current)\b", re.I)
+_ELISION_RE = re.compile(r"^(\.{3}|…)$")
+_COMMENT_ONLY = ("//", "#", "/*", "*", "--")
+
+
+def _code_fences(text: str):
+    """-> (opening lineno, info string, body lines, nearest non-empty line above).
+    Unlike `iter_fences` the info string is kept whole (`ts src/x.ts`, `ts title=
+    src/x.ts`), because that is where a block names its file."""
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        m = _OPEN_FENCE_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        mark, info = m.group(1), m.group(2).strip()
+        close = re.compile(r"^\s*%s{%d,}\s*$" % (re.escape(mark[0]), len(mark)))
+        j = i + 1
+        while j < len(lines) and not close.match(lines[j]):
+            j += 1
+        above = ""
+        for k in range(i - 1, -1, -1):
+            if lines[k].strip():
+                above = lines[k]
+                break
+        yield i + 1, info, lines[i + 1:j], above
+        i = j + 1
+
+
+def _code_segments(lines: list[str]) -> list[list[str]]:
+    """Check 46's normal form: stripped, no empty lines, no comment-only lines. An
+    elision marker (`...`, `…`) ends a segment instead of vanishing, because what it
+    stands for is code the block chose not to show."""
+    segs: list[list[str]] = [[]]
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith(_COMMENT_ONLY):
+            continue
+        if _ELISION_RE.match(line):
+            if segs[-1]:
+                segs.append([])
+            continue
+        segs[-1].append(line)
+    return [s for s in segs if s]
+
+
+def _path_tokens(info: str) -> list[str]:
+    out = []
+    for tok in info.split():
+        tok = re.sub(r"^(?:title|file|filename|path)=", "", tok).strip("\"'")
+        if "/" in tok or "." in tok:
+            out.append(tok)
+    return out
+
+
+def check_doc02_code_drift(facts: dict, prose: dict[str, str], in_scope: list[dict],
+                           status_rank: int, repo_root: Path, c: Candidates,
+                           tree: WorkTree | None = None) -> None:
+    """Check 46, a candidate generator. Real case: the code was fixed in the repo and
+    doc 02c still taught the old `finally` without the guard; whoever rebuilt from
+    the doc reintroduced the bug. Doc 02 must stay paste-ready, so its blocks are
+    never replaced by `path:line` anchors; the content is compared offline instead.
+
+    Runs only once the set is `implementing` or `shipped`. A fenced block in a doc
+    whose id starts with `02` is checked only when it names exactly ONE file that
+    exists in the tree: a path in the fence info string, or — failing that — exactly
+    one existing backticked path on the nearest non-empty line above. `diff` blocks
+    and blocks introduced by antes / before / old / actual / current show the
+    pre-change state on purpose and are skipped.
+
+    Compared on normal form (stripped lines; no blank or comment-only lines; elision
+    markers split the block into segments). Candidate when a segment is not a
+    contiguous run of the file, in order, or when under 60% of the block's lines
+    appear in the file at all. Fewer than 3 lines: skipped. Read-only; each file is
+    read once."""
+    if status_rank < STATUS_RANK["implementing"]:
+        return
+    tree = tree or WorkTree(repo_root)
+    cache: dict[str, tuple[list[str], set[str]]] = {}
+
+    def resolve(raw: str) -> str | None:
+        raw = re.sub(r":\d+(?:-\d+)?$", "", raw.strip())
+        if not raw or " " in raw:
+            return None
+        target = confined(repo_root, raw)
+        return raw if target is not None and tree.is_file(target) else None
+
+    def load(rel: str) -> tuple[list[str], set[str]]:
+        if rel not in cache:
+            text = tree.read_text(confined(repo_root, rel))
+            flat = [ln for seg in _code_segments(text.splitlines()) for ln in seg]
+            cache[rel] = (flat, set(flat))
+        return cache[rel]
+
+    for entry in in_scope:
+        if not entry["id"].startswith("02") or entry["file"] not in prose:
+            continue
+        doc = entry["file"]
+        for lineno, info, body, above in _code_fences(prose[doc]):
+            lang = info.split()[0].lower() if info.split() else ""
+            if lang in ("diff", "patch") or _PRE_CHANGE_RE.search(info) \
+                    or _PRE_CHANGE_RE.search(above):
+                continue
+            tokens = _path_tokens(info)
+            source = tokens if tokens else re.findall(r"`([^`\n]+)`", above)
+            named = {r for r in map(resolve, source) if r}
+            if len(named) != 1:
+                continue
+            rel = next(iter(named))
+            segs = _code_segments(body)
+            n = sum(len(s) for s in segs)
+            if n < 3:
+                continue
+            flat, have = load(rel)
+            found = sum(1 for s in segs for ln in s if ln in have)
+            contiguous, pos, first_missing = True, 0, None
+            for seg in segs:
+                at = next((i for i in range(pos, len(flat) - len(seg) + 1)
+                           if flat[i:i + len(seg)] == seg), None)
+                if at is None:
+                    contiguous = False
+                    first_missing = next((ln for ln in seg if ln not in have), None)
+                    if first_missing is None:
+                        # every line exists somewhere: report where the run breaks
+                        best = max(
+                            (next((k for k in range(len(seg))
+                                  if i + k >= len(flat) or flat[i + k] != seg[k]),
+                                  len(seg) - 1)
+                             for i in range(len(flat))), default=0)
+                        first_missing = seg[min(best, len(seg) - 1)]
+                    break
+                pos = at + len(seg)
+            if contiguous and found / n >= 0.6:
+                continue
+            if first_missing is None:
+                first_missing = next((ln for s in segs for ln in s if ln not in have),
+                                     segs[0][0])
+            c.add("46", f"{doc}:{lineno}",
+                  f"block for `{rel}` no longer matches the tree ({found}/{n} lines "
+                  f"found; first missing: `{first_missing[:60]}`) — update the "
+                  "block from the code, or mark it as the pre-change state")
+
+
 def check_defect_status_vocabulary(facts: dict, f: Findings) -> None:
     """Check 27's precondition. The cascade reads `status: dead` and nothing else,
     so a defect closed with any other word is closed where no rule can see it.
@@ -5580,6 +5725,12 @@ HUMAN_PASS = [
      "loops over a list defined elsewhere names none and is still right — the "
      "durable answer is a contract parity test in the repo "
      "(references/implementable.md §Contract parity)", None),
+    ("46", "doc 02 code blocks vs the tree", "the candidates below are fenced blocks "
+     "of doc 02 that name exactly one repo file and no longer appear in it (as a "
+     "contiguous run, or at all for under 60% of their lines). Decide which side is "
+     "stale: the doc (update the block from the code) or the code (the doc is right "
+     "and the fix never landed). A block that shows the pre-change state on purpose "
+     "is marked `antes:` / `before:` and is not listed", "02"),
     ("28", "`tracking.issues` / `pr` / `milestone` on GitHub", "deliberately NOT "
      "automated: an auditor that makes network calls is a different kind of tool. "
      "`gh issue view` / `gh pr view` and check the state matches `status:`", None),
@@ -6201,6 +6352,7 @@ def main(argv: list[str] | None = None) -> int:
     check_cross_refs(facts, prose, in_scope, c)
     check_doc02_executability(facts, prose, in_scope, c)
     check_doc_freshness(facts, prose, rank, c)
+    check_doc02_code_drift(facts, prose, in_scope, rank, repo_root, c, tree)
 
     baseline_dict = None
     if args.baseline:

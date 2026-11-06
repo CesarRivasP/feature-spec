@@ -27,6 +27,7 @@ Each `Fase N` carries, in this order:
 
 - **Existing style wins.** Before writing a snippet, read a sibling file and match: error handling idiom (`.then(({error}) => …)` vs `try/catch`), logging calls, import ordering, whether comments are English or Spanish. A snippet in a foreign style gets pasted verbatim and looks like a graft.
 - **Show the current code when you're modifying it.** A "before" of 3-5 real lines plus the "after" removes all ambiguity about where the edit lands. Diff-shaped beats prose-shaped.
+- **Mark a block that shows the pre-change state with `antes:` / `before:`** on the line above its fence (or in the fence info). Once the set is `implementing`, audit check 46 compares every block that names one repo file with that file; a block labelled this way is skipped because it is *meant* to differ from the tree.
 - **No pseudocode in Parte A.** If the exact code isn't knowable yet, that's a design hole to close, not a detail to defer.
 - **Wire every constant end to end.** A new message string appears in: the constants file that defines it, the map that exposes it, the call site that triggers it, the test that asserts it. If the doc names it once, the executor wires it once and three of the four places stay broken.
 
