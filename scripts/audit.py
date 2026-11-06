@@ -4377,15 +4377,21 @@ def doc_index(facts: dict, facts_text: str, spec_dir: Path) -> list[dict]:
                 k = f"{m.group(1)}.{m.group(2)}"
                 if m.group(1) in tops and k in keys:
                     hits.append((m.start(), k))
+            # a bare id or a value counts only when it names exactly one entry (`top.key`): a date
+            # shared by 23 fields, or a value that only resolves to a top-level key (`title`,
+            # `dates`), says nothing about which entry the section rests on
             if id_rx:
                 for m in id_rx.finditer(body):
-                    for k in ids.get(m.group(1), []):
-                        hits.append((m.start(), k))
+                    owners = set(ids.get(m.group(1), []))
+                    if len(owners) == 1:
+                        hits.append((m.start(), owners.pop()))
             if rx:
                 for m in rx.finditer(body):
-                    for p in present.get(m.group(0), []):
-                        k = _entry_key(p, keys, names)
-                        if k:
+                    owners = {_entry_key(p, keys, names) for p in present.get(m.group(0), [])}
+                    owners.discard(None)
+                    if len(owners) == 1:
+                        k = owners.pop()
+                        if "." in k:
                             hits.append((m.start(), k))
             cites: list[str] = []
             for _pos, k in sorted(hits, key=lambda h: h[0]):

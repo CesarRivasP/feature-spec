@@ -1379,12 +1379,17 @@ def doc_index_spans_and_cites() -> list[str]:
             problems.append(f"doc-index: text output lacks {needle!r}")
     cites = json.loads(call("--cites", "defects.D2", "limits.gateway", "--json").stdout)["cites"]
     if [(r["file"], r["start"], r["end"]) for r in cites["defects.D2"]] != \
-            [("01-plan.md", 11, 31), ("02-notes.md", 1, 3)]:
+            [("01-plan.md", 11, 31), ("02-notes.md", 1, 5)]:
         problems.append(f"doc-index: --cites defects.D2 gave {cites['defects.D2']}")
     if "  01-plan.md L7-31 § Alcance" not in call("--cites", "limits.gateway").stdout:
         problems.append("doc-index: --cites text line missing")
     if "not cited in any doc" not in call("--cites", "limits").stdout:
         problems.append("doc-index: an uncited key did not say so")
+    # a value two entries share names neither: real case, a date in 23 fields made every
+    # changelog section cite the same 13 decisions
+    for shared in ("limits.retention", "limits.archive"):
+        if "not cited in any doc" not in call("--cites", shared).stdout:
+            problems.append(f"doc-index: a value shared by two entries was cited as {shared}")
     bad = call("--cites", "defects.D9")
     if bad.returncode != 2 or "defects.D9" not in bad.stderr:
         problems.append(f"doc-index: unknown key exit {bad.returncode}, expected 2")

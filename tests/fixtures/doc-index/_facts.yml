@@ -8,6 +8,9 @@ defects:
       falsified_by: 'una corrida con >1000 objetos' }
 limits:
   gateway: { max_urls: 125 }
+  # the same value in two entries: a doc quoting it cites neither (ambiguous)
+  retention: { window: 'treinta dias corridos' }
+  archive: { window: 'treinta dias corridos' }
 acceptance:
   - { id: AC5, item: 'se borra todo', status: approved }
 docs:
