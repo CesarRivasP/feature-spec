@@ -1,11 +1,11 @@
 # DELIVERY: {{task}} · {{worker_agent}}/{{worker_model}}
 
-**Worker:** {{worker_agent}} · {{worker_model}} (orca)
+**Worker:** {{worker_agent}} · {{worker_model}} ({{runner}})
 **Read:** {{read_line}}
 
 ## SUMMARY
 
-<!-- At most 40 lines; the full findings are below, none dropped. -->
+<!-- At most 40 lines; the full findings are below, none dropped. Not used by runner `claude`, whose reply is the delivery. -->
 counts: FUNCTIONAL {{n_functional}} · SECURITY {{n_security}}
 most severe:
 {{summary_lines}}

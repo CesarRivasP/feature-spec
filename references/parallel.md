@@ -55,8 +55,9 @@ when tokens are.
 
 ## Rules
 
-1. **One writer per file.** A subagent writes nothing. It returns its output; the main
-   session writes every file. `_facts.yml` and `_log.md` are never touched by a subagent.
+1. **One writer per file.** A subagent writes nothing in the set, except its own delivery
+   file in `_inbox/` (runner `orca` only). Otherwise it returns its output and the main
+   session writes the file. `_facts.yml` and `_log.md` are never touched by a subagent.
 2. **A subagent does not fix the registry.** A gap it finds — a missing rate limit, an
    ambiguous criterion — comes back as a finding. Two subagents each "fixing" it is two truths.
 3. **The stub names every subagent before any is started** — its tier, the model the runner
@@ -95,22 +96,29 @@ context, but a cap that drops findings hides the one the merge needed. So the re
 split in two: the **delivery** holds everything, the **summary** is what the orchestrator
 sees. Merge, dedupe and escalation (rule 5, rule 6) — never truncation.
 
-**File runners** (`orca`, `agy`, any runner that writes `_inbox/R-<n>-<task>.md`):
+**File deliveries** (`orca`, `agy` — the delivery is `_inbox/R-<n>-<task>.md`, or `.json` for `agy`):
 
-- The delivery file holds EVERY finding, in the §Output shape.
+- The delivery holds EVERY finding, in the §Output shape.
 - The message/return text is only a summary block of at most 40 lines: counts by type
   (`FUNCTIONAL`, `SECURITY`), the ids plus one line of each of the most severe findings,
   `delivery: <path>`, and `overflow: <N> more in the delivery` when the summary lists fewer
   findings than the delivery holds.
-- The same summary block sits at the top of the delivery file, above the full findings
+- The same summary block sits at the top of the delivery, above the full findings
   (`templates/_inbox-delivery.md.tpl`).
-- The merge reads the delivery file, never the summary. The summary is for the orchestrator's
+- The merge reads the delivery, never the summary. The summary is for the orchestrator's
   eyes; it is not an input to rule 5.
+- Who writes the file: an `orca` worker writes `R-<n>-<task>.md` itself (the one exception in
+  rule 1). `agy` writes nothing: the MAIN session redirects the CLI's JSON to the file by shell
+  (`agy -p … > _inbox/R-<n>-<task>.json`) and reads only the summary from it (§`agy`), so agy's
+  full answer never enters the context.
 
 **Runner `claude`:** subagents stay read-only (no `Write`; rule 1 is held by permissions, and
-the agent definitions do not gain tools). Their text return IS the delivery and is merged
-whole. Saving orchestrator context needs a file runner; with `claude` the full return
-enters the context.
+the agent definitions do not gain tools). They cannot write a delivery, so they return EVERY
+finding as text — no summary, no `overflow` line, no `delivery:` pointer (it would name a file
+that does not exist and the findings would be lost). Their text return IS the delivery and is
+merged whole. Saving orchestrator context needs a file delivery (`orca` or `agy`); with
+`claude` the full return enters the context. The brief says which applies through
+`{{runner}}` (`templates/_inbox-brief.md.tpl`).
 
 ## Runners
 
@@ -144,12 +152,16 @@ agy -p "<brief>" --model <tier model> --output-format json --print-timeout 900s
 
 In AGY the effort is part of the model id — `gemini-3.8-flash-low`, `-medium`, `-high` —
 so a tier is just an id. The subagent's answer is `response` in the JSON; `usage` goes in the
-log entry. Measured 2026-09-30: `-low` 7 s and `-high` 13 s for a one-line prompt, and
+log entry. The subagent writes no file: the main session redirects the output to the delivery
+(`agy -p "<brief>" … > docs/features/<slug>/_inbox/R-<n>-<task>.json`) and reads only the
+SUMMARY block out of it by shell, so the full answer never enters the context; the merge reads
+the file (§Return contract). Measured 2026-09-30: `-low` 7 s and `-high` 13 s for a one-line prompt, and
 **~13k input tokens per call** before the brief — the CLI's own system prompt. That floor is
 why a subagent is not worth starting for a task smaller than a checklist file.
 
-Not yet verified, and not assumed: whether print mode reads the checkout with no write
-permission granted. Until it is, the `agy` runner passes the files the brief names inline.
+Not yet verified, and not assumed: whether print mode reads the checkout, or can write, with
+no permission granted. Until it is, the `agy` runner passes the files the brief names inline and
+the main session does the writing, as above.
 
 ### `orca` — Orca multi-agent IDE
 
@@ -160,7 +172,7 @@ orca orchestration worker-start --spec "<brief file path>" --worktree current --
 ```
 
 The tier maps to the agent's model via `--model` / `--effort` where the agent accepts it.
-The worker is read-only on the set by contract (rule 1): it writes no file in the set, neither `_facts.yml`, `_log.md`, nor any doc. Instead, the worker returns its delivery as a file on disk (an inbox delivery file, `_inbox/R-<n>-<task>.md`), not as a message, so it survives the session. The main session coordinates and awaits results via `check --wait`. When a worker completes its task, it signals completion with `worker_done`.
+The worker is read-only on the set by contract (rule 1): it writes no file in the set, neither `_facts.yml`, `_log.md`, nor any doc; its own delivery file in `_inbox/` is the one exception. The worker returns its full delivery as that file on disk (`_inbox/R-<n>-<task>.md`) and only the summary as its message, so the findings survive the session. The main session coordinates and awaits results via `check --wait`. When a worker completes its task, it signals completion with `worker_done`.
 
 The log entry records the worker in the same shape as the others: `<task> → <tier> → <agent/model> (orca)`.
 
@@ -179,7 +191,7 @@ The inbox is the disk the brief comes from (rule 4) and the disk the worker retu
 ### Layout and naming
 
 - `docs/features/<slug>/_inbox/BRIEF-<n>-<task>.md` — written by the orchestrating session before launching the worker.
-- `docs/features/<slug>/_inbox/R-<n>-<task>.md` — delivered by each worker upon completion.
+- `docs/features/<slug>/_inbox/R-<n>-<task>.md` — delivered by each worker upon completion (`orca`; for `agy` the main session writes `R-<n>-<task>.json`, for `claude` there is no file: the reply is the delivery).
 
 The folder is `_`-prefixed so check 9 treats it as set machinery: it is never listed in `docs[]`, never synced by `sync`, and never audited for anchors (check 18).
 
@@ -191,17 +203,17 @@ The brief holds everything the worker needs and nothing it does not:
 - The checklist file it runs (e.g. `references/gap-sweep.md` or a layer)
 - The registry spans: `audit.py <dir> --index` lines pasted, not paraphrased — or the entries themselves from `audit.py <dir> --get KEY ...`
 - The doc sections it reads: `audit.py <dir> --doc-index --cites KEY ...` own spans pasted (file, `L<a>-<own_end>`, heading — the lines where the cite sits, not the whole section; keep a `(maybe)` mark so the worker knows it is a guess) for the entries it covers, so it reads those sections by offset and not the docs whole
-- What to return: the output delivery file path
+- What to return, by runner (`{{runner}}`): `orca` the delivery file path; `agy` the SUMMARY + findings as its reply (the main session redirects it to the path); `claude` every finding as text, no summary
 - The output shape from §Output shape
-- The return contract from §Return contract: the delivery holds every finding, the returned message is a summary of at most 40 lines
-- The invariant rule that the worker edits nothing in the set
+- The return contract from §Return contract, for its runner: `orca`/`agy` the delivery holds every finding under a summary of at most 40 lines; `claude` returns every finding as text, with no summary and no overflow line
+- The invariant rule that the worker edits nothing in the set (an `orca` worker's own delivery file excepted)
 
 ### Delivery template (`templates/_inbox-delivery.md.tpl`)
 
 The worker records:
 - The worker's identity: agent + model (e.g. `antigravity · gemini-3.8-flash-high`)
 - `**Read:**` line from `python3 scripts/audit.py <dir> --read-line` for each file it opened
-- A `SUMMARY` block at the top (§Return contract), then every finding formatted in the exact output shape from §Output shape
+- A `SUMMARY` block at the top (§Return contract; file deliveries only), then every finding formatted in the exact output shape from §Output shape
 - `clean for <file>` when no gaps are found, naming the kinds covered
 
 ### How a delivery becomes a round
