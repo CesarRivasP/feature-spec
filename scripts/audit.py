@@ -16,7 +16,7 @@ script FIRST, then the judgment pass over what it lists — in that order.
                              [--as-status STAGE] [--today YYYY-MM-DD]
                              [--no-matrix] [--read-line [FILE ...]]
                              [--edits-line FILE[=WHAT] ...]
-                             [--entry [R<n>] --agent NAME --mode ACTION] [--index] [--get KEY ...] [--compact] [--full]
+                             [--entry [R<n>] --agent NAME --mode ACTION] [--index] [--doc-index [--cites KEY ...]] [--get KEY ...] [--compact] [--full]
                              [--rotate-plan]
 
 It never executes `evidence.cmd` (protocol check 1b). A registry is a data file that
@@ -43,7 +43,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from render import (accepted_state, collect_claims, confined, norm,
+    from render import (accepted_state, build_datum_regex, collect_claims,
+                        collect_datums, confined, norm,
                         status_gate, trace_datums, walk, yaml)
 except ImportError as exc:  # pragma: no cover
     sys.exit(
@@ -4237,6 +4238,265 @@ def registry_index(text: str) -> list[str]:
     return out
 
 
+_HEADING_RE = re.compile(r"^(#{1,6})[ \t]+(.*?)(?:(?<=[ \t])#+)?[ \t]*$")
+_COMMENT_START_RE = re.compile(r"^ {0,3}<!--")
+_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+
+
+def doc_sections(text: str) -> list[dict]:
+    """Sections of one markdown doc, with 1-based line spans.
+
+    ATX headings only, none inside a fenced block (closing fence: same character,
+    at least as long) or an HTML comment. A section runs from its heading to the
+    line before the next heading of the same or a higher level, so a parent contains
+    its children. `own_end` stops at the first heading of any level — the lines the
+    section itself wrote. Non-empty lines before the first heading form a
+    `(preamble)` pseudo-section."""
+    lines = [l.rstrip("\r") for l in text.split("\n")]
+    if lines and lines[-1] == "":
+        lines.pop()
+    heads: list[tuple[int, int, str]] = []          # (line, level, title)
+    fence = None                                    # (char, length)
+    in_comment = False
+    for n, line in enumerate(lines, 1):
+        if in_comment:
+            if "-->" in line:
+                in_comment = False
+            continue
+        if fence:
+            m = _FENCE_RE.match(line)
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= fence[1] \
+                    and not line.strip().strip(fence[0]):
+                fence = None
+            continue
+        m = _FENCE_RE.match(line)
+        if m:
+            fence = (m.group(1)[0], len(m.group(1)))
+            continue
+        if _COMMENT_START_RE.match(line):               # HTML block, CommonMark type 2
+            if "-->" not in line.partition("<!--")[2]:
+                in_comment = True
+            continue
+        stripped = re.sub(r"<!--.*?-->", "", line)
+        h = _HEADING_RE.match(stripped)
+        if h:
+            heads.append((n, len(h.group(1)), h.group(2).strip()))
+    total = len(lines)
+    out = []
+    first = heads[0][0] if heads else total + 1
+    if any(l.strip() for l in lines[:first - 1]):
+        out.append({"level": 0, "title": "(preamble)", "start": 1,
+                    "end": first - 1, "own_end": first - 1})
+    for i, (n, level, title) in enumerate(heads):
+        end = total
+        for n2, l2, _ in heads[i + 1:]:
+            if l2 <= level:
+                end = n2 - 1
+                break
+        own_end = (heads[i + 1][0] - 1) if i + 1 < len(heads) else total
+        out.append({"level": level, "title": title, "start": n, "end": end,
+                    "own_end": own_end})
+    return out
+
+
+def _registry_keys(facts: dict, text: str) -> tuple[set[str], dict[str, list[str]],
+                                                    dict[str, list[str]]]:
+    """(entry keys as `--get` names them, {list id: [top.id]}, {list top: [names]})."""
+    keys: set[str] = set()
+    ids: dict[str, list[str]] = {}
+    names: dict[str, list[str]] = {}
+    for key, _span, inner in _registry_spans(text):
+        top = str(key.value)
+        keys.add(top)
+        names[top] = []
+        for _sp, name, f in inner:
+            full = f"{top}.{name}"
+            keys.add(full)
+            names[top].append(name)
+            if f.get("id"):
+                ids.setdefault(str(f["id"]), []).append(full)
+    return keys, ids, names
+
+
+def _entry_key(path: str, keys: set[str], names: dict[str, list[str]]) -> str | None:
+    """A datum's registry path trimmed to its entry key (`defects[1].claim` ->
+    `defects.D2`, `limits.foo.max` -> `limits.foo`, `status` -> `status`)."""
+    m = re.match(r"([^.\[]+)(?:\[(\d+)\])?", path)
+    if not m:
+        return None
+    top = m.group(1)
+    if top not in keys:
+        return None
+    if m.group(2) is not None:
+        lst = names.get(top) or []
+        i = int(m.group(2))
+        return f"{top}.{lst[i]}" if i < len(lst) else top
+    rest = path[m.end():]
+    if rest.startswith("."):
+        second = re.match(r"\.([^.\[]+)", rest)
+        if second and f"{top}.{second.group(1)}" in keys:
+            return f"{top}.{second.group(1)}"
+    return top
+
+
+_NUM_VALUE_RE = re.compile(r"^\d+([.,]\d+)?$")
+_SHORT_ID_RE = re.compile(r"^[A-Za-z]\d$")
+
+
+def _value_cite_ok(value: str, body: str, m: re.Match) -> bool:
+    """A purely numeric value cites only with >= 4 digits and standing alone: `100%`
+    or the `524` of `1.524` is a number of the prose, not the registry's."""
+    if not _NUM_VALUE_RE.match(value):
+        return True
+    if sum(c.isdigit() for c in value) < 4:
+        return False
+    # `.`/`,` break the cite only as part of a number (`1.524`, `30,000.5`), not as the
+    # sentence's own punctuation: `timeout 30000.` still cites
+    b1 = body[m.start() - 1] if m.start() > 0 else ""
+    b2 = body[m.start() - 2] if m.start() > 1 else ""
+    a1 = body[m.end()] if m.end() < len(body) else ""
+    a2 = body[m.end() + 1] if m.end() + 1 < len(body) else ""
+    if b1.isdigit() or a1.isdigit() or a1 == "%":
+        return False
+    if b1 in ".," and b2.isdigit():
+        return False
+    if a1 in ".," and a2.isdigit():
+        return False
+    return True
+
+
+def doc_index(facts: dict, facts_text: str,
+              spec_dir: Path) -> tuple[list[dict], list[dict]]:
+    """(docs, skipped). Per doc of `docs[]` that exists in the set (any role, never
+    `_`-prefixed): its sections with line spans and the registry entries each cites on
+    its own lines (`cites`; `maybe` for a short bare id). One pass per doc. `skipped`:
+    the `docs[]` files not indexed, with why."""
+    keys, ids, names = _registry_keys(facts, facts_text)
+    tops = {k for k in keys if "." not in k}
+    qual_rx = re.compile(r"(?<![\w.])([A-Za-z_][\w-]*)\.([\w-]+)(?![\w])")
+    id_rx = re.compile(r"(?<![\w.])([A-Za-z]+\d+)(?![\w])") if ids else None
+    datums = collect_datums(facts)
+    docs: list[dict] = []
+    skipped: list[dict] = []
+    seen: set[Path] = set()
+    for entry in facts.get("docs") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("file") or "")
+        if not name or Path(name).name.startswith("_"):
+            continue
+        path = confined(spec_dir, name)
+        if path is None:
+            skipped.append({"file": name, "reason": "outside the set"})
+            continue
+        if not path.exists():
+            skipped.append({"file": name, "reason": "missing"})
+            continue
+        if not path.is_file():
+            skipped.append({"file": name, "reason": "not a file"})
+            continue
+        if path in seen:
+            continue
+        seen.add(path)
+        data = path.read_bytes()
+        text = data.decode("utf-8-sig", errors="replace")
+        lines = [l.rstrip("\r") for l in text.split("\n")]
+        if lines and lines[-1] == "":
+            lines.pop()
+        present = {v: p for v, p in datums.items() if v in text}
+        rx = build_datum_regex(present)
+        sections = doc_sections(text)
+        for s in sections:
+            body = "\n".join(lines[s["start"] - 1:s["own_end"]])
+            hits: list[tuple[int, str]] = []
+            maybes: list[tuple[int, str]] = []
+            for m in qual_rx.finditer(body):
+                k = f"{m.group(1)}.{m.group(2)}"
+                if m.group(1) in tops and k in keys:
+                    hits.append((m.start(), k))
+            # a bare id or a value counts only when it names exactly one entry (`top.key`): a date
+            # shared by 23 fields, or a value that only resolves to a top-level key (`title`,
+            # `dates`), says nothing about which entry the section rests on. An id of one letter
+            # and one digit (`D1`, `R2`) is also an ordinary word ("Cloudflare D1 y R2"): `maybe`
+            if id_rx:
+                for m in id_rx.finditer(body):
+                    owners = set(ids.get(m.group(1), []))
+                    if len(owners) == 1:
+                        (maybes if _SHORT_ID_RE.match(m.group(1)) else hits).append(
+                            (m.start(), next(iter(owners))))
+            if rx:
+                for m in rx.finditer(body):
+                    if not _value_cite_ok(m.group(0), body, m):
+                        continue
+                    owners = {_entry_key(p, keys, names) for p in present.get(m.group(0), [])}
+                    owners.discard(None)
+                    if len(owners) == 1:
+                        k = owners.pop()
+                        if "." in k:
+                            hits.append((m.start(), k))
+            cites: list[str] = []
+            for _pos, k in sorted(hits, key=lambda h: h[0]):
+                if k not in cites:
+                    cites.append(k)
+            maybe: list[str] = []
+            for _pos, k in sorted(maybes, key=lambda h: h[0]):
+                if k not in cites and k not in maybe:
+                    maybe.append(k)
+            s["cites"] = cites
+            s["maybe"] = maybe
+        docs.append({"file": name, "lines": data.count(b"\n"), "blob": git_blob(data)[:7],
+                     "role": str(entry.get("role") or ""), "sections": sections})
+    return docs, skipped
+
+
+DOC_INDEX_CITE_CAP = 12
+
+
+def print_doc_index(docs: list[dict], slug: str, skipped: list[dict] | None = None) -> None:
+    print(f"# doc-index — {slug}\n")
+    for d in docs:
+        role = f" role: {d['role']}" if d["role"] in ("legacy", "derived", "tests") else ""
+        print(f"## {d['file']} ({d['lines']} lines, blob {d['blob']}){role}")
+        for s in d["sections"]:
+            indent = "  " * max(s["level"] - 1, 0)
+            span = f"L{s['start']}-{s['end']}"
+            print(span.ljust(12) + f"{indent}§ {s['title']}")
+            if s["cites"]:
+                shown = s["cites"][:DOC_INDEX_CITE_CAP]
+                more = len(s["cites"]) - len(shown)
+                tail = f", +{more} more" if more else ""
+                print("    cites: " + ", ".join(shown) + tail)
+            if s["maybe"]:
+                print("    maybe: " + ", ".join(s["maybe"][:DOC_INDEX_CITE_CAP]))
+        print()
+    for sk in skipped or []:
+        print(f"skipped: {sk['file']} ({sk['reason']})")
+    print("Read a section by its span: offset = a, limit = b - a + 1.")
+
+
+def print_doc_cites(docs: list[dict], keys: list[str],
+                    names: dict[str, list[str]] | None = None) -> dict[str, list[dict]]:
+    """Per KEY, the sections citing it (own lines: `start`..`own_end`; `end` is the whole
+    section). A top-level KEY with entries aggregates the cites of its children."""
+    found: dict[str, list[dict]] = {}
+    for k in keys:
+        members = {k}
+        if names and names.get(k):
+            members = {f"{k}.{n}" for n in names[k]}
+        rows = []
+        for d in docs:
+            for s in d["sections"]:
+                sure = members & set(s["cites"])
+                if sure or members & set(s["maybe"]):
+                    row = {"file": d["file"], "start": s["start"], "end": s["end"],
+                           "own_end": s["own_end"], "title": s["title"]}
+                    if not sure:
+                        row["maybe"] = True
+                    rows.append(row)
+        found[k] = rows
+    return found
+
+
 def version_stamp(name: str, data: bytes, what: str | None = None) -> str:
     """`name` (N lines, blob abc1234[ — what]) — measured as check 16 re-measures."""
     if what is not None:
@@ -5291,6 +5551,12 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the registry's table of contents — each top-level "
                          "key and each entry with its line span — and exit without "
                          "auditing")
+    ap.add_argument("--doc-index", action="store_true",
+                    help="print each doc's sections with line spans and the registry "
+                         "entries each cites, and exit without auditing")
+    ap.add_argument("--cites", nargs="+", default=None, metavar="KEY",
+                    help="with --doc-index: list the sections citing each registry "
+                         "KEY instead of the index")
     ap.add_argument("--open", action="store_true",
                     help="print only what still demands action in the set — open "
                          "findings, open defects, unsigned criteria, deferred "
@@ -5329,6 +5595,18 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.compact and not args.open:
         ap.error("--compact only has effect with --open")
+    if args.cites is not None and not args.doc_index:
+        ap.error("--cites requires --doc-index")
+    if args.doc_index:
+        for flag, on in (("--index", args.index), ("--get", args.get is not None),
+                         ("--open", args.open), ("--rotate-plan", args.rotate_plan),
+                         ("--entry", args.entry is not None),
+                         ("--read-line", args.read_line is not None),
+                         ("--edits-line", args.edits_line is not None),
+                         ("--baseline/--write-baseline",
+                          bool(args.baseline or args.write_baseline))):
+            if on:
+                ap.error(f"--doc-index cannot be used with {flag}")
     if args.baseline or args.write_baseline:
         if args.open:
             ap.error("--baseline/--write-baseline cannot be used with --open")
@@ -5404,6 +5682,52 @@ def main(argv: list[str] | None = None) -> int:
     if args.open:
         open_items(facts, spec_dir, repo_root, today=today, as_json=args.json,
                    compact=args.compact)
+        return 0
+
+    if args.doc_index:
+        ftext = facts_path.read_text(encoding="utf-8")
+        docs, skipped = doc_index(facts, ftext, spec_dir)
+        if args.cites is not None:
+            known, _ids, top_names = _registry_keys(facts, ftext)
+            bad = [k for k in args.cites if k not in known]
+            if bad:
+                print("--cites: no such registry key: " + ", ".join(bad)
+                      + " (see --index)", file=sys.stderr)
+                return 2
+            scalars = [k for k in args.cites if "." not in k and not top_names.get(k)]
+            if scalars:
+                print("--cites: not an entry: " + ", ".join(scalars)
+                      + " (a top-level key without entries; see --index)", file=sys.stderr)
+                return 2
+            found = print_doc_cites(docs, args.cites, top_names)
+            if args.json:
+                print(json.dumps({"cites": found, "skipped": skipped},
+                                 ensure_ascii=False, indent=2))
+            else:
+                for k, rows in found.items():
+                    print(k)
+                    if not rows:
+                        print("  not cited in any doc")
+                    for r in rows:
+                        line = f"  {r['file']} L{r['start']}-{r['own_end']} § {r['title']}"
+                        if r["own_end"] < r["end"]:
+                            line += f" (section L{r['start']}-{r['end']})"
+                        if r.get("maybe"):
+                            line += " (maybe)"
+                        print(line)
+                for sk in skipped:
+                    print(f"skipped: {sk['file']} ({sk['reason']})")
+            return 0
+        if args.json:
+            print(json.dumps({"docs": [
+                {"file": d["file"], "lines": d["lines"], "blob": d["blob"],
+                 "role": d["role"],
+                 "sections": [{k: s[k] for k in ("level", "title", "start", "end",
+                                                 "own_end", "cites", "maybe")}
+                              for s in d["sections"]]}
+                for d in docs], "skipped": skipped}, ensure_ascii=False, indent=2))
+        else:
+            print_doc_index(docs, str(facts.get("feature") or spec_dir.name), skipped)
         return 0
 
     if args.get is not None:

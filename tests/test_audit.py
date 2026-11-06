@@ -1338,6 +1338,174 @@ def log_size_counts_bytes() -> list[str]:
     return problems
 
 
+def doc_index_spans_and_cites() -> list[str]:
+    """`--doc-index` is only worth having if a span read by offset returns exactly
+    the section. Each span below was counted by hand against the fixture: a fence
+    holding `# no es heading`, a ~~~ fence, an HTML comment holding a heading, three
+    nested levels and a preamble."""
+    fx = str(FIXTURES / "doc-index")
+
+    def call(*extra: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, str(AUDIT), fx, "--doc-index", *extra],
+                              capture_output=True, text=True)
+
+    problems = []
+    out = call("--json")
+    if out.returncode != 0:
+        return [f"doc-index: --json exited {out.returncode}: {out.stderr[:200]}"]
+    data = json.loads(out.stdout)
+    files = [d["file"] for d in data["docs"]]
+    if files != ["01-plan.md", "02-notes.md"]:
+        problems.append(f"doc-index: docs {files}, expected the two that exist, no _log.md")
+    plan = next(d for d in data["docs"] if d["file"] == "01-plan.md")
+    got = [(s["level"], s["title"], s["start"], s["end"], s["cites"])
+           for s in plan["sections"]]
+    want = [(0, "(preamble)", 1, 2, []), (1, "Plan", 3, 34, []),
+            (2, "Alcance", 7, 31, ["limits.gateway"]),
+            (3, "Detalle", 11, 31, ["acceptance.AC5"]),
+            (4, "Fondo", 20, 31, []), (2, "Cierre", 32, 34, [])]
+    if got != want:
+        problems.append(f"doc-index: sections {got}, expected {want}")
+    # D2 is one letter and one digit: a `maybe`, not a cite; 125 is three digits: no cite
+    got_own = [(s["title"], s["own_end"], s["maybe"]) for s in plan["sections"]]
+    want_own = [("(preamble)", 2, []), ("Plan", 6, []), ("Alcance", 10, []),
+                ("Detalle", 19, ["defects.D2"]), ("Fondo", 31, []), ("Cierre", 34, [])]
+    if got_own != want_own:
+        problems.append(f"doc-index: own_end/maybe {got_own}, expected {want_own}")
+    if plan["lines"] != 34:
+        problems.append(f"doc-index: 01-plan.md lines {plan['lines']}, expected 34")
+    notes = next(d for d in data["docs"] if d["file"] == "02-notes.md")
+    if notes["role"] != "legacy":
+        problems.append(f"doc-index: role {notes['role']!r}, expected legacy")
+    text = call().stdout
+    for needle in ("# doc-index — doc-index", "## 01-plan.md (34 lines, blob ",
+                   "role: legacy", "L11-31", "    cites: acceptance.AC5", "    maybe: defects.D2",
+                   "skipped: 03-missing.md (missing)",
+                   "offset = a, limit = b - a + 1."):
+        if needle not in text:
+            problems.append(f"doc-index: text output lacks {needle!r}")
+    cites = json.loads(call("--cites", "defects.D2", "limits.gateway", "--json").stdout)["cites"]
+    if [(r["file"], r["start"], r["own_end"], r["end"], r.get("maybe", False))
+            for r in cites["defects.D2"]] != \
+            [("01-plan.md", 11, 19, 31, True), ("02-notes.md", 1, 5, 5, False)]:
+        problems.append(f"doc-index: --cites defects.D2 gave {cites['defects.D2']}")
+    if "  01-plan.md L7-10 § Alcance (section L7-31)\n" not in \
+            call("--cites", "limits.gateway").stdout:
+        problems.append("doc-index: --cites text line missing the own span")
+    if "  01-plan.md L11-19 § Detalle (section L11-31) (maybe)" not in \
+            call("--cites", "defects.D2").stdout:
+        problems.append("doc-index: --cites did not mark a maybe hit")
+    if "  02-notes.md L1-5 § Notas\n" not in call("--cites", "defects.D2").stdout:
+        problems.append("doc-index: a section whose own span is the whole section got a suffix")
+    top = json.loads(call("--cites", "limits", "--json").stdout)["cites"]["limits"]
+    if [(r["file"], r["start"], r["own_end"]) for r in top] != [("01-plan.md", 7, 10)]:
+        problems.append(f"doc-index: --cites limits did not aggregate its children: {top}")
+    scalar = call("--cites", "status")
+    if scalar.returncode != 2 or "not an entry" not in scalar.stderr:
+        problems.append(f"doc-index: --cites on a scalar exit {scalar.returncode}, expected 2")
+    skipped = json.loads(call("--json").stdout)["skipped"]
+    if skipped != [{"file": "03-missing.md", "reason": "missing"}]:
+        problems.append(f"doc-index: skipped {skipped}")
+    # a value two entries share names neither: real case, a date in 23 fields made every
+    # changelog section cite the same 13 decisions
+    for shared in ("limits.retention", "limits.archive"):
+        if "not cited in any doc" not in call("--cites", shared).stdout:
+            problems.append(f"doc-index: a value shared by two entries was cited as {shared}")
+    bad = call("--cites", "defects.D9")
+    if bad.returncode != 2 or "defects.D9" not in bad.stderr:
+        problems.append(f"doc-index: unknown key exit {bad.returncode}, expected 2")
+    for flag in (["--index"], ["--get", "defects.D2"], ["--open"], ["--rotate-plan"],
+                 ["--entry", "--agent", "a", "--mode", "author", "--read-line"]):
+        r = call(*flag)
+        if r.returncode != 2:
+            problems.append(f"doc-index: with {flag[0]} exit {r.returncode}, expected 2")
+    if subprocess.run([sys.executable, str(AUDIT), fx, "--cites", "defects.D2"],
+                      capture_output=True, text=True).returncode != 2:
+        problems.append("doc-index: --cites without --doc-index did not exit 2")
+    return problems
+
+
+def doc_index_synthetic_bugs() -> list[str]:
+    """Review fixes of `--doc-index`, each on a doc the test writes: every case below
+    gave the wrong answer before its fix."""
+    problems: list[str] = []
+    facts = """feature: syn
+status: draft
+profile: ../_profile.fixture.yml
+defects:
+  - { id: D1, role: contributing, basis: asserted, status: open, claim: 'uno', falsified_by: 'x' }
+  - { id: D24, role: contributing, basis: asserted, status: open, claim: 'dos', falsified_by: 'y' }
+limits:
+  cf: { timeout_s: 100, error: 524, code: 4242 }
+  gateway: { max_urls: 125 }
+docs:
+%s
+"""
+    docs = {
+        # b1: a `<!--` inside inline code is not a comment; b8: closing hashes need a space
+        "a.md": "# A\nUsa `<!--` aqui.\n## B\n## C#\n## D ##\r\n  <!--\n## oculto\n-->\n## E\n",
+        # b2/b3: short ids and small or glued numbers cite nothing
+        "b.md": "# B\nCloudflare D1 y D24 y 100% y 1.524 y 524.\n",
+        # b7: a BOM must not hide the first heading; b6: no trailing newline
+        "c.md": "\ufeff# Primero\nlinea\n## Segundo",
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        shutil.copy(FIXTURES / "_profile.fixture.yml", Path(tmp) / "_profile.fixture.yml")
+        spec = Path(tmp) / "syn"
+        spec.mkdir()
+        for n, body in docs.items():
+            (spec / n).write_bytes(body.encode("utf-8"))
+        entries = ["  - { id: '1', file: a.md, role: master-plan, stage: draft }",
+                   "  - { id: '2', file: ./a.md, role: master-plan, stage: draft }",
+                   "  - { id: '3', file: b.md, role: legacy, stage: draft }",
+                   "  - { id: '4', file: c.md, role: legacy, stage: draft }",
+                   "  - { id: '5', file: ../outside.md, role: legacy, stage: draft }",
+                   "  - { id: '6', file: sub, role: legacy, stage: draft }"]
+        (spec / "sub").mkdir()
+        (spec / "_facts.yml").write_text(facts % "\n".join(entries), encoding="utf-8")
+        r = subprocess.run([sys.executable, str(AUDIT), str(spec), "--doc-index", "--json"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            return [f"doc-index synthetic: exit {r.returncode}: {r.stderr[:200]}"]
+        data = json.loads(r.stdout)
+        by = {d["file"]: d for d in data["docs"]}
+        if [d["file"] for d in data["docs"]] != ["a.md", "b.md", "c.md"]:
+            problems.append(f"doc-index: a file listed twice was not deduped: {list(by)}")
+        titles = [s["title"] for s in by["a.md"]["sections"]]
+        if titles != ["A", "B", "C#", "D", "E"]:
+            problems.append(f"doc-index: headings {titles}, expected A B C# D E")
+        b_sec = by["b.md"]["sections"][0]
+        # D24 (longer id) still cites; D1 is a maybe; `100%`, `1.524`, `524.` cite limits.cf not
+        if b_sec["cites"] != ["defects.D24"] or b_sec["maybe"] != ["defects.D1"]:
+            problems.append(f"doc-index: b.md cites {b_sec['cites']} maybe {b_sec['maybe']}")
+        if by["c.md"]["lines"] != 2 or [s["title"] for s in by["c.md"]["sections"]] \
+                != ["Primero", "Segundo"]:
+            problems.append(f"doc-index: c.md lines {by['c.md']['lines']} / BOM headings")
+        reasons = {(x["file"], x["reason"]) for x in data["skipped"]}
+        if reasons != {("../outside.md", "outside the set"), ("sub", "not a file")}:
+            problems.append(f"doc-index: skipped {data['skipped']}")
+        # b3 positive control: a 4-digit value standing alone still cites
+        (spec / "b.md").write_text("# B\nEl codigo 4242 y 4242.\nOtro: 4242\n", encoding="utf-8")
+        r2 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--doc-index", "--json"],
+                            capture_output=True, text=True)
+        sec = next(d for d in json.loads(r2.stdout)["docs"] if d["file"] == "b.md")["sections"][0]
+        if sec["cites"] != ["limits.cf"]:
+            problems.append(f"doc-index: a 4-digit value did not cite: {sec['cites']}")
+        # a sentence's own period or comma is not a decimal point: real case, `timeout
+        # 30000.` cited nothing after the glued-number fix; `1.4242` and `4242,5` still don't
+        for body, want in (("# B\nEl timeout es 4242.\n", ["limits.cf"]),
+                           ("# B\nCodigo 4242, luego nada\n", ["limits.cf"]),
+                           ("# B\nVersion 1.4242 y 4242,5 y 4242.5\n", [])):
+            (spec / "b.md").write_text(body, encoding="utf-8")
+            r3 = subprocess.run([sys.executable, str(AUDIT), str(spec), "--doc-index", "--json"],
+                                capture_output=True, text=True)
+            got = next(d for d in json.loads(r3.stdout)["docs"]
+                       if d["file"] == "b.md")["sections"][0]["cites"]
+            if got != want:
+                problems.append(f"doc-index: {body.splitlines()[1]!r} cited {got}, expected {want}")
+    return problems
+
+
 def registry_index_spans() -> list[str]:
     """`--index` is only worth having if a span read by offset returns exactly the
     entry: not the comment above it, not the blank after it, not the next entry's
@@ -2000,6 +2168,9 @@ def main() -> int:
     failures += compact_output_and_get()
     total += 1
     failures += registry_index_spans()
+    total += 1
+    failures += doc_index_spans_and_cites()
+    failures += doc_index_synthetic_bugs()
     total += 1
     failures += log_size_counts_bytes()
 

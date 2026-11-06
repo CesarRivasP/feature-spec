@@ -1,0 +1,19 @@
+# Fixture for --doc-index: sections, spans and per-section citations.
+feature: doc-index
+status: draft
+profile: ../_profile.fixture.yml
+defects:
+  - { id: D2, role: contributing, basis: asserted, status: open,
+      claim: 'el cron corta en 1000 objetos y lo demas no se borra',
+      falsified_by: 'una corrida con >1000 objetos' }
+limits:
+  gateway: { max_urls: 125 }
+  # the same value in two entries: a doc quoting it cites neither (ambiguous)
+  retention: { window: 'treinta dias corridos' }
+  archive: { window: 'treinta dias corridos' }
+acceptance:
+  - { id: AC5, item: 'se borra todo', status: approved }
+docs:
+  - { id: "01", file: 01-plan.md, role: master-plan, stage: draft }
+  - { id: "02", file: 02-notes.md, role: legacy, stage: draft }
+  - { id: "03", file: 03-missing.md, role: tests, stage: draft }
