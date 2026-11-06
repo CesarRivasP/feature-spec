@@ -5,6 +5,8 @@ feature: doc02-code-drift
 status: implementing
 profile: ../_profile.fixture.yml
 defects: []
+changes:
+  - { id: C1, file: src/hook.ts, kind: planned, change: 'the heal effect moves out of worker.ts into a hook' }
 acceptance: []
 docs:
   - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

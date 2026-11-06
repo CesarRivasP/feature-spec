@@ -3888,14 +3888,51 @@ def _code_segments(lines: list[str]) -> list[list[str]]:
     segs: list[list[str]] = [[]]
     for raw in lines:
         line = raw.strip()
-        if not line or line.startswith(_COMMENT_ONLY):
+        # a comment that elides (`// … body identical to X`, `# ... rest`) stands for
+        # omitted code exactly like a bare `…`: it splits, it does not vanish
+        elides = line.startswith(_COMMENT_ONLY) and ("…" in line or "..." in line)
+        if not line or (line.startswith(_COMMENT_ONLY) and not elides):
             continue
-        if _ELISION_RE.match(line):
+        if elides or _ELISION_RE.match(line):
             if segs[-1]:
                 segs.append([])
             continue
         segs[-1].append(line)
     return [s for s in segs if s]
+
+
+_IN_BLOCK_BEFORE = re.compile(r"^\s*(?://|#|/\*|\*|--)\s*(antes|before|old|actual|current)\b", re.I)
+_IN_BLOCK_AFTER = re.compile(r"^\s*(?://|#|/\*|\*|--)\s*(despu[eé]s|after|new|nuevo|ahora|now)\b", re.I)
+
+
+def _after_part(body: list[str]) -> list[str] | None:
+    """A block that shows before AND after inside itself (`// antes` … `// después`):
+    only the after part can match the tree. A `// antes` with no after marker is all
+    pre-change state -> None (skip). No markers -> the block as is."""
+    if not any(_IN_BLOCK_BEFORE.match(l) for l in body):
+        return body
+    for i in range(len(body) - 1, -1, -1):
+        if _IN_BLOCK_AFTER.match(body[i]):
+            return body[i + 1:]
+    return None
+
+
+def _in_order_window(flat: list[str], seg: list[str]) -> int | None:
+    """Start of a compact region where the segment's lines appear in order with only a
+    few lines inserted between them (the R44 shape: a guard line added to the code that
+    the doc never got), or None when its lines are spread across the file."""
+    slack = max(3, len(seg) // 2)
+    for i, line in enumerate(flat):
+        if line != seg[0]:
+            continue
+        k, j = 1, i + 1
+        while k < len(seg) and j < len(flat) and j - i < len(seg) + slack:
+            if flat[j] == seg[k]:
+                k += 1
+            j += 1
+        if k == len(seg):
+            return i
+    return None
 
 
 def _path_tokens(info: str) -> list[str]:
@@ -3946,12 +3983,54 @@ def check_doc02_code_drift(facts: dict, prose: dict[str, str], in_scope: list[di
             cache[rel] = (flat, set(flat))
         return cache[rel]
 
+    def match(rel: str, segs: list[list[str]], n: int) -> tuple[bool, int, str | None]:
+        """(matches, lines found anywhere, first missing line) of a block against a file."""
+        flat, have = load(rel)
+        found = sum(1 for s in segs for ln in s if ln in have)
+        contiguous, pos, first_missing = True, 0, None
+        for seg in segs:
+            at = next((i for i in range(pos, len(flat) - len(seg) + 1)
+                       if flat[i:i + len(seg)] == seg), None)
+            if at is None:
+                contiguous = False
+                first_missing = next((ln for ln in seg if ln not in have), None)
+                if first_missing is None:
+                    # every line exists somewhere: report where the run breaks
+                    best = max(
+                        (next((k for k in range(len(seg))
+                              if i + k >= len(flat) or flat[i + k] != seg[k]),
+                              len(seg) - 1)
+                         for i in range(len(flat))), default=0)
+                    first_missing = seg[min(best, len(seg) - 1)]
+                break
+            pos = at + len(seg)
+        if contiguous and found / n >= 0.6:
+            return True, found, None
+        if found == n and all(_in_order_window(flat, seg) is None for seg in segs):
+            # every line exists but spread across the file: an excerpt (keys of a JSON, a
+            # few lines from far apart), not a region that changed — real sets had dozens
+            return True, found, None
+        if first_missing is None:
+            first_missing = next((ln for s in segs for ln in s if ln not in have),
+                                 segs[0][0])
+        return False, found, first_missing
+
+    changed_files = sorted({r for r in (resolve(str(ch.get("file") or ""))
+                                        for ch in facts.get("changes") or []
+                                        if isinstance(ch, dict)) if r})
+
     for entry in in_scope:
         if not entry["id"].startswith("02") or entry["file"] not in prose:
             continue
         doc = entry["file"]
         for lineno, info, body, above in _code_fences(prose[doc]):
             lang = info.split()[0].lower() if info.split() else ""
+            # an untagged fence (or text/log/console) is output or prose, not code: real
+            # case, a block of `[DIAG-GAU] …` log lines was matched against babel.config.js
+            # because the paragraph above named it in passing
+            if lang in ("", "text", "txt", "log", "console", "output", "plaintext",
+                        "shell-session", "sh-session"):
+                continue
             if lang in ("diff", "patch") or _PRE_CHANGE_RE.search(info) \
                     or _PRE_CHANGE_RE.search(above):
                 continue
@@ -3961,34 +4040,21 @@ def check_doc02_code_drift(facts: dict, prose: dict[str, str], in_scope: list[di
             if len(named) != 1:
                 continue
             rel = next(iter(named))
+            body = _after_part(body)
+            if body is None:
+                continue
             segs = _code_segments(body)
             n = sum(len(s) for s in segs)
             if n < 3:
                 continue
-            flat, have = load(rel)
-            found = sum(1 for s in segs for ln in s if ln in have)
-            contiguous, pos, first_missing = True, 0, None
-            for seg in segs:
-                at = next((i for i in range(pos, len(flat) - len(seg) + 1)
-                           if flat[i:i + len(seg)] == seg), None)
-                if at is None:
-                    contiguous = False
-                    first_missing = next((ln for ln in seg if ln not in have), None)
-                    if first_missing is None:
-                        # every line exists somewhere: report where the run breaks
-                        best = max(
-                            (next((k for k in range(len(seg))
-                                  if i + k >= len(flat) or flat[i + k] != seg[k]),
-                                  len(seg) - 1)
-                             for i in range(len(flat))), default=0)
-                        first_missing = seg[min(best, len(seg) - 1)]
-                    break
-                pos = at + len(seg)
-            if contiguous and found / n >= 0.6:
+            ok, found, first_missing = match(rel, segs, n)
+            if ok:
                 continue
-            if first_missing is None:
-                first_missing = next((ln for s in segs for ln in s if ln not in have),
-                                     segs[0][0])
+            # the line above may name the SOURCE of a move ("the block of Layout.js moves
+            # to the hook, with this signature") while the block shows the destination:
+            # a block matching another file the registry declares in changes[] is not stale
+            if any(match(other, segs, n)[0] for other in changed_files if other != rel):
+                continue
             c.add("46", f"{doc}:{lineno}",
                   f"block for `{rel}` no longer matches the tree ({found}/{n} lines "
                   f"found; first missing: `{first_missing[:60]}`) — update the "

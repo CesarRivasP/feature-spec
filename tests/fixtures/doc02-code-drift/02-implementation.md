@@ -86,3 +86,51 @@ Compare `src/worker.ts` with `src/other.ts`.
 completely different()
 code.that.matches(nothing)
 ```
+
+## Moved to a hook: the line above names the SOURCE, the block shows the destination
+
+El bloque de `src/worker.ts` se mueve al hook, con esta firma:
+
+```ts
+export default function useHeal({
+  isExhausted,
+  isStalled,
+}) {
+  // … cuerpo idéntico al de worker.ts
+}
+```
+
+## Untagged fence: log output, not code
+
+Los logs que emite `src/worker.ts`:
+
+```
+[DIAG] run start job=1
+[DIAG] run end job=1
+[DIAG] lock released
+```
+
+## Excerpt from far apart lines of one file
+
+`src/worker.ts`
+
+```ts
+export async function run(job: Job) {
+const doubled = x * 2
+return doubled + 1
+```
+
+## Dos versiones dentro de un bloque
+
+```ts title=src/worker.ts
+// antes
+} finally {
+  await lock.free()
+}
+// después
+} finally {
+  if (lock.held) {
+    await lock.release()
+  }
+}
+```
