@@ -1674,8 +1674,15 @@ def open_items_lists_pending_actions() -> list[str]:
     if out_c.returncode != 0 or "      in:" in out_c.stdout:
         problems.append("open-items: --compact must have no 'in:' lines")
     elif ("· 5 sections" not in out_c.stdout or "· 2 sections" not in out_c.stdout
-          or "(src/cache.ts) — reopens when: cuando el volumen supere 1000 req/s · not cited" not in out_c.stdout):
+          or not any(l.startswith("  changes.C1 (src/cache.ts) — reopens when: cuando")
+                     and l.endswith("· not cited") for l in out_c.stdout.splitlines())):
         problems.append(f"open-items: --compact counts wrong:\n{out_c.stdout}")
+    # the 80 covers the whole item line (id, status, text, suffix), not only the text:
+    # real case, acceptance lines came out at 123 characters
+    long_items = [l for l in out_c.stdout.splitlines()
+                  if l.startswith("  ") and " · " in l and len(l) > 80]
+    if long_items:
+        problems.append(f"open-items: --compact item lines over 80: {long_items}")
 
     return problems
 

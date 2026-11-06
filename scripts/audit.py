@@ -5210,7 +5210,11 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
     def emit(line: str, prefix: str, entry_id: str) -> None:
         rows = sections_for(prefix, entry_id)
         if compact:
-            print(line + sec_count(rows))
+            # the 80 covers the whole line: id, status and suffix, not only the item text
+            suffix = sec_count(rows)
+            if len(line) + len(suffix) > 80:
+                line = line[:max(80 - len(suffix) - 1, 20)].rstrip() + "…"
+            print(line + suffix)
         else:
             print(line)
             print(in_line(rows))
