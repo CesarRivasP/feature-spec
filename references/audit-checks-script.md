@@ -264,6 +264,16 @@ Every qualified citation in a registered doc's prose (not `_log.md`, not inside 
 
 
 ### 45. History inside the registry — [script]
+
+### 46. Doc 02 code blocks vs the tree — [script + human]
+Doc 02 must stay paste-ready, so its blocks are never replaced by `path:line` anchors (rejected in review). The cost is that a block is a copy, and nothing compared the copy with the file once the code moved on. **Candidates, never findings**; runs only when `status:` is `implementing` or `shipped`.
+- **Which blocks.** Fenced blocks of every doc whose id starts with `02` (`02`, `02a`…`02z`). A block is checked only when it names **exactly one** file that exists in the tree: a path in the fence info string (`` ```ts src/x.ts ``, `` ```ts title=src/x.ts ``), or — when the info string names none — exactly one existing backticked path on the nearest non-empty line above. `diff` / `patch` blocks, and blocks whose info string or line above says `antes` / `before` / `old` / `actual` / `current` (whole word, any case), show the pre-change state on purpose and are skipped.
+- **Compared on normal form.** Lines stripped; blank lines and comment-only lines (`//`, `#`, `/*`, `*`, `--`) dropped on both sides; a `...` / `…` line is an elision and splits the block into segments, each of which must be a contiguous run of the file, in order. A block of fewer than 3 normalized lines is skipped.
+- **Candidate** when a segment is not a contiguous run of the file, **or** when fewer than 60% of the block's lines appear anywhere in it. The line reads `<doc>:<fence line>: block for `<path>` no longer matches the tree (<k>/<n> lines found; first missing: `<line>`)`; when every line exists elsewhere in the file, "first missing" is the line where the run breaks.
+- **Tree.** The branch the registry names (`tracking.branch`, `shipped_in` once shipped), read as checks 18, 20, 38 and 43 do; untracked files fall back to disk. Offline, read-only, each file read once.
+
+*Real case:* the code was fixed in the repo and doc 02c still taught the old `finally` without the guard; whoever rebuilt from the doc reintroduced the bug.
+
 Narrative history inside a registry entry is read twice every round: once in `_facts.yml`, once in `_log.md`, which already holds it. Only fields that are clearly history fire, as `POLISH`, one finding per entry field naming the entry, the field and its size:
 - **Any key whose name ends in a date** (`_YYYY_MM_DD`, `_YYYY-MM-DD` or `-YYYY-MM-DD`), whatever its size.
 - **A `note:` longer than 600 characters.**
