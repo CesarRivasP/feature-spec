@@ -1,0 +1,14 @@
+{
+  "name": "feature-spec",
+  "owner": {
+    "name": "Cesar Rivas",
+    "url": "https://github.com/CesarRivasP"
+  },
+  "plugins": [
+    {
+      "name": "feature-spec",
+      "source": "./",
+      "description": "Multi-doc feature specs from a single facts registry, audited mechanically."
+    }
+  ]
+}

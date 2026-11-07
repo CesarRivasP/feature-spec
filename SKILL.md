@@ -9,6 +9,8 @@ A feature spec is not one file — it's a **set** (master plan + implementation 
 
 **Core idea: one source of truth.** Every shared datum lives once in `_facts.yml`. Docs reference it. Auditing stops being "read 3 docs and compare prose" and becomes "check no doc contradicts `_facts.yml`" — mechanical and near-deterministic.
 
+**Where this skill's files are: `${CLAUDE_SKILL_DIR}`.** Every `scripts/…`, `references/…`, `templates/…`, `profiles/…` and `agents/…` path in this skill and in its references is relative to that directory, not to the repo you work in: run `python3 ${CLAUDE_SKILL_DIR}/scripts/audit.py docs/features/<slug>/` from the root of the repo whose spec you are working on, and read `${CLAUDE_SKILL_DIR}/references/mode-audit.md`.
+
 Directory layout for a feature named `<slug>`:
 
 ```
