@@ -61,7 +61,7 @@ The full list is `references/rules.md` — every mode that writes is held to it,
 - **Verbatim copy guarantees consistency with the registry, including any error IN it.** Harden the input: every claim declares `basis:`, measured data is run not copied, `changes` vs `related_docs` are disjoint, contracts live in `contracts.*` not prose.
 - **Ask, never invent.** Unknowns travel as `null`, `[MANUAL]` or `basis: asserted` + `falsified_by:`. An unmarked unknown is the defect.
 - **The log outranks the context window.** Read it first, re-read at the versions it names, open your entry before editing.
-- **`_facts.yml` is edited as text, never round-tripped through a YAML dumper.** Exact string replacement with `assert count == 1`; `safe_load` to read. A vault-ingested registry may be a two-document stream: `safe_load_all()`, last document.
+- **`_facts.yml` is edited as text, never round-tripped through a YAML dumper.** Exact string replacement through the `Edit` tool, old text copied from a `Read` of those lines, never retyped; `safe_load` to read. A vault-ingested registry may be a two-document stream: `safe_load_all()`, last document.
 - **Registry is authoritative; the profile says how this repo finds out.** A command belongs to the profile, its output to the registry.
 - **A clean audit does not mean the registry is true.** `verify` is the gate; shipping with a cause still asserted is allowed once, in writing, with an expiry (`defects[].accepted`), and the criterion that would settle it says so (`acceptance[].closes`). `audit.py --open` lists what is still open before any mode starts.
 - **Wrong entries are retracted or corrected, never deleted; an id is never recycled.**
