@@ -1,6 +1,6 @@
 {
   "name": "feature-spec",
-  "version": "1.27.1",
+  "version": "1.28.0",
   "description": "Multi-doc feature specs from a single source of truth (a facts registry), audited mechanically so no two docs contradict. Scripts for audit, sync, new, rotate, ship and the HTML view.",
   "author": {
     "name": "Cesar Rivas",
@@ -9,6 +9,11 @@
   "homepage": "https://github.com/CesarRivasP/feature-spec",
   "repository": "https://github.com/CesarRivasP/feature-spec",
   "license": "MIT",
-  "keywords": ["spec", "design-doc", "audit", "single-source-of-truth"],
+  "keywords": [
+    "spec",
+    "design-doc",
+    "audit",
+    "single-source-of-truth"
+  ],
   "skills": "./"
 }

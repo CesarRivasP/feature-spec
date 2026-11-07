@@ -19,7 +19,7 @@ claude plugin marketplace add CesarRivasP/feature-spec
 claude plugin install feature-spec@feature-spec
 ```
 
-or, in a session, `/plugin install feature-spec --marketplace CesarRivasP/feature-spec`. To pin a release instead of tracking the latest one, add the marketplace at its tag: `claude plugin marketplace add CesarRivasP/feature-spec#v1.27.1`. `claude plugin update feature-spec@feature-spec` moves to a newer release; `/reload-plugins` (or a new session) loads it. The plugin brings the skill and the three subagent tiers of `references/parallel.md` (`feature-spec:spec-strong`, `feature-spec:spec-mid`, `feature-spec:spec-cheap`).
+or, in a session, `/plugin install feature-spec --marketplace CesarRivasP/feature-spec`. To pin a release instead of tracking the latest one, add the marketplace at its tag: `claude plugin marketplace add CesarRivasP/feature-spec#v1.28.0`. `claude plugin update feature-spec@feature-spec` moves to a newer release; `/reload-plugins` (or a new session) loads it. The plugin brings the skill and the three subagent tiers of `references/parallel.md` (`feature-spec:spec-strong`, `feature-spec:spec-mid`, `feature-spec:spec-cheap`).
 
 **Do not also keep a copy in `.claude/skills/feature-spec`** — a project copy or a symlink to a checkout — once the plugin is installed: both load, both match the same requests, and a symlink to a working checkout hands every session whatever branch that checkout is on. Remove it:
 
@@ -27,15 +27,27 @@ or, in a session, `/plugin install feature-spec --marketplace CesarRivasP/featur
 rm <your-repo>/.claude/skills/feature-spec        # a symlink: removes the link only
 ```
 
-Without the plugin system, copy the folder instead (per project, or `~/.claude/skills/` for all); pin with `git clone --branch v1.27.1 --depth 1 https://github.com/CesarRivasP/feature-spec.git`. Restart the session so the skill is picked up. No MCP servers: the skill is markdown, YAML and Python scripts.
+Without the plugin system, copy the folder instead (per project, or `~/.claude/skills/` for all); pin with `git clone --branch v1.28.0 --depth 1 https://github.com/CesarRivasP/feature-spec.git`. Restart the session so the skill is picked up. No MCP servers: the skill is markdown, YAML and Python scripts.
 
-Two modes ship a script — `audit` and `view` — and between them they need one library:
+The scripts need only `python3` (3.9+) and `git`. They read YAML with the PyYAML installed on the machine when there is one, and otherwise with the copy bundled in `scripts/_vendor/` (PyYAML 6.0.3, pure Python, MIT) — nothing to `pip install`. Installing PyYAML yourself (`python3 -m pip install --user pyyaml`) only adds its C loader, which makes `audit` faster on large sets.
+
+## Evals: does the skill change what an agent does?
+
+`evals/` holds four cases — `audit`, `sync`, `handoff`, `new` — each run by `claude plugin eval` twice: with the plugin and without it. A case sets up a throwaway git repo from `tests/fixtures`, gives the agent one task and checks what it did (which scripts it ran, what the files say afterwards), not what it said.
 
 ```bash
-python3 -m pip install --user pyyaml
+evals/run.sh              # 1 run per case
+evals/run.sh --runs 3     # before a release
 ```
 
-Every other mode runs without it.
+Each run is a full Claude Code session on your own login: with a claude.ai plan it uses your plan's quota (the `$` in the report is an estimate); with an API key it is billed. One pass of the suite is about $2 estimated. First measurement (v1.28.0, 1 run each):
+
+| case | with | without | what differs |
+|---|---|---|---|
+| new | 1.0 | 0.0 | without the skill the set is never scaffolded |
+| sync | 1.0 | 0.67 | without it a `derived` doc gets patched by hand |
+| audit | 1.0 | 0.71 | without it the agent reads everything instead of `--open` |
+| handoff | 1.0 | 1.0 | the fixture's own log already teaches the stub rule |
 
 ## Set up the profile (once per repo)
 
@@ -277,7 +289,8 @@ If anything outside this repo reads `docs/features/`, check its patterns when yo
 
 | version | what it added |
 |---|---|
-| [**v1.27.1**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.27.1) | Registry edits go through the `Edit` tool. The rule said "exact string replacement with `assert count == 1`", and sessions read it as: write a Python heredoc and retype the YAML lines to replace from memory or from `rg`/`cut` output. Nested flow mappings got the wrong indentation, the assert fired and nothing was written — on one day 22 of 36 such edits failed, each a re-read and a retry. `SKILL.md` and `references/rules.md` now say to edit with `Edit` (which already refuses a missing or non-unique match) and to copy the old text from a `Read` of those lines; a script stays for many mechanical edits at once, its old strings also taken from a `Read`. |
+| [**v1.28.0**](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.28.0) | Runs anywhere `python3` does, and is measured. The scripts no longer need `pip install pyyaml`: they use the PyYAML on the machine when there is one and otherwise the pure-Python PyYAML 6.0.3 bundled in `scripts/_vendor/` (MIT, sdist hash checked against PyPI) — the same library, not a different parser. Found by the evals: in a clean environment every script failed on `import yaml`. A CI job now runs every suite with no PyYAML installed. `evals/` adds four `claude plugin eval` cases (audit, sync, handoff, new), each run with and without the plugin and graded on what the agent did — the scripts it ran and the files afterwards — not on what it said; `evals/run.sh` runs them with sane defaults. First measurement: new 1.0 vs 0.0, sync 1.0 vs 0.67 (without the skill a derived doc gets patched), audit 1.0 vs 0.71, handoff 1.0 vs 1.0. |
+| [v1.27.1](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.27.1) | Registry edits go through the `Edit` tool. The rule said "exact string replacement with `assert count == 1`", and sessions read it as: write a Python heredoc and retype the YAML lines to replace from memory or from `rg`/`cut` output. Nested flow mappings got the wrong indentation, the assert fired and nothing was written — on one day 22 of 36 such edits failed, each a re-read and a retry. `SKILL.md` and `references/rules.md` now say to edit with `Edit` (which already refuses a missing or non-unique match) and to copy the old text from a `Read` of those lines; a script stays for many mechanical edits at once, its old strings also taken from a `Read`. |
 | [v1.27.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.27.0) | feature-spec is a Claude Code plugin. Installing it by symlink to a checkout meant every session ran whatever branch that checkout was on — seven projects did, and for a day they loaded unreleased code. `.claude-plugin/plugin.json` and `marketplace.json` let it install pinned to a release (`claude plugin marketplace add CesarRivasP/feature-spec`, `claude plugin install feature-spec@feature-spec`; `#v1.27.0` pins a tag), with the version and commit recorded and updates only on `claude plugin update`. The skill stays at the repo root; its scripts and references are addressed from `${CLAUDE_SKILL_DIR}`, so the same `SKILL.md` works as a plugin and as a plain skill folder. The three subagent tiers register as `feature-spec:spec-strong` / `-mid` / `-cheap`. Always-on cost about 280 tokens per session. CI runs every test suite and checks that the plugin validates, installs and loads one skill and three agents. |
 | [v1.26.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.26.0) | Doc 02 checked against the code, and the audit 2–5× faster. Check 46 (candidates, `implementing`/`shipped` only): a fenced block of doc 02 that names exactly one repo file and no longer appears in it at the branch the set names — the real case is a guard added to the code that the doc never got, so whoever rebuilt from the doc reintroduced the bug. Blocks are never replaced (doc 02 stays paste-ready); `diff` blocks, blocks marked `antes:`/`before:` and the before-part of a block that shows both are skipped, a comment that elides splits the block, an excerpt of keys in a data file is not stale, comment prefixes follow the language. On real sets: 19 → 6 candidates after measuring, and a second-model review whose five false negatives (reordered lines, a comment starting with "before", a file named `old-…`, CSS custom properties, a lax match against `changes[]`) are each a test. Speed: git reads through one `git cat-file --batch` process, the datum regex built per doc, the C YAML loader with unchanged `line:col` errors, and a token set for check 21; `tests/test_perf.py` generates a 312 KB / 16-doc set and asserts byte-identical output against the old paths (54 s → 9.6 s); on real sets 4.2 s → 0.85 s for the largest. |
 | [v1.25.0](https://github.com/CesarRivasP/feature-spec/releases/tag/v1.25.0) | Less repetition in the audit, and a warning for history kept inside the registry. Findings of one check and one message print once — `DRIFT ×N:` with the message, values every member shares written as they are, then every member with only the values that differ — so 32 DRIFT on a real set no longer print 32 times; counts, exit code, `--json` and `--baseline` are unchanged and `--full` prints each (14.5 KB → 10.4 KB on that set). Check 45 (`POLISH`) flags history inside entries: a key whose name ends in a date (`outcome_2026_09_04`) and a `note:` over 600 characters, with the fix to move it verbatim to the `_log.md` round that produced it. It never reads the prose the rules keep in the registry (`outcome`, `correction`, `accepted`, `conditions`, `claim`, `item`, `value`, `attempts`), a `note:` next to a `correction:` (evidence.md puts the story there) or a dated number. Reviewed by a second model; its two bugs are tests. |

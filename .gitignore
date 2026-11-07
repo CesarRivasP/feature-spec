@@ -15,3 +15,6 @@ _profile.yml
 # derived: the HTML view is regenerated, never authored
 view.html
 __pycache__/
+
+# claude plugin eval output (kept out of the plugin)
+evals/results/

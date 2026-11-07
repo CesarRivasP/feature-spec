@@ -101,7 +101,7 @@ internal paths, so putting it on the network is a decision, not a convenience.
 
 ## Dependencies
 
-PyYAML, and nothing else. There is **no fallback YAML parser on purpose**: a
-registry parsed slightly wrong is exactly the failure this skill exists to
-prevent, and a hard error naming the install line costs less than a view that
-quietly drops a `basis:`.
+PyYAML, and nothing else: the installed one, or the pure-Python copy bundled in
+`scripts/_vendor/` (PyYAML 6.0.3) when the machine has none. There is still **no
+different YAML parser**: a registry parsed slightly wrong is exactly the failure
+this skill exists to prevent, so the fallback is the same library, not a lookalike.

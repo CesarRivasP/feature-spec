@@ -32,13 +32,12 @@ from pathlib import Path
 
 try:
     import yaml
-except ImportError:  # pragma: no cover
-    sys.exit(
-        "render.py needs PyYAML to read _facts.yml.\n"
-        "  pip install pyyaml   (or: python3 -m pip install --user pyyaml)\n"
-        "No fallback parser on purpose: a silently mis-parsed registry is the exact\n"
-        "failure this skill exists to prevent."
-    )
+except ImportError:  # no PyYAML on this machine: the same PyYAML, bundled pure-Python
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "_vendor"))
+    import yaml
+# Not a fallback parser: the bundled copy is PyYAML itself (scripts/_vendor/README.md), so a
+# registry parses the same everywhere — a silently mis-parsed registry is the failure this
+# skill exists to prevent.
 
 
 

@@ -109,7 +109,7 @@ def flow_append() -> list[str]:
 
         # safe_load assertions
         sys.path.insert(0, str(ROOT / "scripts"))
-        import yaml
+        from render import yaml
         loaded = yaml.safe_load(after_text)
         acc1 = next((e for e in loaded.get("acceptance", []) if isinstance(e, dict) and e.get("id") == "AC1"), None)
         if not acc1:
@@ -243,7 +243,7 @@ def edits_line_reads_back() -> list[str]:
 
 def other_shapes() -> list[str]:
     problems = []
-    import yaml
+    from render import yaml
 
     # AC2: flow entry without attempts
     with tempfile.TemporaryDirectory() as tmp:
@@ -363,7 +363,7 @@ def refusals() -> list[str]:
 
 def status_flag() -> list[str]:
     problems = []
-    import yaml
+    from render import yaml
 
     with tempfile.TemporaryDirectory() as tmp:
         spec = copy_fixture(tmp)

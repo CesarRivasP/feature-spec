@@ -25,7 +25,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-import yaml
+try:
+    import yaml
+except ImportError:  # no PyYAML on this machine: the same PyYAML, bundled pure-Python
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "_vendor"))
+    import yaml
 
 SKILL = Path(__file__).resolve().parent.parent
 TEMPLATES = SKILL / "templates"
