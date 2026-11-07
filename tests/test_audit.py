@@ -27,6 +27,18 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 # (fixture, expect[(check, text)], reject[(check, text)])
 CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
+    # Check 45 — narrative history inside a registry entry, read twice every round.
+    # Dated keys (any size) and a `note:` over 600 chars fire; outcome, correction,
+    # retired_because, falsified_by and conditions, however long, and a short note
+    # do not (rules.md requires that prose in the registry).
+    ("registry-history",
+     [("45", "outcome_2026_09_04"), ("45", "attempt-2026-09-05"),
+      ("45", "`note` is 1439 chars")],
+     [("45", "defects.D2"), ("45", "`outcome`"), ("45", "`correction`"),
+      ("45", "`retired_because`"), ("45", "`falsified_by`"), ("45", "`conditions`"),
+      ("45", "defects.D3"), ("45", "until_2026-12-01"), ("45", "first_2026_09_04"),
+      ("45", "at_2026_09_04"), ("45", "measured_2026_09_04")]),
+
     # §1.1 — five anchors moved by the author's own later edits; eight bare ones.
     ("anchor-drift",
      [("18", "chat.ts:341"), ("18", "bare anchor")],
@@ -731,6 +743,68 @@ def run_candidates(fixture: str) -> dict[str, list[dict]]:
     if out.returncode not in (0, 1):
         raise AssertionError(f"{fixture}: audit.py crashed\n{out.stderr}")
     return json.loads(out.stdout).get("candidates", {})
+
+
+def run_text(fixture: str, extra: list[str] | None = None) -> str:
+    root = FIXTURES / fixture.split("/", 1)[0]
+    out = subprocess.run(
+        [sys.executable, str(AUDIT), str(FIXTURES / fixture), "--repo-root", str(root),
+         *(extra or [])], capture_output=True, text=True)
+    if out.returncode not in (0, 1):
+        raise AssertionError(f"{fixture}: audit.py crashed\n{out.stderr}")
+    return out.stdout
+
+
+def findings_group_without_loss() -> list[str]:
+    """Check 16 repeated one DRIFT per old round. Text output prints N findings of
+    one check and message template once, with ALL members listed; `--full` prints
+    each; `--json` and the verdict count members either way."""
+    errs: list[str] = []
+    # unit: the header keeps values every member shares (an instruction like
+    # `(<n> lines, blob <sha7>)` must not become <v>); dates stay whole tokens
+    import io, contextlib
+    sys.path.insert(0, str(AUDIT.parent))
+    import audit as _a
+    grp = [{"severity": "DRIFT", "check": 16, "where": f"d{i}.md",
+            "what": f"`v{i}` dated 2026-09-0{i}, last at _log.md:{100 + i}",
+            "fix": "record `(<n> lines, blob <sha7>)` for every file"} for i in (1, 2, 3)]
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _a.print_grouped(grp)
+    out = buf.getvalue()
+    if "record `(<n> lines, blob <sha7>)` for every file" not in out:
+        errs.append(f"grouping: a value every member shares was abstracted in the header:\n{out}")
+    if "d1.md `v1` 2026-09-01 101" not in out or "2026 09" in out:
+        errs.append(f"grouping: member line lost a date or a value:\n{out}")
+    fx = "log-between-rounds"
+    grouped, full = run_text(fx), run_text(fx, ["--full"])
+    if "DRIFT \u00d73:" not in grouped:
+        errs.append("grouping: three equal findings did not print one \u00d73 header")
+    for member in ("01-master-plan.md", "02-implementation.md", "_facts.yml"):
+        if not any(l.startswith("    ") and "\u00b7" not in l[:4] and member in l
+                   and "last recorded" not in l for l in grouped.splitlines()):
+            errs.append(f"grouping: member {member} missing from the member lines")
+    for blob in ("3333333", "4444444", "2222222"):
+        if blob not in grouped:
+            errs.append(f"grouping: value {blob} was dropped (not lossless)")
+    if "\u00d7" in full or full.count("last recorded at") != 3:
+        errs.append("--full: findings must print one by one, ungrouped")
+    if len(grouped.splitlines()) >= len(full.splitlines()):
+        errs.append("grouping: grouped output is not shorter than --full")
+    verdict = lambda t: t.strip().splitlines()[-1]
+    if verdict(grouped) != verdict(full):
+        errs.append("grouping: the summary must count members, not groups")
+    # groups of 1-2 print as today
+    rh = run_text("registry-history")
+    if "\u00d7" in rh or rh.count("check 45") != 3:
+        errs.append("grouping: findings that do not repeat must print as today")
+    # --json is the same with and without --full, and carries every member
+    a, b = run_json(fx), run_json(fx, ["--full"])
+    if a != b:
+        errs.append("--json changed with --full")
+    if sum(1 for x in a["findings"] if "last recorded" in x["what"]) != 3:
+        errs.append("--json lost a member")
+    return errs
 
 
 def matches(findings: list[dict], check: str, text: str) -> bool:
@@ -2250,6 +2324,8 @@ def rotate_stub_nested_comments_open_in() -> list[str]:
 def main() -> int:
     verbose = "-v" in sys.argv
     failures, total = [], 0
+    total += 1
+    failures += findings_group_without_loss()
     total += 1
     failures += baseline_counts_only_new()
     total += 1

@@ -262,3 +262,12 @@ Every qualified citation in a registered doc's prose (not `_log.md`, not inside 
 
 *Real case:* two sibling sets (a parent "tiles" research set and a child "multiview grid" set) cite the same measurements — fps per tile, CPU per tile. Inside one set the registry stops copies drifting; across sets the same copying happens again and nothing checks it: when the parent re-measured and changed the value, the child's prose kept the old number and audited clean.
 
+
+### 45. History inside the registry — [script]
+Narrative history inside a registry entry is read twice every round: once in `_facts.yml`, once in `_log.md`, which already holds it. Only fields that are clearly history fire, as `POLISH`, one finding per entry field naming the entry, the field and its size:
+- **Any key whose name ends in a date** (`_YYYY_MM_DD`, `_YYYY-MM-DD` or `-YYYY-MM-DD`), whatever its size.
+- **A `note:` longer than 600 characters.**
+
+Never fires on `outcome`, `correction`, `retired_because`, `falsified_by`, `accepted.*`, `conditions`, `claim`, `item` or `value`: `references/rules.md` requires that prose to live in the registry, so a general length cap was rejected. The fix is to move the text **verbatim** to the `_log.md` round that produced it and leave `see: _log.md R<n>` in its place — never delete or summarize it.
+
+*Real case:* real registries reached 307 KB, much of it `outcome_2026_09_04:` keys and a `note: 'ERA root_cause hasta…'` that `_log.md` already held, so every audit round read the same story twice.

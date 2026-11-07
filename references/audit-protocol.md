@@ -315,6 +315,7 @@ from one of them needs explaining, disputing or changing, and not otherwise.
 | 40 | Revision order |
 | 41 | Provisional prose |
 | 44 | Cross-set value parity |
+| 45 | History inside the registry |
 
 ## Enum fields are read lowercased — always
 
