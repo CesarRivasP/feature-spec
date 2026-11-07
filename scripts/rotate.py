@@ -29,7 +29,11 @@ try:
     import audit
 except ImportError as exc:  # pragma: no cover
     sys.exit(f"cannot import audit.py, which must sit beside this file: {exc}")
-import yaml  # noqa: E402
+try:
+    import yaml
+except ImportError:  # no PyYAML on this machine: the same PyYAML, bundled pure-Python
+    sys.path.insert(0, str(Path(__file__).resolve().parent / "_vendor"))
+    import yaml
 
 
 def _fsync_dir(path: Path) -> None:

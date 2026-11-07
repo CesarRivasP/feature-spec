@@ -27,6 +27,28 @@ jobs:
             python tests/test_$t.py
           done
 
+  tests-without-pyyaml:
+    # the bundled PyYAML (scripts/_vendor) must carry every script on a machine with none
+    runs-on: ubuntu-latest
+    env:
+      GIT_AUTHOR_NAME: ci
+      GIT_AUTHOR_EMAIL: ci@example.invalid
+      GIT_COMMITTER_NAME: ci
+      GIT_COMMITTER_EMAIL: ci@example.invalid
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: test suites with no PyYAML installed
+        run: |
+          python -c "import yaml" 2>/dev/null && { echo "PyYAML is installed; this job needs it absent"; exit 1; } || true
+          for t in audit ship facts triage render sync new rotate; do
+            python tests/test_$t.py
+          done
+
   plugin:
     runs-on: ubuntu-latest
     steps:

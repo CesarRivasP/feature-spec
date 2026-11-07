@@ -5,7 +5,7 @@ The view is a **derived artifact**: never edit it, never treat it as a source �
 
 It **shows** the same mechanical comparisons `audit` reports — dangling cross-refs, registry datums never cited in prose, and the `references/evidence.md` gates (G1, `measured` with incomplete evidence, `asserted` with no `falsified_by`, `cmd` with regex alternation or a denylist scope). It does not replace `audit`: a view is read by a person, a finding list is acted on.
 
-Needs PyYAML and nothing else; there is no fallback parser, because a registry parsed slightly wrong is the exact failure this skill exists to prevent.
+Needs PyYAML and nothing else — the installed one, or the copy bundled in `scripts/_vendor/` when there is none. That copy is PyYAML itself, not a different parser, because a registry parsed slightly wrong is the exact failure this skill exists to prevent.
 
 Sharing: the file itself is the unit — send `view.html` to the external owner of doc 03 and it opens offline, with no account and no expiring link. `--serve` binds `127.0.0.1`; `--serve --lan` binds `0.0.0.0` and says so, because a spec set names endpoints, env var names and internal paths.
 
