@@ -264,6 +264,7 @@ Every qualified citation in a registered doc's prose (not `_log.md`, not inside 
 
 
 ### 45. History inside the registry — [script]
+
 Narrative history inside a registry entry is read twice every round: once in `_facts.yml`, once in `_log.md`, which already holds it. Only fields that are clearly history fire, as `POLISH`, one finding per entry field naming the entry, the field and its size:
 - **Any key whose name ends in a date** (`_YYYY_MM_DD`, `_YYYY-MM-DD` or `-YYYY-MM-DD`), whatever its size.
 - **A `note:` longer than 600 characters.**
@@ -271,3 +272,17 @@ Narrative history inside a registry entry is read twice every round: once in `_f
 Never fires on `outcome`, `correction`, `retired_because`, `falsified_by`, `accepted.*`, `conditions`, `claim`, `item` or `value`: `references/rules.md` requires that prose to live in the registry, so a general length cap was rejected. The fix is to move the text **verbatim** to the `_log.md` round that produced it and leave `see: _log.md R<n>` in its place — never delete or summarize it.
 
 *Real case:* real registries reached 307 KB, much of it `outcome_2026_09_04:` keys and a `note: 'ERA root_cause hasta…'` that `_log.md` already held, so every audit round read the same story twice.
+
+### 46. Doc 02 code blocks vs the tree — [script + human]
+Doc 02 must stay paste-ready, so its blocks are never replaced by `path:line` anchors (rejected in review). The cost is that a block is a copy, and nothing compared the copy with the file once the code moved on. **Candidates, never findings**; runs only when `status:` is `implementing` or `shipped`.
+- **Which blocks.** Fenced blocks of every doc whose id starts with `02` (`02`, `02a`…`02z`). A block is checked only when it names **exactly one** file that exists in the tree: a path in the fence info string (`` ```ts src/x.ts ``, `` ```ts title=src/x.ts ``), or — when the info string names none — exactly one existing backticked path on the nearest non-empty line above. `diff` / `patch` blocks, and blocks whose info string or line above says `antes` / `before` / `old` / `actual` / `current` (whole word, any case), show the pre-change state on purpose and are skipped.
+- **Compared on normal form.** Lines stripped; blank lines and comment-only lines (`//`, `#`, `/*`, `*`, `--`) dropped on both sides; a `...` / `…` line is an elision and splits the block into segments, each of which must be a contiguous run of the file, in order. A block of fewer than 3 normalized lines is skipped.
+- **Candidate** when a segment is not a contiguous run of the file, **or** when fewer than 60% of the block's lines appear anywhere in it. The line reads `<doc>:<fence line>: block for `<path>` no longer matches the tree (<k>/<n> lines found; first missing: `<line>`)`; when every line exists elsewhere in the file, "first missing" is the line where the run breaks.
+- **Tree.** The branch the registry names (`tracking.branch`, `shipped_in` once shipped), read as checks 18, 20, 38 and 43 do; untracked files fall back to disk. Offline, read-only, each file read once.
+
+- **Markers.** A pre-change marker opens the line above (`antes:`, `before:`) or is a comment that is only the marker inside the block (`// antes`); a word in the middle of a sentence or inside a path (`old-api.ts`) is not one. Comment prefixes follow the block's language: `#` is code in C, CSS and Rust, `--` is code outside SQL/Lua.
+- **Not compared.** An untagged fence or a `text`/`log`/`console`/`output` one (output, not code); a block whose own comments mark `// antes` with no `// después` (all pre-change) — with both, only the part after `// después` is compared; a comment that elides (`// … body identical to X`) splits the block like a bare `…`.
+- **Not stale.** In a data/config file (JSON, YAML, TOML, INI, env…), every line present in any order (an excerpt of keys). In code the same shape IS a candidate: it hides reorderings and removed lines (review of v1.26). Also not stale: a block that does not match the file the line above names but matches, as one contiguous run, another file `changes[]` declares (the line above named the source of a move, the block shows the destination). Lines present in order inside a compact region with a few lines inserted ARE a candidate: that is the real case below.
+- **A phase not built yet** also shows while the set is `implementing`: the human half decides (doc ahead of the code, or doc behind it).
+
+*Real case:* the code was fixed in the repo and doc 02c still taught the old `finally` without the guard; whoever rebuilt from the doc reintroduced the bug.

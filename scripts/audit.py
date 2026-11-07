@@ -30,6 +30,7 @@ implemented twice is the exact defect this skill exists to prevent.
 from __future__ import annotations
 
 import argparse
+import atexit
 from collections import Counter
 import datetime
 import hashlib
@@ -44,8 +45,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from render import (accepted_state, build_datum_regex, collect_claims,
-                        collect_datums, confined, norm,
-                        status_gate, trace_datums, walk, yaml)
+                        collect_datums, confined, datums_in, norm,
+                        slow_path, status_gate, trace_datums, walk, yaml)
 except ImportError as exc:  # pragma: no cover
     sys.exit(
         f"cannot import the shared registry core from render.py: {exc}\n"
@@ -1574,6 +1575,9 @@ class WorkTree:
         return name_index(self.root)
 
 
+_FALLBACK = object()
+
+
 class GitTree(WorkTree):
     """The tree at `tracking.branch` (or `tracking.shipped_in`, once shipped) when
     the checkout is on something else.
@@ -1603,6 +1607,65 @@ class GitTree(WorkTree):
         self._dirs: set[str] | None = None
         self._tracked: set[str] | None = None
         self._disk: dict[str, list[str]] | None = None
+        self._batch: subprocess.Popen | None = None
+        self._blobs: dict[str, bytes | None] = {}
+
+    def _show(self, rel: str) -> bytes | None:
+        """`git show <ref>:<rel>` bytes, or None when git fails. One long-lived
+        `git cat-file --batch` answers every path (119 forks measured ~2.1 s on a real
+        307 KB set), cached by path. Anything that is not a plain blob, or a path git's
+        line protocol cannot carry, goes through `git show` so the bytes never differ."""
+        if rel in self._blobs:
+            return self._blobs[rel]
+        data = self._cat_file(rel)
+        if data is _FALLBACK:
+            out = subprocess.run(["git", "show", f"{self.ref}:{rel}"], cwd=self.root,
+                                 capture_output=True)
+            data = out.stdout if out.returncode == 0 else None
+        self._blobs[rel] = data
+        return data
+
+    def _cat_file(self, rel: str):
+        if "\n" in rel or "\r" in rel or slow_path():
+            return _FALLBACK
+        try:
+            if self._batch is None:
+                self._batch = subprocess.Popen(
+                    ["git", "cat-file", "--batch"], cwd=self.root,
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL)
+                atexit.register(self.close)
+            proc = self._batch
+            proc.stdin.write(f"{self.ref}:{rel}\n".encode("utf-8"))
+            proc.stdin.flush()
+            header = proc.stdout.readline().split()
+            if len(header) == 2 and header[1] in (b"missing", b"ambiguous"):
+                return None
+            if len(header) != 3 or header[1] != b"blob":
+                # a tree or a submodule: git show prints something else; and the
+                # object body (if any) must still be drained to keep the stream aligned
+                if len(header) == 3 and header[2].isdigit():
+                    proc.stdout.read(int(header[2]) + 1)
+                return _FALLBACK
+            size = int(header[2])
+            body = proc.stdout.read(size)
+            proc.stdout.read(1)  # the newline git appends
+            return body
+        except (OSError, ValueError):
+            self.close()
+            return _FALLBACK
+
+    def close(self) -> None:
+        proc, self._batch = self._batch, None
+        if proc is not None:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
 
     def _tracked_here(self) -> set[str]:
         if self._tracked is None:
@@ -1660,17 +1723,14 @@ class GitTree(WorkTree):
     def line_count(self, target: Path) -> int:
         if self._ours(target) or self._from_disk(target):
             return super().line_count(target)
-        rel = self._rel(target)
-        out = subprocess.run(["git", "show", f"{self.ref}:{rel}"], cwd=self.root,
-                             capture_output=True)
-        return out.stdout.count(b"\n") if out.returncode == 0 else 0
+        data = self._show(str(self._rel(target)))
+        return data.count(b"\n") if data is not None else 0
 
     def read_text(self, target: Path) -> str:
         if self._ours(target) or self._from_disk(target):
             return super().read_text(target)
-        out = subprocess.run(["git", "show", f"{self.ref}:{self._rel(target)}"],
-                             cwd=self.root, capture_output=True)
-        return out.stdout.decode("utf-8", errors="ignore") if out.returncode == 0 else ""
+        data = self._show(str(self._rel(target)))
+        return data.decode("utf-8", errors="ignore") if data is not None else ""
 
     def glob(self, pattern: str) -> set[str]:
         """The ref's files matching the pattern, plus the checkout's untracked ones
@@ -1944,6 +2004,9 @@ def entry_values(facts: dict, container: str, name: str) -> list[str]:
     return out
 
 
+_FOLDS_TO_ASCII = re.compile("[\u212a\u017f\u0130]")
+
+
 def check_orphan_and_dangling_ids(facts: dict, prose: dict[str, str],
                                   f: Findings) -> None:
     """§1.4 (registry -> prose) and §2.2 (prose -> registry).
@@ -1956,13 +2019,26 @@ def check_orphan_and_dangling_ids(facts: dict, prose: dict[str, str],
     by_lower = {k.lower(): v for k, v in ids.items()}
     slug = str(facts.get("feature") or "")
     body = "\n".join(prose.values())
+    # `(?<!\w)name\b` with re.I, asked of every id against the whole prose, was the
+    # biggest cost left on a 300 KB set (7 s of 11). For a plain `\w` ASCII name it
+    # asks "is `name` a whole \w-run of the text, ignoring case", which a set of the
+    # text's lowered runs answers at once. Three characters fold to an ASCII letter
+    # under re.I without lowering to it (U+212A, U+017F, U+0130): a body carrying one
+    # keeps the regex, so the two paths cannot differ.
+    runs = None if slow_path() or _FOLDS_TO_ASCII.search(body) else \
+        {r.lower() for r in re.findall(r"\w+", body)}
+
+    def named_in_prose(name: str) -> bool:
+        if runs is not None and name.isascii() and re.fullmatch(r"\w+", name):
+            return name.lower() in runs
+        return bool(re.search(rf"(?<!\w){re.escape(name)}\b", body, re.I))
 
     for name, container in sorted(ids.items()):
         if container in ORPHAN_EXEMPT:
             continue  # a decision is cited by consequence, not by key (report §3.5)
         if is_history(registry_entry(facts, container, name)):
             continue  # kept on purpose so it is not re-derived; nobody has to cite it
-        if re.search(rf"(?<!\w){re.escape(name)}\b", body, re.I):
+        if named_in_prose(name):
             continue
         # Cited by VALUE counts as cited. An orphan is an entry no doc mentions at
         # all — "measured, correct and dead". A `limits.cloudflare` whose 100 and 524
@@ -3850,6 +3926,258 @@ def check_contract_code(facts: dict, repo_root: Path, f: Findings,
                       f"{raw} never names {', '.join(f'`{k}`' for k in missing)}")
 
 
+_OPEN_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+# a pre-change marker OPENS the line (`antes:`, `before:` — implementable.md); a word in
+# the middle ("el finally actual", "release the lock before returning") or inside a path
+# (`old-api.ts`) is not one: review of v1.26 found both silencing the real case
+_PRE_CHANGE_RE = re.compile(r"^\W*(antes|before|old)\b\s*[:(]", re.I)
+_ELISION_RE = re.compile(r"^(\.{3}|…)$")
+# comment prefixes depend on the language: `#define`, `#[derive]`, `#count`, CSS `--var`
+# and shell `--force` are code
+_SLASH_LANGS = {"js", "jsx", "ts", "tsx", "mjs", "cjs", "java", "kt", "kotlin", "swift", "go",
+                "c", "h", "cpp", "cc", "hpp", "cs", "rs", "rust", "dart", "scala", "php",
+                "javascript", "typescript", "css", "scss", "less", "jsonc"}
+_HASH_LANGS = {"py", "python", "sh", "bash", "zsh", "shell", "yaml", "yml", "rb", "ruby",
+               "toml", "ini", "conf", "cfg", "dockerfile", "make", "makefile", "r", "pl",
+               "perl", "properties", "env", "gitignore"}
+_DASH_LANGS = {"sql", "lua", "hs", "haskell"}
+# data/config files: an excerpt of keys is normal there, so lines that are all present but
+# spread are not stale; in code the same shape hides reorderings and removed lines
+_DATA_LANGS = {"json", "jsonc", "yaml", "yml", "toml", "ini", "env", "properties", "xml",
+               "plist", "conf", "cfg"}
+
+
+def _comment_prefixes(lang: str) -> tuple[str, ...]:
+    lang = lang.lower().lstrip(".")
+    if lang in _SLASH_LANGS:
+        return ("//", "/*", "*/", "* ") if lang not in ("css", "scss", "less") else ("/*", "*/", "* ")
+    if lang in _HASH_LANGS:
+        return ("# ", "#\t") if lang not in ("yaml", "yml", "toml", "ini", "conf", "cfg") else ("#",)
+    if lang in _DASH_LANGS:
+        return ("--",)
+    return ()
+
+
+def _code_fences(text: str):
+    """-> (opening lineno, info string, body lines, nearest non-empty line above).
+    Unlike `iter_fences` the info string is kept whole (`ts src/x.ts`, `ts title=
+    src/x.ts`), because that is where a block names its file."""
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        m = _OPEN_FENCE_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        mark, info = m.group(1), m.group(2).strip()
+        close = re.compile(r"^\s*%s{%d,}\s*$" % (re.escape(mark[0]), len(mark)))
+        j = i + 1
+        while j < len(lines) and not close.match(lines[j]):
+            j += 1
+        above = ""
+        for k in range(i - 1, -1, -1):
+            if lines[k].strip():
+                above = lines[k]
+                break
+        yield i + 1, info, lines[i + 1:j], above
+        i = j + 1
+
+
+def _code_segments(lines: list[str], lang: str = "") -> list[list[str]]:
+    """Check 46's normal form: stripped, no empty lines, no comment-only lines. An
+    elision marker (`...`, `…`) ends a segment instead of vanishing, because what it
+    stands for is code the block chose not to show."""
+    segs: list[list[str]] = [[]]
+    for raw in lines:
+        line = raw.strip()
+        # a comment that elides (`// … body identical to X`, `# ... rest`) stands for
+        # omitted code exactly like a bare `…`: it splits, it does not vanish
+        prefixes = _comment_prefixes(lang)
+        is_comment = bool(prefixes) and (line.startswith(prefixes) or line in ("#", "*", "//"))
+        elides = is_comment and ("…" in line or "..." in line)
+        if not line or (is_comment and not elides):
+            continue
+        if elides or _ELISION_RE.match(line):
+            if segs[-1]:
+                segs.append([])
+            continue
+        segs[-1].append(line)
+    return [s for s in segs if s]
+
+
+# an in-block marker is a comment that is ONLY the marker (`// antes`, `// before:`,
+# `# antes (:1-2)`), never a comment that happens to start with the word
+# (`// before returning, free the lock`)
+_IN_BLOCK_BEFORE = re.compile(r"^\s*(?://|#|/\*|--)\s*(antes|before|old)\s*(?:\([^)]*\))?\s*:?\s*(?:\*/)?\s*$", re.I)
+_IN_BLOCK_AFTER = re.compile(r"^\s*(?://|#|/\*|--)\s*(despu[eé]s|after|new|nuevo|ahora|now)\s*(?:\([^)]*\))?\s*:?\s*(?:\*/)?\s*$", re.I)
+
+
+def _after_part(body: list[str]) -> list[str] | None:
+    """A block that shows before AND after inside itself (`// antes` … `// después`):
+    only the after part can match the tree. A `// antes` with no after marker is all
+    pre-change state -> None (skip). No markers -> the block as is."""
+    if not any(_IN_BLOCK_BEFORE.match(l) for l in body):
+        return body
+    for i in range(len(body) - 1, -1, -1):
+        if _IN_BLOCK_AFTER.match(body[i]):
+            return body[i + 1:]
+    return None
+
+
+def _in_order_window(flat: list[str], seg: list[str]) -> int | None:
+    """Start of a compact region where the segment's lines appear in order with only a
+    few lines inserted between them (the R44 shape: a guard line added to the code that
+    the doc never got), or None when its lines are spread across the file."""
+    slack = max(3, len(seg) // 2)
+    for i, line in enumerate(flat):
+        if line != seg[0]:
+            continue
+        k, j = 1, i + 1
+        while k < len(seg) and j < len(flat) and j - i < len(seg) + slack:
+            if flat[j] == seg[k]:
+                k += 1
+            j += 1
+        if k == len(seg):
+            return i
+    return None
+
+
+def _path_tokens(info: str) -> list[str]:
+    out = []
+    for tok in info.split():
+        tok = re.sub(r"^(?:title|file|filename|path)=", "", tok).strip("\"'")
+        if "/" in tok or "." in tok:
+            out.append(tok)
+    return out
+
+
+def check_doc02_code_drift(facts: dict, prose: dict[str, str], in_scope: list[dict],
+                           status_rank: int, repo_root: Path, c: Candidates,
+                           tree: WorkTree | None = None) -> None:
+    """Check 46, a candidate generator. Real case: the code was fixed in the repo and
+    doc 02c still taught the old `finally` without the guard; whoever rebuilt from
+    the doc reintroduced the bug. Doc 02 must stay paste-ready, so its blocks are
+    never replaced by `path:line` anchors; the content is compared offline instead.
+
+    Runs only once the set is `implementing` or `shipped`. A fenced block in a doc
+    whose id starts with `02` is checked only when it names exactly ONE file that
+    exists in the tree: a path in the fence info string, or — failing that — exactly
+    one existing backticked path on the nearest non-empty line above. `diff` blocks
+    and blocks introduced by antes / before / old / actual / current show the
+    pre-change state on purpose and are skipped.
+
+    Compared on normal form (stripped lines; no blank or comment-only lines; elision
+    markers split the block into segments). Candidate when a segment is not a
+    contiguous run of the file, in order, or when under 60% of the block's lines
+    appear in the file at all. Fewer than 3 lines: skipped. Read-only; each file is
+    read once."""
+    if status_rank < STATUS_RANK["implementing"]:
+        return
+    tree = tree or WorkTree(repo_root)
+    cache: dict[str, tuple[list[str], set[str]]] = {}
+
+    def resolve(raw: str) -> str | None:
+        raw = re.sub(r":\d+(?:-\d+)?$", "", raw.strip())
+        if not raw or " " in raw:
+            return None
+        target = confined(repo_root, raw)
+        return raw if target is not None and tree.is_file(target) else None
+
+    def load(rel: str) -> tuple[list[str], set[str]]:
+        if rel not in cache:
+            text = tree.read_text(confined(repo_root, rel))
+            ext = Path(rel).suffix.lstrip(".") or Path(rel).name.lower()
+            flat = [ln for seg in _code_segments(text.splitlines(), ext) for ln in seg]
+            cache[rel] = (flat, set(flat))
+        return cache[rel]
+
+    def match(rel: str, segs: list[list[str]], n: int, data: bool = False,
+              strict: bool = False) -> tuple[bool, int, str | None]:
+        """(matches, lines found anywhere, first missing line) of a block against a file.
+        `data`: a config/data block, where an excerpt of keys is normal. `strict`: only a
+        contiguous run counts (used for the changes[] alternative)."""
+        flat, have = load(rel)
+        found = sum(1 for s in segs for ln in s if ln in have)
+        contiguous, pos, first_missing = True, 0, None
+        for seg in segs:
+            at = next((i for i in range(pos, len(flat) - len(seg) + 1)
+                       if flat[i:i + len(seg)] == seg), None)
+            if at is None:
+                contiguous = False
+                first_missing = next((ln for ln in seg if ln not in have), None)
+                if first_missing is None:
+                    # every line exists somewhere: report where the run breaks
+                    best = max(
+                        (next((k for k in range(len(seg))
+                              if i + k >= len(flat) or flat[i + k] != seg[k]),
+                              len(seg) - 1)
+                         for i in range(len(flat))), default=0)
+                    first_missing = seg[min(best, len(seg) - 1)]
+                break
+            pos = at + len(seg)
+        if contiguous and found / n >= 0.6:
+            return True, found, None
+        if strict:
+            return False, found, first_missing
+        if data and found == n:
+            # every line exists but spread across the file: an excerpt (keys of a JSON, a
+            # few lines from far apart), not a region that changed — real sets had dozens
+            return True, found, None
+        if first_missing is None:
+            first_missing = next((ln for s in segs for ln in s if ln not in have),
+                                 segs[0][0])
+        return False, found, first_missing
+
+    changed_files = sorted({r for r in (resolve(str(ch.get("file") or ""))
+                                        for ch in facts.get("changes") or []
+                                        if isinstance(ch, dict)) if r})
+
+    for entry in in_scope:
+        if not entry["id"].startswith("02") or entry["file"] not in prose:
+            continue
+        doc = entry["file"]
+        for lineno, info, body, above in _code_fences(prose[doc]):
+            lang = info.split()[0].lower() if info.split() else ""
+            # an untagged fence (or text/log/console) is output or prose, not code: real
+            # case, a block of `[DIAG-GAU] …` log lines was matched against babel.config.js
+            # because the paragraph above named it in passing
+            if lang in ("", "text", "txt", "log", "console", "output", "plaintext",
+                        "shell-session", "sh-session"):
+                continue
+            plain_above = re.sub(r"`[^`]*`", "", above)
+            if lang in ("diff", "patch") or _PRE_CHANGE_RE.search(" ".join(info.split()[1:])) \
+                    or _PRE_CHANGE_RE.search(plain_above):
+                continue
+            tokens = _path_tokens(info)
+            source = tokens if tokens else re.findall(r"`([^`\n]+)`", above)
+            named = {r for r in map(resolve, source) if r}
+            if len(named) != 1:
+                continue
+            rel = next(iter(named))
+            body = _after_part(body)
+            if body is None:
+                continue
+            segs = _code_segments(body, lang)
+            n = sum(len(s) for s in segs)
+            if n < 3:
+                continue
+            ext = Path(rel).suffix.lstrip(".").lower()
+            ok, found, first_missing = match(rel, segs, n,
+                                             data=lang in _DATA_LANGS or ext in _DATA_LANGS)
+            if ok:
+                continue
+            # the line above may name the SOURCE of a move ("the block of Layout.js moves
+            # to the hook, with this signature") while the block shows the destination:
+            # a block matching another file the registry declares in changes[] is not stale
+            if any(match(other, segs, n, strict=True)[0]
+                   for other in changed_files if other != rel):
+                continue
+            c.add("46", f"{doc}:{lineno}",
+                  f"block for `{rel}` no longer matches the tree ({found}/{n} lines "
+                  f"found; first missing: `{first_missing[:60]}`) — update the "
+                  "block from the code, or mark it as the pre-change state")
+
+
 def check_defect_status_vocabulary(facts: dict, f: Findings) -> None:
     """Check 27's precondition. The cascade reads `status: dead` and nothing else,
     so a defect closed with any other word is closed where no rule can see it.
@@ -4464,7 +4792,7 @@ def doc_index(facts: dict, facts_text: str,
         lines = [l.rstrip("\r") for l in text.split("\n")]
         if lines and lines[-1] == "":
             lines.pop()
-        present = {v: p for v, p in datums.items() if v in text}
+        present = datums_in(datums, text)
         rx = build_datum_regex(present)
         sections = doc_sections(text)
         for s in sections:
@@ -5580,6 +5908,12 @@ HUMAN_PASS = [
      "loops over a list defined elsewhere names none and is still right — the "
      "durable answer is a contract parity test in the repo "
      "(references/implementable.md §Contract parity)", None),
+    ("46", "doc 02 code blocks vs the tree", "the candidates below are fenced blocks "
+     "of doc 02 that name exactly one repo file and no longer appear in it (as a "
+     "contiguous run, or at all for under 60% of their lines). Decide which side is "
+     "stale: the doc (update the block from the code) or the code (the doc is right "
+     "and the fix never landed). A block that shows the pre-change state on purpose "
+     "is marked `antes:` / `before:` and is not listed", "02"),
     ("28", "`tracking.issues` / `pr` / `milestone` on GitHub", "deliberately NOT "
      "automated: an auditor that makes network calls is a different kind of tool. "
      "`gh issue view` / `gh pr view` and check the state matches `status:`", None),
@@ -6201,6 +6535,7 @@ def main(argv: list[str] | None = None) -> int:
     check_cross_refs(facts, prose, in_scope, c)
     check_doc02_executability(facts, prose, in_scope, c)
     check_doc_freshness(facts, prose, rank, c)
+    check_doc02_code_drift(facts, prose, in_scope, rank, repo_root, c, tree)
 
     baseline_dict = None
     if args.baseline:
