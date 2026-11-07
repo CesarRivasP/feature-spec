@@ -137,7 +137,7 @@ agents/spec-mid.md      model: sonnet  effort: medium
 agents/spec-cheap.md    model: haiku   effort: low
 ```
 
-Copy them to the repo's `.claude/agents/` (a session restart loads them). A tier naming an
+Installed as a plugin, they are already registered as `feature-spec:spec-strong`, `feature-spec:spec-mid` and `feature-spec:spec-cheap` — use those names as tiers. Without the plugin, copy them to the repo's `.claude/agents/` (a session restart loads them). A tier naming an
 agent that is not installed falls back to that agent's model at default effort, and the
 log entry says so. `tools: Read, Grep, Glob` — no `Write`, no `Edit`, no `Bash`: rule 1 is
 held by the permissions, not only by the brief.
