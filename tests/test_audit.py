@@ -14,6 +14,7 @@ that actually happened in a real spec set, and each case below states both:
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -1088,6 +1089,72 @@ def doc02_code_drift_modes() -> list[str]:
         got = n46(spec, root)
         if got != STALE46:
             problems.append(f"branch: block compared with the checkout, not feat/x: {got}")
+    return problems
+
+
+def planned_landed_and_later_phases() -> list[str]:
+    """Check 48: 19 `kind: planned` entries of a real set merged and kept no
+    `built_on:` through `implementing`. A planned file with commits since
+    `dates.drafted` is a candidate; one with none is not. And #54: once the set
+    dates what it builds, an undated planned file of a later phase is not yet a
+    missing file — until `shipped`, and never in a set that dates nothing."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "repo"
+        (root / "src").mkdir(parents=True)
+        git(root, "init", "-q", "-b", "main")
+        (root / "src" / "old.ts").write_text("old\n")
+        (root / "src" / "quiet.ts").write_text("quiet\n")
+        git(root, "add", ".")
+        old = "2026-01-01T00:00:00"
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit",
+                        "-q", "-m", "init"], cwd=root, check=True,
+                       env={**os.environ, "GIT_AUTHOR_DATE": old,
+                            "GIT_COMMITTER_DATE": old})
+        (root / "src" / "touched.ts").write_text("new\n")
+        (root / "src" / "built.ts").write_text("new\n")
+        git(root, "add", ".")
+        git(root, "commit", "-q", "-m", "work")
+        spec = root / "docs" / "features" / "landed"
+        spec.mkdir(parents=True)
+        shutil.copy(FIXTURES / "_profile.fixture.yml", spec / "_profile.fixture.yml")
+        (spec / "01-master-plan.md").write_text("# plan\n")
+
+        def facts(status: str, dated: bool = True) -> dict:
+            built = ", built_on: 2026-10-01" if dated else ""
+            (spec / "_facts.yml").write_text(
+                f"feature: landed\nstatus: {status}\nprofile: _profile.fixture.yml\n"
+                "dates: { drafted: 2026-06-01 }\n"
+                "changes:\n"
+                f"  - {{ id: C1, file: src/built.ts, kind: planned, change: 'a'{built} }}\n"
+                "  - { id: C2, file: src/touched.ts, kind: planned, change: 'b' }\n"
+                "  - { id: C3, file: src/quiet.ts, kind: planned, change: 'c' }\n"
+                "  - { id: C4, file: src/later.ts, kind: planned, change: 'd' }\n"
+                "docs:\n  - { id: \"01\", file: 01-master-plan.md, role: master-plan, "
+                "stage: draft }\n")
+            out = subprocess.run([sys.executable, str(AUDIT), str(spec), "--json"],
+                                 capture_output=True, text=True)
+            if out.returncode not in (0, 1):
+                raise AssertionError(f"landed: audit.py crashed\n{out.stderr}")
+            return json.loads(out.stdout)
+
+        data = facts("implementing")
+        c48 = " ".join(c["what"] for c in data["candidates"].get("48", []))
+        if "C2 (`src/touched.ts`)" not in c48:
+            problems.append(f"landed: check 48 missed the touched planned file: {c48!r}")
+        if "C3" in c48 or "C1" in c48 or "C4" in c48:
+            problems.append(f"landed: check 48 listed a quiet, dated or absent file: {c48!r}")
+        if matches(data["findings"], "48", ""):
+            problems.append("landed: check 48 must be a candidate, never a finding")
+        if matches(data["findings"], "20", "src/later.ts"):
+            problems.append("landed: check 20 fired on an undated later-phase file "
+                            "while `implementing` (#54)")
+        if not matches(facts("shipped")["findings"], "20", "src/later.ts"):
+            problems.append("landed: check 20 must still fire on a missing file at shipped")
+        if not matches(facts("implementing", dated=False)["findings"], "20", "src/later.ts"):
+            problems.append("landed: a set that dates nothing keeps check 20 as before")
+        if facts("reviewed")["candidates"].get("48"):
+            problems.append("landed: check 48 ran below `implementing`")
     return problems
 
 
@@ -2482,6 +2549,8 @@ def main() -> int:
     failures += rotate_plan_quotes_paths()
     total += 1
     failures += paths_resolve_on_the_spec_branch()
+    total += 1
+    failures += planned_landed_and_later_phases()
     total += 1
     failures += doc02_code_drift_modes()
     total += 1

@@ -282,6 +282,13 @@ Doc 02 stays paste-ready, so a block is a copy of code, and a copy can go stale 
 - **[script]** — each such block is a **candidate**, with `k/n` lines found and the first line missing.
 - **[human]** — decide which side is stale. **The doc is stale** (the usual case): update the block from the code. **The code is wrong** (the doc is the intended behaviour and the fix never landed): that is a defect, not a doc edit. **The block is the pre-change state on purpose**: label it `antes:` / `before:` so the check skips it.
 
+### 48. Planned entries already landed — [script + human]
+`built_on:` is what tells `ship.py` and every count what is done, and nothing reminds anyone to write it.
+- **[script]** — while `status: implementing`, the `kind: planned` entries with no `built_on:` whose file has commits since `tracking.base_sha:` (or since `dates.drafted:`, on the branch the set names) come out as **one candidate** listing them. No lower bound, no candidate.
+- **[human]** — a busy file is touched by unrelated work. Date the ones that landed (`built_on:` = the day they did); leave the rest.
+
+*Real case:* 19 entries had merged and kept `kind: planned` with no date through 31 rounds of `implementing`; they surfaced as 19 DRIFTs of check 39 only after the flip to `shipped`.
+
 
 ### Checks the script settles on its own — [script]
 

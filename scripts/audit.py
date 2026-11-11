@@ -1855,6 +1855,8 @@ def check_file_existence(facts: dict, repo_root: Path, status_rank: int,
     Paths resolve against `tree` — the working tree, or the branch the registry
     names when the checkout is on another one (`spec_tree`)."""
     tree = tree or WorkTree(repo_root)
+    adopted = any(isinstance(e, dict) and e.get("built_on")
+                  for e in facts.get("changes") or [])
     for key in ("changes", "related_docs"):
         for e in facts.get(key) or []:
             if not isinstance(e, dict):
@@ -1868,6 +1870,12 @@ def check_file_existence(facts: dict, repo_root: Path, status_rank: int,
                 continue  # decided not to build it — the file is absent by design
             if key == "changes" and status_rank < STATUS_RANK["implementing"]:
                 continue  # a file this set will create legitimately isn't there yet
+            if key == "changes" and adopted and status_rank < STATUS_RANK["shipped"] \
+                    and e.get("built_on") is None:
+                # `built_on:` says what landed; an undated entry of a later phase
+                # is a file this set has not created YET. Real case: 4 entries
+                # built, 13 CONTRADICTIONs for new files of phases not run (#54).
+                continue
             target = confined(repo_root, str(raw))
             if target is None:
                 f.add(DRIFT, f"{key}.{e.get('id', raw)}",
@@ -4291,6 +4299,49 @@ def check_fixes_landed(facts: dict, f: Findings) -> None:
               "47 fix landed, defect open")
 
 
+def check_planned_landed(facts: dict, repo_root: Path, status_rank: int,
+                         root_is_real: bool, c: Candidates,
+                         tree: WorkTree | None = None) -> None:
+    """Check 48, candidates. A `kind: planned` entry with no `built_on:` whose file
+    has commits since the set was drafted is probably built and unregistered. Real
+    case: 19 entries had merged and kept `kind: planned` with no date through the
+    whole of `implementing`; they surfaced as 19 DRIFTs only after the flip to
+    `shipped`. A commit touching a file is not proof it is built — a busy file is
+    touched by unrelated work — so this lists, it does not judge."""
+    if status_rank != STATUS_RANK["implementing"] or not root_is_real:
+        return
+    pending = [(e, raw) for e, raw in change_paths(facts)
+               if norm(e.get("kind")) == "planned" and e.get("built_on") is None
+               and confined(repo_root, raw) is not None]
+    if not pending:
+        return
+    tracking = facts.get("tracking") if isinstance(facts.get("tracking"), dict) else {}
+    ref = tree.sha if isinstance(tree, GitTree) else "HEAD"
+    base = str(tracking.get("base_sha") or "").strip()
+    drafted = to_date((facts.get("dates") or {}).get("drafted")
+                      if isinstance(facts.get("dates"), dict) else None)
+    if base:
+        args, since = [f"{base}..{ref}"], f"`{base[:7]}`"
+    elif drafted:
+        args, since = [f"--since={drafted.isoformat()}", ref], str(drafted)
+    else:
+        return        # no lower bound: the whole history would match every file
+    out = _git(repo_root, "log", "--format=", "--name-only", *args, "--",
+               *[raw for _, raw in pending])
+    if out is None:
+        return
+    touched = {line.strip() for line in out.splitlines() if line.strip()}
+    hits = [f"{e.get('id') or raw} (`{raw}`)" for e, raw in pending
+            if any(t == raw or t.startswith(raw + "/") for t in touched)]
+    if not hits:
+        return
+    shown = ", ".join(hits[:8]) + (f", +{len(hits) - 8} more" if len(hits) > 8 else "")
+    on = f" on `{tree.label}`" if tree is not None and tree.label else ""
+    c.add("48", "changes", f"{len(hits)} `kind: planned` entr"
+          f"{'y' if len(hits) == 1 else 'ies'} with no `built_on:` have commits"
+          f"{on} since {since}: {shown} — date the ones that landed")
+
+
 def planned_unbuilt(facts: dict) -> list[str]:
     """`kind: planned` entries with no `built_on:` — what check 39 reports one by one
     once the set is `shipped`."""
@@ -6006,6 +6057,10 @@ HUMAN_PASS = [
      "stale: the doc (update the block from the code) or the code (the doc is right "
      "and the fix never landed). A block that shows the pre-change state on purpose "
      "is marked `antes:` / `before:` and is not listed", "02"),
+    ("48", "planned entries already landed", "the candidate below lists `kind: "
+     "planned` entries with no `built_on:` whose file has commits since the set was "
+     "drafted (or since `tracking.base_sha:`). A file touched by unrelated work is "
+     "not built; date the ones that landed with the day they did, leave the rest", None),
     ("28", "`tracking.issues` / `pr` / `milestone` on GitHub", "deliberately NOT "
      "automated: an auditor that makes network calls is a different kind of tool. "
      "`gh issue view` / `gh pr view` and check the state matches `status:`", None),
@@ -6600,6 +6655,7 @@ def main(argv: list[str] | None = None) -> int:
     tree, checkout = spec_tree(facts, spec_dir, repo_root, root_is_real)
     check_source_coverage(facts, repo_root, rank, f, tree)
     check_built_state(facts, repo_root, rank, f, tree)
+    check_planned_landed(facts, repo_root, rank, root_is_real, c, tree)
     check_revision_order(facts, prose, f)
     check_provisional_markers(facts, prose, f)
     check_contract_code(facts, repo_root, f, c, tree)

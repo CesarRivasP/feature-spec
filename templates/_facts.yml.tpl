@@ -40,6 +40,8 @@ tracking:
   pr: null              # e.g. 305
   milestone: null       # e.g. v1.4.2
   branch: null
+  base_sha: null        # OPTIONAL: the commit the work started from. Check 48 lists
+                        #   planned entries with commits after it (else after dates.drafted)
   shipped_in: null      # release tag once merged, e.g. hotfix/v1.4.1
   shipped_on: null      # publication date. `scripts/ship.py <dir> --tag <tag>` writes
   release_url: null     #   these three, flips status: and appends the revision
