@@ -3691,6 +3691,19 @@ def revision_number(tag) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def next_revision_tag(facts: dict) -> tuple[str, str | None]:
+    """-> (the next `v<n>` after the highest numbered tag in `dates.revisions`, that
+    tag). Real case: an agent wrote `v6` in a changelog while the registry was at
+    `v7`; check 40 caught it a round later. Asking is cheaper than being caught."""
+    dates = facts.get("dates") if isinstance(facts.get("dates"), dict) else {}
+    tags = [str(r.get("tag")) for r in dates.get("revisions") or []
+            if isinstance(r, dict) and revision_number(r.get("tag")) is not None]
+    if not tags:
+        return "v1", None
+    last = max(tags, key=revision_number)
+    return f"v{revision_number(last) + 1}", last
+
+
 CHANGELOG_HEADING = re.compile(r"^##\s+(changelog|historial|registro de cambios)\b",
                                re.I | re.M)
 CHANGELOG_ENTRY = re.compile(
@@ -6455,6 +6468,9 @@ def main(argv: list[str] | None = None) -> int:
                     choices=["author", "review", "implement", "validate", "verify", "sync"],
                     default=None,
                     help="mode/action for --entry heading")
+    ap.add_argument("--next-tag", action="store_true",
+                    help="print the next revision tag (`v<n>` after the highest in "
+                         "`dates.revisions`) and exit without auditing")
     ap.add_argument("--rotate-plan", action="store_true",
                     help="print the cut, archive name, stage carry and exact shell "
                          "commands to rotate _log.md, and exit without auditing")
@@ -6597,6 +6613,13 @@ def main(argv: list[str] | None = None) -> int:
             print_doc_index(docs, str(facts.get("feature") or spec_dir.name), skipped)
         return 0
 
+    if args.next_tag:
+        tag, last = next_revision_tag(facts)
+        print(tag)
+        print(f"last in `dates.revisions`: {last}" if last
+              else "`dates.revisions` has no numbered tag", file=sys.stderr)
+        return 0
+
     if args.get is not None:
         blocks, missing = get_entries(facts_path.read_text(encoding="utf-8"), args.get)
         if missing:
@@ -6661,6 +6684,8 @@ def main(argv: list[str] | None = None) -> int:
             entry_date = (today or datetime.date.today()).isoformat()
             print(f"## {entry_id} · {entry_date} · {args.agent} · {args.mode}")
             print(f"add `**Log read through:** R<k>` yourself — the log's last round is R{last}", file=sys.stderr)
+            print(f"a revision this round is `{next_revision_tag(facts)[0]}` "
+                  "(`--next-tag`)", file=sys.stderr)
 
         if read_str is not None:
             print(read_str)

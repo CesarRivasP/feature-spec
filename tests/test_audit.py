@@ -949,6 +949,19 @@ def ship_ready_is_counted() -> list[str]:
     return problems
 
 
+def next_tag_follows_the_registry() -> list[str]:
+    """An agent wrote `v6` in a changelog while the registry was at `v7`; check 40
+    caught it a round later. `--next-tag` answers before the write."""
+    problems = []
+    for fixture, want in (("ship-ready", "v3"), ("fixes-landed", "v1")):
+        out = subprocess.run([sys.executable, str(AUDIT), str(FIXTURES / fixture),
+                              "--next-tag"], capture_output=True, text=True)
+        if out.returncode != 0 or out.stdout.strip() != want:
+            problems.append(f"--next-tag on {fixture}: expected {want}, got "
+                            f"{out.stdout.strip()!r} {out.stderr!r}")
+    return problems
+
+
 def accepted_risks_come_due() -> list[str]:
     """Four risks of one research set were accepted together and all expire on
     2026-10-23. Printed like a risk due next year, they read as handled until G1
@@ -2547,6 +2560,8 @@ def main() -> int:
     failures += accepted_risks_come_due()
     total += 1
     failures += ship_ready_is_counted()
+    total += 1
+    failures += next_tag_follows_the_registry()
     total += 1
     failures += acceptance_attempts_recorded()
     total += 1
