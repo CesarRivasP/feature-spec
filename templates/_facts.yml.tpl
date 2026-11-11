@@ -168,6 +168,10 @@ decisions: {}           # e.g. { scope_trimmed: { date: YYYY-MM-DD, basis: decid
                         #                 the threshold that motivated it',
                         #          cited_in: ['01 §2.4', '02 Fase 5', '03 §3.1'] } }
                         #
+                        # untested_because: '<reason>' — OPTIONAL. A decision dated after
+                        #   the tests doc's `regenerated_on:` that the doc never names is a
+                        #   check 49 candidate; this says once that it needs no test.
+                        #
                         # `cited_in:` lists the sections that REST on this decision.
                         # Changing the decision means walking that list — `sync` cannot,
                         # because it replaces values and a premise has no value to

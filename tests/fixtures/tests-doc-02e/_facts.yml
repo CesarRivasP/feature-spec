@@ -7,10 +7,22 @@ feature: tests-doc-02e
 status: reviewed
 profile: ../_profile.fixture.yml
 defects: []
+# Check 49: twelve decisions of a real set sat in the registry for rounds with no
+# test prose in 02e. 02e was regenerated 2026-10-10. DEC1 predates it; DEC2 and
+# DEC3 are named (bare, qualified); DEC5 needs no test and says so. DEC4 (date)
+# and DEC6 (revised_on) are the two the doc never names.
+decisions:
+  DEC1: { date: 2026-10-01, basis: decided, what: 'a' }
+  DEC2: { date: 2026-10-12, basis: decided, what: 'b' }
+  DEC3: { date: 2026-10-12, basis: decided, what: 'c' }
+  DEC4: { date: 2026-10-14, basis: decided, what: 'd' }
+  DEC5: { date: 2026-10-14, basis: decided, what: 'e', untested_because: 'owner, not behavior' }
+  DEC6: { date: 2026-10-01, revised_on: 2026-10-15, basis: decided, what: 'f' }
 acceptance:
   - { id: AC1, text: 'el toast aparece en menos de 300 ms', status: written }
 docs:
   - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }
   - { id: "02", file: 02-implementation.md, role: implementation, stage: reviewed }
-  - { id: "02e", file: 02e-tests-and-e2e.md, role: tests, stage: reviewed }
+  - { id: "02e", file: 02e-tests-and-e2e.md, role: tests, stage: reviewed,
+      regenerated_on: 2026-10-10 }
   - { id: "03", file: 03-stakeholder.md, role: stakeholder, stage: reviewed }

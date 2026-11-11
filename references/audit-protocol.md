@@ -289,6 +289,13 @@ Doc 02 stays paste-ready, so a block is a copy of code, and a copy can go stale 
 
 *Real case:* 19 entries had merged and kept `kind: planned` with no date through 31 rounds of `implementing`; they surfaced as 19 DRIFTs of check 39 only after the flip to `shipped`.
 
+### 49. Decisions the tests doc never names — [script + human]
+Check 42 dates what a doc cites; a decision the doc never cites is invisible to it.
+- **[script]** — for the `role: tests` doc with `regenerated_on:`, the `decisions.*` whose `date:` or `revised_on:` is **after** that date and whose key the doc never names (bare, or `decisions.<key>`) come out as **one candidate**, newest first. `untested_because: '<reason>'` on a decision takes it off the list.
+- **[human]** — write the test or E2E step the decision needs, then bump `regenerated_on:`. Blind spots: a decision made the same day as the stamp, and a stamp bumped without the prose.
+
+*Real case:* twelve decisions sat in the registry for several rounds with no test or E2E prose in the tests doc, and no check said so.
+
 
 ### Checks the script settles on its own — [script]
 

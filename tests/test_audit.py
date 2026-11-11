@@ -528,6 +528,12 @@ FLAG_CASES: list[tuple[str, list[str], list[tuple[str, str]],
 # `reject` column is the one that matters: an over-reporting sweep costs the reader
 # more tokens than the check saves, which is the opposite of why it was mechanized.
 CANDIDATE_CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
+    # check 49 — decisions dated after the tests doc's `regenerated_on:` that it
+    # never names. DEC4 (date) and DEC6 (revised_on); DEC1 predates the doc, DEC2
+    # and DEC3 are named bare and qualified, DEC5 has `untested_because:`.
+    ("tests-doc-02e",
+     [("49", "DEC4 (2026-10-14)"), ("49", "DEC6 (2026-10-15)"), ("49", "2 decisions")],
+     [("49", "DEC1"), ("49", "DEC2"), ("49", "DEC3"), ("49", "DEC5")]),
     # check 46 — doc 02 code blocks vs the file they name. The real case: the code got
     # the guard in `finally`, the doc kept teaching the old one. Only the stale block
     # is a candidate; the equal one, the `antes:` one, the ```diff, the one with
@@ -1120,10 +1126,12 @@ def planned_landed_and_later_phases() -> list[str]:
         shutil.copy(FIXTURES / "_profile.fixture.yml", spec / "_profile.fixture.yml")
         (spec / "01-master-plan.md").write_text("# plan\n")
 
-        def facts(status: str, dated: bool = True) -> dict:
+        def facts(status: str, dated: bool = True, base: str | None = None) -> dict:
             built = ", built_on: 2026-10-01" if dated else ""
+            track = f"tracking: {{ base_sha: '{base}' }}\n" if base else ""
             (spec / "_facts.yml").write_text(
                 f"feature: landed\nstatus: {status}\nprofile: _profile.fixture.yml\n"
+                + track +
                 "dates: { drafted: 2026-06-01 }\n"
                 "changes:\n"
                 f"  - {{ id: C1, file: src/built.ts, kind: planned, change: 'a'{built} }}\n"
@@ -1155,6 +1163,17 @@ def planned_landed_and_later_phases() -> list[str]:
             problems.append("landed: a set that dates nothing keeps check 20 as before")
         if facts("reviewed")["candidates"].get("48"):
             problems.append("landed: check 48 ran below `implementing`")
+        # `base_sha:` is registry input: an option-shaped value never reaches git
+        evil = Path(tmp) / "evil.txt"
+        data = facts("implementing", base=f"--output={evil}")
+        if evil.exists():
+            problems.append("landed: `tracking.base_sha:` reached git as an option")
+        if "since 2026-06-01" not in " ".join(c["what"] for c in data["candidates"].get("48", [])):
+            problems.append("landed: an invalid `base_sha:` must fall back to `dates.drafted`")
+        sha = git(root, "rev-parse", "HEAD~1")
+        c48 = " ".join(c["what"] for c in facts("implementing", base=sha)["candidates"].get("48", []))
+        if f"since `{sha[:7]}`" not in c48 or "C2" not in c48:
+            problems.append(f"landed: a valid `base_sha:` must bound the range: {c48!r}")
     return problems
 
 

@@ -3891,6 +3891,47 @@ def check_doc_freshness(facts: dict, prose: dict[str, str], status_rank: int,
                   f"{'y' if len(hits) == 1 else 'ies'} that moved since: {shown}")
 
 
+def check_tests_doc_decisions(facts: dict, prose: dict[str, str],
+                              c: Candidates) -> None:
+    """Check 49, candidates. Check 42 dates the entries a doc cites; a decision the
+    doc never cites is invisible to it. Real case: twelve decisions sat in the
+    registry for several rounds with no test or E2E prose in the tests doc. Lists the
+    decisions dated (`date:` / `revised_on:`) after the tests doc's
+    `regenerated_on:` that it does not name, bare or as `decisions.<key>`. Some
+    decisions need no test (an owner, a name): `untested_because:` says so once."""
+    decisions = facts.get("decisions")
+    if not isinstance(decisions, dict) or not decisions:
+        return
+    for d in facts.get("docs") or []:
+        if not isinstance(d, dict) or norm(d.get("role")) != "tests":
+            continue
+        name = str(d.get("file") or "")
+        stamp = to_date(d.get("regenerated_on"))
+        if name not in prose or stamp is None:
+            continue        # no date: check 42 already asks for one
+        text = prose[name]
+        hits = []
+        for key, e in decisions.items():
+            if not isinstance(e, dict) or e.get("untested_because"):
+                continue
+            when = max((dt for dt in (to_date(e.get("date")), to_date(e.get("revised_on")))
+                        if dt), default=None)
+            if when is None or when <= stamp:
+                continue
+            k = re.escape(str(key))
+            if re.search(r"(?<![\w.])%s(?![\w])|(?<![\w])decisions\.%s(?![\w])" % (k, k),
+                         text):
+                continue
+            hits.append((when, f"{key} ({when})"))
+        hits = [h for _, h in sorted(hits, key=lambda x: x[0], reverse=True)]
+        if hits:
+            shown = ", ".join(hits[:8]) + (f", +{len(hits) - 8} more"
+                                           if len(hits) > 8 else "")
+            c.add("49", name, f"regenerated {stamp}; {len(hits)} decision"
+                  f"{'' if len(hits) == 1 else 's'} dated since that it never names: "
+                  f"{shown}")
+
+
 def check_contract_code(facts: dict, repo_root: Path, f: Findings,
                         c: Candidates, tree: WorkTree | None = None) -> None:
     """Check 43. Check 3 compares `contracts.*` with prose; nothing compared it with
@@ -4318,6 +4359,12 @@ def check_planned_landed(facts: dict, repo_root: Path, status_rank: int,
     tracking = facts.get("tracking") if isinstance(facts.get("tracking"), dict) else {}
     ref = tree.sha if isinstance(tree, GitTree) else "HEAD"
     base = str(tracking.get("base_sha") or "").strip()
+    if base:
+        # The registry is input: only a hex id that resolves to a commit reaches
+        # `git log`, never a value git could read as an option (`--output=...`).
+        base = (_git(repo_root, "rev-parse", "--verify", "--quiet",
+                     f"{base}^{{commit}}")
+                if re.fullmatch(r"[0-9a-fA-F]{7,40}", base) else None) or ""
     drafted = to_date((facts.get("dates") or {}).get("drafted")
                       if isinstance(facts.get("dates"), dict) else None)
     if base:
@@ -6046,6 +6093,10 @@ HUMAN_PASS = [
      "revised, retired. `sync` moves values; a sentence that stopped being true has "
      "no value to move. Most citations of a moved entry are still right; read each "
      "listed one against the entry as it is now, then bump `regenerated_on:`", None),
+    ("49", "decisions the tests doc never names", "the candidates below are "
+     "decisions dated after the tests doc's `regenerated_on:` that it never names. "
+     "Write the test or E2E step each one needs and bump `regenerated_on:`; a "
+     "decision that needs no test says so once with `untested_because:`", None),
     ("43", "contract vs the code that validates it", "the candidates below are "
      "`contracts.*` fields the `validated_in:` file never names. A validator that "
      "loops over a list defined elsewhere names none and is still right — the "
@@ -6688,6 +6739,7 @@ def main(argv: list[str] | None = None) -> int:
     check_cross_refs(facts, prose, in_scope, c)
     check_doc02_executability(facts, prose, in_scope, c)
     check_doc_freshness(facts, prose, rank, c)
+    check_tests_doc_decisions(facts, prose, c)
     check_doc02_code_drift(facts, prose, in_scope, rank, repo_root, c, tree)
 
     baseline_dict = None
