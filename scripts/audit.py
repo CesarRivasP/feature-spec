@@ -4239,6 +4239,94 @@ def check_changes_defect_cascade(facts: dict, f: Findings) -> None:
                   "34 changes[] dependency on a revised decision")
 
 
+def _defect_ref(raw) -> str:
+    """`D1` and `defects.D1` name the same defect."""
+    parsed = parse_ref(raw)
+    return parsed[1] if parsed and parsed[0] == "defects" else str(raw).strip()
+
+
+def check_fixes_landed(facts: dict, f: Findings) -> None:
+    """Check 47. `changes[].fixes: [D1, ...]` ties a change to the defects it fixes.
+    Real case: fourteen defects stayed `open` for rounds after the change fixing
+    each had merged, and surfaced only when `ship.py` refused with 23 blockers at
+    once. When every change naming a defect carries `built_on:` and the defect is
+    still `open` with no `outcome:`, the registry is behind the tree."""
+    defects = {str(d.get("id")): d for d in facts.get("defects") or []
+               if isinstance(d, dict) and d.get("id") is not None}
+    fixers: dict[str, list[dict]] = {}
+    for idx, e in enumerate(facts.get("changes") or []):
+        if not isinstance(e, dict) or e.get("fixes") is None:
+            continue
+        cid = str(e.get("id") or e.get("file") or f"[{idx}]")
+        fixes = e["fixes"]
+        if not isinstance(fixes, list):
+            f.add(DRIFT, f"changes.{cid}", "`fixes:` is not a list",
+                  "`fixes: [D1, D4]` — the `defects[]` ids this change fixes",
+                  "47 fix landed, defect open")
+            continue
+        for raw in fixes:
+            key = _defect_ref(raw)
+            if key not in defects:
+                f.add(DRIFT, f"changes.{cid}",
+                      f"`fixes:` names `{raw}`, which is not a `defects[]` id",
+                      "name an existing defect, or drop it from `fixes:`",
+                      "47 fix landed, defect open")
+                continue
+            fixers.setdefault(key, []).append(e)
+    for key, entries in fixers.items():
+        d = defects[key]
+        if norm(d.get("status")) not in ("", "open") or d.get("outcome"):
+            continue
+        if not all(e.get("built_on") for e in entries):
+            continue
+        ids = ", ".join(str(e.get("id") or e.get("file")) for e in entries)
+        last = max((to_date(e.get("built_on")) for e in entries
+                    if to_date(e.get("built_on"))), default=None)
+        f.add(DRIFT, f"defects.{key}",
+              f"fix landed ({ids}, built" + (f" {last}" if last else "")
+              + ") and the defect is still `open`",
+              "flip it to `status: fixed` with an `outcome:` naming the change, or "
+              "say in `outcome:` why it stays open — at ship time an open defect "
+              "is a blocker",
+              "47 fix landed, defect open")
+
+
+def planned_unbuilt(facts: dict) -> list[str]:
+    """`kind: planned` entries with no `built_on:` — what check 39 reports one by one
+    once the set is `shipped`."""
+    return [str(e.get("id") or raw) for e, raw in change_paths(facts)
+            if norm(e.get("kind")) == "planned" and e.get("built_on") is None]
+
+
+def ship_blockers(facts: dict, today: datetime.date | None) -> list[dict]:
+    """The CONTRADICTIONs that would fire the moment `status:` flips to `shipped`.
+    `ship.py` refuses on this list, and `audit` prints its length every round of
+    an `implementing` set, so the two cannot disagree. Real case: 31 rounds of
+    `implementing` with no count, then 23 blockers at once at ship time."""
+    preview = dict(facts)
+    preview["status"] = "shipped"
+    f = Findings()
+    check_basis_gates(preview, f, today)
+    check_acceptance_state(preview, STATUS_RANK["shipped"], f)
+    return [x for x in f.items if x["severity"] == CONTRADICTION]
+
+
+def ship_readiness(facts: dict, today: datetime.date | None) -> dict | None:
+    """`{"blockers": N, "unbuilt": M}` for an `implementing` set, else None. Below
+    `implementing` everything is a blocker, so the count says nothing."""
+    if norm(facts.get("status")) != "implementing":
+        return None
+    return {"blockers": len(ship_blockers(facts, today)),
+            "unbuilt": len(planned_unbuilt(facts))}
+
+
+def format_ship_readiness(ready: dict) -> str:
+    line = f"ship-ready: {ready['blockers']} blocker{'s' if ready['blockers'] != 1 else ''}"
+    if ready["unbuilt"]:
+        line += f" + {ready['unbuilt']} planned without `built_on:`"
+    return line + " (`--as-status shipped` lists them)"
+
+
 LOG_MAX_LINES = 800
 # Lines undercount a log written in long paragraphs. Real case: 701 lines, 103KB — about
 # 26k tokens, well past what one read holds, and silent under the line threshold alone.
@@ -5643,6 +5731,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
             "accepted_risks_due": due_risks,
             "acceptance_unsigned": unsigned_acceptance,
             "changes_deferred": deferred_changes,
+            "ship_ready": ship_readiness(facts, today),
             "scripts": {
                 "profile": prof_display,
                 "commands": command_keys,
@@ -5668,6 +5757,9 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
         parts.append(f"tracking.branch: {tracking_branch}")
     if tracking_shipped_in:
         parts.append(f"shipped_in: {tracking_shipped_in}")
+    ready = ship_readiness(facts, today)
+    if ready is not None:
+        parts.append(format_ship_readiness(ready))
     print(" · ".join(parts))
     print()
 
@@ -6015,7 +6107,8 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
            matrix: dict | None = None,
            tree: tuple[str, str] | None = None,
            baseline: dict | None = None,
-           full: bool = False) -> int:
+           full: bool = False,
+           ready: dict | None = None) -> int:
     sort_findings(f)
     for x in f.items:
         if "fingerprint" not in x:
@@ -6048,6 +6141,7 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
                           "tree": ({"checkout": tree[0], "spec": tree[1]} if tree
                                    else None),
                           "deferred_docs": [d["file"] for d in deferred],
+                          "ship_ready": ready,
                           "baseline": baseline},
                          indent=2, ensure_ascii=False))
         return exit_code
@@ -6178,6 +6272,8 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
         verdict += f" · {len(risks)} accepted risk(s) with a due date"
     if due:
         verdict += f", {len(due)} due within {EXPIRY_WARNING_DAYS} days"
+    if ready is not None:
+        verdict += " · " + format_ship_readiness(ready)
     if cands.total():
         # Counted apart from the findings on purpose. A candidate has no severity
         # yet, so folding it into the verdict would make the count assert something
@@ -6498,6 +6594,7 @@ def main(argv: list[str] | None = None) -> int:
     check_dead_dependency_cascade(facts, f)
     check_changes_decision_cascade(facts, f)
     check_changes_defect_cascade(facts, f)
+    check_fixes_landed(facts, f)
     check_defect_status_vocabulary(facts, f)
     check_unique_ids(facts, f)
     tree, checkout = spec_tree(facts, spec_dir, repo_root, root_is_real)
@@ -6552,6 +6649,8 @@ def main(argv: list[str] | None = None) -> int:
                   and norm(args.as_status) != norm(declared_status) else None)
     matrix = (None if args.no_matrix or not prose
               else correspondence(facts, prose, in_scope))
+    # Under --as-status the preview already IS the list; the count would repeat it.
+    ready = None if audited_as else ship_readiness(facts, today)
 
     if args.write_baseline:
         try:
@@ -6563,14 +6662,14 @@ def main(argv: list[str] | None = None) -> int:
                declared_status=declared_status, audited_as=audited_as, today=today,
                matrix=matrix,
                tree=(checkout, tree.label) if tree.label else None,
-               baseline=None, full=args.full)
+               baseline=None, full=args.full, ready=ready)
         return 0
 
     return report(f, c, facts, in_scope, deferred, prose, args.json,
                   declared_status=declared_status, audited_as=audited_as, today=today,
                   matrix=matrix,
                   tree=(checkout, tree.label) if tree.label else None,
-                  baseline=baseline_dict, full=args.full)
+                  baseline=baseline_dict, full=args.full, ready=ready)
 
 
 if __name__ == "__main__":

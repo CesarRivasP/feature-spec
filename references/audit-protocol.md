@@ -321,6 +321,7 @@ from one of them needs explaining, disputing or changing, and not otherwise.
 | 41 | Provisional prose |
 | 44 | Cross-set value parity |
 | 45 | History inside the registry |
+| 47 | Fix landed, defect still open |
 
 ## Enum fields are read lowercased — always
 

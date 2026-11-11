@@ -296,6 +296,13 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("34", "C16"), ("34", "C19")],
      [("34", "C17"), ("34", "C18")]),
 
+    # check 47 — fourteen defects of a real set stayed `open` after their fixes
+    # merged. D1's only fix is built; D2 has one of two built; D3 is fixed; D4 is
+    # open with an `outcome:` that says why.
+    ("fixes-landed",
+     [("47", "defects.D1"), ("47", "`D9`"), ("47", "not a list")],
+     [("47", "defects.D2"), ("47", "defects.D3"), ("47", "defects.D4")]),
+
     # §15 — `app:` against a spec that genuinely lives in a subdirectory. `apps/consumer`
     # exists; it is simply not the one holding this spec. foreign-profile reports the
     # same finding for a weaker reason — its spec sits at the repo root, so `parts` is
@@ -896,6 +903,43 @@ def human_pass_is_complete() -> list[str]:
     listed = {num for num, _, _, _ in HUMAN_PASS}
     return [f"protocol tags check {n} for a human pass but HUMAN_PASS does not list "
             "it — it is neither run nor printed" for n in sorted(tagged - listed)]
+
+
+def ship_ready_is_counted() -> list[str]:
+    """31 rounds of `implementing`, then 23 blockers at once at ship time. The count
+    rides on every verdict line of an `implementing` set, from the same gates
+    `ship.py` refuses on, and leaves when the preview already lists them."""
+    problems = []
+    data = run_json("ship-ready")
+    if data.get("ship_ready") != {"blockers": 0, "unbuilt": 0}:
+        problems.append(f"ship-ready: expected 0 blockers, got {data.get('ship_ready')}")
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "ship-ready"
+        shutil.copytree(FIXTURES / "ship-ready", spec)
+        shutil.copy(FIXTURES / "_profile.fixture.yml", Path(tmp) / "_profile.fixture.yml")
+        facts = spec / "_facts.yml"
+        text = facts.read_text(encoding="utf-8")
+        text = text.replace("status: approved, verified_on: 2026-09-20", "status: written")
+        text = text.replace("docs:\n", "changes:\n  - { id: C1, file: src/a.ts, kind: "
+                            "planned, change: 'a' }\ndocs:\n")
+        facts.write_text(text, encoding="utf-8")
+        out = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root",
+                              str(spec)], capture_output=True, text=True).stdout
+        verdict = out.strip().splitlines()[-1]
+        if "ship-ready: 1 blocker + 1 planned without `built_on:`" not in verdict:
+            problems.append(f"ship-ready: verdict line lacks the count: {verdict!r}")
+        prev = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root",
+                               str(spec), "--as-status", "shipped"],
+                              capture_output=True, text=True).stdout
+        if "ship-ready:" in prev:
+            problems.append("ship-ready: --as-status shipped must not repeat the count")
+        opened = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root",
+                                 str(spec), "--open"], capture_output=True, text=True).stdout
+        if "ship-ready: 1 blocker" not in opened.splitlines()[0]:
+            problems.append("ship-ready: --open status line lacks the count")
+    if run_json("fixes-landed").get("ship_ready") is not None:
+        problems.append("ship-ready: printed for a set below `implementing`")
+    return problems
 
 
 def accepted_risks_come_due() -> list[str]:
@@ -1765,7 +1809,7 @@ def open_items_lists_pending_actions() -> list[str]:
             data = json.loads(out_json.stdout)
             want_keys = {"status", "tracking", "findings_open", "findings_deferred",
                          "defects_open", "accepted_risks_due", "acceptance_unsigned",
-                         "changes_deferred", "scripts"}
+                         "changes_deferred", "ship_ready", "scripts"}
             if set(data.keys()) != want_keys:
                 problems.append(f"open-items: --json keys {sorted(data.keys())} != {sorted(want_keys)}")
             if [f["id"] for f in data.get("findings_open", [])] != ["R4-F1"]:
@@ -2415,6 +2459,8 @@ def main() -> int:
 
     total += 1
     failures += accepted_risks_come_due()
+    total += 1
+    failures += ship_ready_is_counted()
     total += 1
     failures += acceptance_attempts_recorded()
     total += 1

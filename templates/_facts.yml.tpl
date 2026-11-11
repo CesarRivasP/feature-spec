@@ -276,6 +276,14 @@ changes: []             # components CREATED or MODIFIED by this feature (bots, 
                         #   where there were 20. `built_in: R35` beside it if the round
                         #   matters. A `built_on:` while `status:` is below
                         #   `implementing` is a set that forgot to flip.
+                        #
+                        #   fixes: [D1, D4] — OPTIONAL, the `defects[]` this change is
+                        #   the fix for. Once every change naming a defect here carries
+                        #   `built_on:` and the defect is still `status: open` with no
+                        #   `outcome:`, check 47 says so (DRIFT): the fix landed and the
+                        #   registry still calls the bug open. Real case: fourteen
+                        #   defects stayed open after their fixes merged and surfaced
+                        #   only at ship time, as fourteen of 23 blockers at once.
 
 source_tree:            # OPTIONAL until `implementing`, then expected. The part of the
                         #   tree this set OWNS, as positive globs, so check 38 can compare
