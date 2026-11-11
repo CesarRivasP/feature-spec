@@ -234,6 +234,31 @@ Reuse the exact `outcome: aborted_no_conditions` and `aborted_because:` vocabula
 
 When an accepted risk in `defects[]` expires on a date, linking the criterion that would close it via `closes:` allows the audit to report both the expiry date and the blocked attempts accumulated behind it.
 
+### A revert control measures the fix, not the cause
+
+A revert control runs the gate with the fix reverted: red without the fix, green with it. That shows the symptom exists and that the diff is enough to remove it. It does **not** show the mechanism a defect's `claim:` states: a fix can work for a reason other than the one written down, and one control that goes red for several defects at once isolates none of them. G1's own wording holds: *the fix may well work; the registry has not earned the right to say why.*
+
+**By default, a red revert control is evidence for the acceptance criterion** (`AC… revert control da rojo`), and the defect stays `basis: asserted`.
+
+It promotes a defect to `basis: measured` only when **all four** hold:
+1. **The reverted diff is exactly the change that fixes this defect** — the `changes[]` entries declaring `fixes: [Dn]`, and nothing else.
+2. **The red observation is the defect's own observable, not the end symptom** — its `log_line:`, or the negation of its `falsified_by:`, quoted verbatim in `value:`. "The gate went red" is the symptom; "`[DIAG] latch=false after retry`" is the mechanism.
+3. **One control, one defect.** A control red for D4, D6 and D10 together measures their shared symptom.
+4. **The run is recorded like any other:** `how: device`, `cmd:` naming the gate and both shas (reverted and fixed), `n:` per device, `conditions:`.
+
+```yaml
+evidence:
+  how: device
+  cmd: 'gate g1 on device A, app at a1b2c3d (fix C7 reverted) and at e4f5a6b (fix)'
+  date: YYYY-MM-DD
+  n: 3
+  spread: 'red 3/3 reverted, green 3/3 with the fix'
+  conditions: { device: 'device A', build: debug }
+  value: '[DIAG] cache.retry result=fail latch=false'
+```
+
+No new `how:` — the shape above already says it. *Real case:* a set had revert controls red on two devices for its retry gates; six defects stayed asserted and shipped as accepted risks, because two one-line control patches stood behind all six and nothing said what such a control may prove.
+
 
 ## Derived evidence — a conclusion read off measurements already here
 
