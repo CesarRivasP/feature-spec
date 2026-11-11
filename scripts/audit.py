@@ -4431,6 +4431,22 @@ def ship_readiness(facts: dict, today: datetime.date | None) -> dict | None:
             "unbuilt": len(planned_unbuilt(facts))}
 
 
+def group_risks(risks: list) -> list[tuple[list[str], str, str, list]]:
+    """One accepted decision covering several defects is copied into each — six
+    copies in a real set — and printed six times it reads as six decisions. Risks
+    with the same expiry, reason and closing criteria print once, ids together."""
+    out: list[tuple[list[str], str, str, list]] = []
+    index: dict[tuple, int] = {}
+    for rid, detail, because, _left, closing in risks:
+        key = (detail, because, repr(closing))
+        if key in index:
+            out[index[key]][0].append(str(rid))
+            continue
+        index[key] = len(out)
+        out.append(([str(rid)], detail, because, closing))
+    return out
+
+
 def format_ship_readiness(ready: dict) -> str:
     line = f"ship-ready: {ready['blockers']} blocker{'s' if ready['blockers'] != 1 else ''}"
     if ready["unbuilt"]:
@@ -6323,8 +6339,8 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
         print("## Accepted risks, with their expiry\n")
         print("Recorded decisions to ship with a cause still asserted. Not findings "
               "— until the date passes, and then G1 refuses again:\n")
-        for rid, detail, because, left, closing_crits in risks:
-            print(f"  defects.{rid} — {detail}")
+        for rids, detail, because, closing_crits in group_risks(risks):
+            print(f"  {', '.join('defects.' + r for r in rids)} — {detail}")
             if because:
                 print(f"      {because}")
             for c in closing_crits:

@@ -949,6 +949,29 @@ def ship_ready_is_counted() -> list[str]:
     return problems
 
 
+def shared_risks_print_once() -> list[str]:
+    """One decision to accept a risk covered six defects of a real set, copied into
+    each. Same expiry and reason print as one line with every id; a different
+    reason stays its own line."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "accepted-risk"
+        shutil.copytree(FIXTURES / "accepted-risk", spec)
+        shutil.copy(FIXTURES / "_profile.fixture.yml", Path(tmp) / "_profile.fixture.yml")
+        facts = spec / "_facts.yml"
+        text = facts.read_text(encoding="utf-8")
+        r1 = text.split("  - { id: R1,", 1)[1].split("\n  - { id: R2,", 1)[0]
+        text = text.replace("defects:\n", "defects:\n  - { id: R9," + r1 + "\n", 1)
+        facts.write_text(text, encoding="utf-8")
+        out = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root",
+                              str(spec), "--today", "2026-09-01"],
+                             capture_output=True, text=True).stdout
+        sec = out.split("## Accepted risks, with their expiry", 1)[-1].split("\n## ", 1)[0]
+        if "defects.R9, defects.R1 — " not in sec or sec.count("se shippea") != 1:
+            problems.append(f"accepted risks: identical copies did not print once:\n{sec}")
+    return problems
+
+
 def next_tag_follows_the_registry() -> list[str]:
     """An agent wrote `v6` in a changelog while the registry was at `v7`; check 40
     caught it a round later. `--next-tag` answers before the write."""
@@ -2562,6 +2585,8 @@ def main() -> int:
     failures += ship_ready_is_counted()
     total += 1
     failures += next_tag_follows_the_registry()
+    total += 1
+    failures += shared_risks_print_once()
     total += 1
     failures += acceptance_attempts_recorded()
     total += 1
