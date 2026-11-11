@@ -1,6 +1,6 @@
 {
   "name": "feature-spec",
-  "version": "1.28.0",
+  "version": "1.29.0",
   "description": "Multi-doc feature specs from a single source of truth (a facts registry), audited mechanically so no two docs contradict. Scripts for audit, sync, new, rotate, ship and the HTML view.",
   "author": {
     "name": "Cesar Rivas",
