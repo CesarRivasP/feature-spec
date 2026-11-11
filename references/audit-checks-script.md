@@ -50,7 +50,7 @@ Three exceptions, all **declared in the registry, never inferred**:
 - `where: external` — the change is real but has no file here (a cron job, a dashboard setting). Real case: `file: "cron.job jobid 1 (comando SQL, no vive en el repo)"`.
 - `kind: deferred` / `kind: moved_out` — decided against, so the file is absent by design.
 - a `changes[]` file the set has not created yet, while `status:` is below `implementing`.
-- at `implementing`, a `kind: planned` entry with no `built_on:` in a set where some entry carries `built_on:` — a later phase not built yet. The set dates what lands, so an undated entry is one it has not written (#54). At `shipped` it fires again, and a set that dates nothing keeps the old rule.
+- at `implementing`, a `kind: planned` entry with no `built_on:` in a set where some entry carries `built_on:` — a later phase not built yet. The set dates what lands, so an undated entry is one it has not written (#54). At `shipped` it fires again, and a set that dates nothing keeps the old rule. The cost: a `planned` entry that edits an existing file under a mistyped path is also silent until `shipped`; the `ship-ready` count includes it among the planned entries with no `built_on:`.
 
 A path that resolves **outside** the repo root is a fourth outcome and not one of the three exceptions: `DRIFT`, reported as escaping rather than as missing, and never stat'd. Whether such a file exists is not this audit's business — see check 18.
 

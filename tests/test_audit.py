@@ -13,6 +13,7 @@ that actually happened in a real spec set, and each case below states both:
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import re
@@ -944,6 +945,12 @@ def ship_ready_is_counted() -> list[str]:
                                  str(spec), "--open"], capture_output=True, text=True).stdout
         if "ship-ready: 1 blocker" not in opened.splitlines()[0]:
             problems.append("ship-ready: --open status line lacks the count")
+    previewed = subprocess.run([sys.executable, str(AUDIT), str(FIXTURES / "fixes-landed"),
+                                "--repo-root", str(FIXTURES / "fixes-landed"), "--open",
+                                "--as-status", "implementing"],
+                               capture_output=True, text=True).stdout
+    if "ship-ready" in previewed:
+        problems.append("ship-ready: --open under --as-status must not print the count")
     if run_json("fixes-landed").get("ship_ready") is not None:
         problems.append("ship-ready: printed for a set below `implementing`")
     return problems
@@ -1155,6 +1162,7 @@ def planned_landed_and_later_phases() -> list[str]:
                             "GIT_COMMITTER_DATE": old})
         (root / "src" / "touched.ts").write_text("new\n")
         (root / "src" / "built.ts").write_text("new\n")
+        (root / "src" / "café.ts").write_text("new\n")
         git(root, "add", ".")
         git(root, "commit", "-q", "-m", "work")
         spec = root / "docs" / "features" / "landed"
@@ -1162,18 +1170,22 @@ def planned_landed_and_later_phases() -> list[str]:
         shutil.copy(FIXTURES / "_profile.fixture.yml", spec / "_profile.fixture.yml")
         (spec / "01-master-plan.md").write_text("# plan\n")
 
-        def facts(status: str, dated: bool = True, base: str | None = None) -> dict:
+        def facts(status: str, dated: bool = True, base: str | None = None,
+                  drafted: str = "2026-06-01") -> dict:
             built = ", built_on: 2026-10-01" if dated else ""
             track = f"tracking: {{ base_sha: '{base}' }}\n" if base else ""
             (spec / "_facts.yml").write_text(
                 f"feature: landed\nstatus: {status}\nprofile: _profile.fixture.yml\n"
                 + track +
-                "dates: { drafted: 2026-06-01 }\n"
+                f"dates: {{ drafted: {drafted} }}\n"
                 "changes:\n"
                 f"  - {{ id: C1, file: src/built.ts, kind: planned, change: 'a'{built} }}\n"
                 "  - { id: C2, file: src/touched.ts, kind: planned, change: 'b' }\n"
                 "  - { id: C3, file: src/quiet.ts, kind: planned, change: 'c' }\n"
                 "  - { id: C4, file: src/later.ts, kind: planned, change: 'd' }\n"
+                "  - { id: C5, file: src/café.ts, kind: planned, change: 'e' }\n"
+                "  - { id: C6, file: src/typo.ts, kind: pending, transferred_from: x, "
+                "change: 'f' }\n"
                 "docs:\n  - { id: \"01\", file: 01-master-plan.md, role: master-plan, "
                 "stage: draft }\n")
             out = subprocess.run([sys.executable, str(AUDIT), str(spec), "--json"],
@@ -1186,6 +1198,17 @@ def planned_landed_and_later_phases() -> list[str]:
         c48 = " ".join(c["what"] for c in data["candidates"].get("48", []))
         if "C2 (`src/touched.ts`)" not in c48:
             problems.append(f"landed: check 48 missed the touched planned file: {c48!r}")
+        if "C5 (`src/café.ts`)" not in c48:
+            problems.append(f"landed: check 48 missed a non-ASCII path (git quotes it): {c48!r}")
+        if not matches(data["findings"], "20", "src/typo.ts"):
+            problems.append("landed: the #54 skip must cover `kind: planned` only — a "
+                            "`pending` entry's missing file is still a CONTRADICTION")
+        today = datetime.date.today().isoformat()
+        same_day = " ".join(c["what"] for c in
+                            facts("implementing", drafted=today)["candidates"].get("48", []))
+        if "C2" not in same_day:
+            problems.append("landed: a commit made on the drafted day must count "
+                            f"(git reads a bare date at the current hour): {same_day!r}")
         if "C3" in c48 or "C1" in c48 or "C4" in c48:
             problems.append(f"landed: check 48 listed a quiet, dated or absent file: {c48!r}")
         if matches(data["findings"], "48", ""):

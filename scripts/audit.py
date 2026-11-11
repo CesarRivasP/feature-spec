@@ -1871,7 +1871,7 @@ def check_file_existence(facts: dict, repo_root: Path, status_rank: int,
             if key == "changes" and status_rank < STATUS_RANK["implementing"]:
                 continue  # a file this set will create legitimately isn't there yet
             if key == "changes" and adopted and status_rank < STATUS_RANK["shipped"] \
-                    and e.get("built_on") is None:
+                    and norm(e.get("kind")) == "planned" and e.get("built_on") is None:
                 # `built_on:` says what landed; an undated entry of a later phase
                 # is a file this set has not created YET. Real case: 4 entries
                 # built, 13 CONTRADICTIONs for new files of phases not run (#54).
@@ -3700,7 +3700,7 @@ def next_revision_tag(facts: dict) -> tuple[str, str | None]:
             if isinstance(r, dict) and revision_number(r.get("tag")) is not None]
     if not tags:
         return "v1", None
-    last = max(tags, key=revision_number)
+    last = max(reversed(tags), key=revision_number)   # v1, v1.1, v1.2 -> v1.2
     return f"v{revision_number(last) + 1}", last
 
 
@@ -3922,18 +3922,22 @@ def check_tests_doc_decisions(facts: dict, prose: dict[str, str],
         stamp = to_date(d.get("regenerated_on"))
         if name not in prose or stamp is None:
             continue        # no date: check 42 already asks for one
-        text = prose[name]
+        text = blank_fences(prose[name])
         hits = []
         for key, e in decisions.items():
-            if not isinstance(e, dict) or e.get("untested_because"):
+            if not isinstance(e, dict) or e.get("untested_because") \
+                    or e.get("retired_on") \
+                    or norm(e.get("status")) in ("superseded", "retired", "cancelled", "dead"):
                 continue
             when = max((dt for dt in (to_date(e.get("date")), to_date(e.get("revised_on")))
                         if dt), default=None)
             if when is None or when <= stamp:
                 continue
             k = re.escape(str(key))
-            if re.search(r"(?<![\w.])%s(?![\w])|(?<![\w])decisions\.%s(?![\w])" % (k, k),
-                         text):
+            # bare only for a key that reads as an id (`DEC19`, `scope_trimmed`): a
+            # number would match "Section 5", and `retry` must not match `retry-policy`
+            bare = (r"(?<![\w.-])%s(?![\w-])|" % k) if not str(key).isdigit() else ""
+            if re.search(bare + r"(?<![\w])decisions\.%s(?![\w-])" % k, text):
                 continue
             hits.append((when, f"{key} ({when})"))
         hits = [h for _, h in sorted(hits, key=lambda x: x[0], reverse=True)]
@@ -4339,9 +4343,10 @@ def check_fixes_landed(facts: dict, f: Findings) -> None:
         d = defects[key]
         if norm(d.get("status")) not in ("", "open") or d.get("outcome"):
             continue
-        if not all(e.get("built_on") for e in entries):
-            continue
-        ids = ", ".join(str(e.get("id") or e.get("file")) for e in entries)
+        if not all(to_date(e.get("built_on")) for e in entries):
+            continue      # a `built_on:` that is not a date is check 39's
+        ids = ", ".join(dict.fromkeys(str(e.get("id") or e.get("file") or "?")
+                                      for e in entries))
         last = max((to_date(e.get("built_on")) for e in entries
                     if to_date(e.get("built_on"))), default=None)
         f.add(DRIFT, f"defects.{key}",
@@ -4383,10 +4388,14 @@ def check_planned_landed(facts: dict, repo_root: Path, status_rank: int,
     if base:
         args, since = [f"{base}..{ref}"], f"`{base[:7]}`"
     elif drafted:
-        args, since = [f"--since={drafted.isoformat()}", ref], str(drafted)
+        # a bare date is read with the current time of day: midnight, explicitly
+        args, since = [f"--since={drafted.isoformat()}T00:00:00", ref], str(drafted)
     else:
         return        # no lower bound: the whole history would match every file
-    out = _git(repo_root, "log", "--format=", "--name-only", *args, "--",
+    # Registry paths are literal (no `:(glob)` / `:!` magic), printed unquoted and
+    # relative to the root the set's paths are relative to.
+    out = _git(repo_root, "--literal-pathspecs", "-c", "core.quotePath=false", "log",
+               "--relative", "--format=", "--name-only", *args, "--",
                *[raw for _, raw in pending])
     if out is None:
         return
@@ -5556,7 +5565,7 @@ IN_LINE_CAP = 3
 def open_items(facts: dict, spec_dir: Path, repo_root: Path,
                today: datetime.date | None = None,
                as_json: bool = False, compact: bool = False,
-               facts_text: str | None = None) -> None:
+               facts_text: str | None = None, preview: bool = False) -> None:
     """Print only what still demands action in a spec set, exiting without auditing.
 
     In a long-running spec set with tens of log entries, reading _log.md and the
@@ -5858,7 +5867,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
             "accepted_risks_due": due_risks,
             "acceptance_unsigned": unsigned_acceptance,
             "changes_deferred": deferred_changes,
-            "ship_ready": ship_readiness(facts, today),
+            "ship_ready": None if preview else ship_readiness(facts, today),
             "scripts": {
                 "profile": prof_display,
                 "commands": command_keys,
@@ -5884,7 +5893,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
         parts.append(f"tracking.branch: {tracking_branch}")
     if tracking_shipped_in:
         parts.append(f"shipped_in: {tracking_shipped_in}")
-    ready = ship_readiness(facts, today)
+    ready = None if preview else ship_readiness(facts, today)
     if ready is not None:
         parts.append(format_ship_readiness(ready))
     print(" · ".join(parts))
@@ -6580,7 +6589,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.open:
         open_items(facts, spec_dir, repo_root, today=today, as_json=args.json,
                    compact=args.compact,
-                   facts_text=facts_path.read_text(encoding="utf-8"))
+                   facts_text=facts_path.read_text(encoding="utf-8"),
+                   preview=bool(args.as_status)
+                   and norm(args.as_status) != norm(declared_status))
         return 0
 
     if args.doc_index:
