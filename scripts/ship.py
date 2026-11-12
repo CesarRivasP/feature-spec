@@ -43,9 +43,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from audit import (CHANGELOG_HEADING, CONTRADICTION, STATUS_RANK, Findings,  # noqa: E402
-                   check_acceptance_state, check_basis_gates, confined, git_blob,
-                   load_facts, norm, repo_root_for, revision_number,
+from audit import (CHANGELOG_HEADING, confined, git_blob,  # noqa: E402
+                   load_facts, ship_blockers, norm, repo_root_for, revision_number,
                    version_stamp, yaml, yaml_error_report)
 
 INDENT_RE = re.compile(r"^(\s*)")
@@ -233,12 +232,7 @@ def edit_doc01(ed: Edit, rev: str | None, on: str, note: str) -> None:
 
 
 def gate(facts: dict, today: datetime.date | None) -> list[dict]:
-    preview = dict(facts)
-    preview["status"] = "shipped"
-    f = Findings()
-    check_basis_gates(preview, f, today)
-    check_acceptance_state(preview, STATUS_RANK["shipped"], f)
-    return [x for x in f.items if x["severity"] == CONTRADICTION]
+    return ship_blockers(facts, today)
 
 
 def main(argv: list[str] | None = None) -> int:

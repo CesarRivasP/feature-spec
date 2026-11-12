@@ -40,6 +40,8 @@ tracking:
   pr: null              # e.g. 305
   milestone: null       # e.g. v1.4.2
   branch: null
+  base_sha: null        # OPTIONAL, quoted: '3f2a1c9'. The commit the work started from. Check 48 lists
+                        #   planned entries with commits after it (else after dates.drafted)
   shipped_in: null      # release tag once merged, e.g. hotfix/v1.4.1
   shipped_on: null      # publication date. `scripts/ship.py <dir> --tag <tag>` writes
   release_url: null     #   these three, flips status: and appends the revision
@@ -166,6 +168,10 @@ decisions: {}           # e.g. { scope_trimmed: { date: YYYY-MM-DD, basis: decid
                         #                 the threshold that motivated it',
                         #          cited_in: ['01 §2.4', '02 Fase 5', '03 §3.1'] } }
                         #
+                        # untested_because: '<reason>' — OPTIONAL. A decision dated after
+                        #   the tests doc's `regenerated_on:` that the doc never names is a
+                        #   check 49 candidate; this says once that it needs no test.
+                        #
                         # `cited_in:` lists the sections that REST on this decision.
                         # Changing the decision means walking that list — `sync` cannot,
                         # because it replaces values and a premise has no value to
@@ -276,6 +282,14 @@ changes: []             # components CREATED or MODIFIED by this feature (bots, 
                         #   where there were 20. `built_in: R35` beside it if the round
                         #   matters. A `built_on:` while `status:` is below
                         #   `implementing` is a set that forgot to flip.
+                        #
+                        #   fixes: [D1, D4] — OPTIONAL, the `defects[]` this change is
+                        #   the fix for. Once every change naming a defect here carries
+                        #   `built_on:` and the defect is still `status: open` with no
+                        #   `outcome:`, check 47 says so (DRIFT): the fix landed and the
+                        #   registry still calls the bug open. Real case: fourteen
+                        #   defects stayed open after their fixes merged and surfaced
+                        #   only at ship time, as fourteen of 23 blockers at once.
 
 source_tree:            # OPTIONAL until `implementing`, then expected. The part of the
                         #   tree this set OWNS, as positive globs, so check 38 can compare

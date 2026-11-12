@@ -13,7 +13,9 @@ that actually happened in a real spec set, and each case below states both:
 """
 from __future__ import annotations
 
+import datetime
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -296,6 +298,13 @@ CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
      [("34", "C16"), ("34", "C19")],
      [("34", "C17"), ("34", "C18")]),
 
+    # check 47 — fourteen defects of a real set stayed `open` after their fixes
+    # merged. D1's only fix is built; D2 has one of two built; D3 is fixed; D4 is
+    # open with an `outcome:` that says why.
+    ("fixes-landed",
+     [("47", "defects.D1"), ("47", "`D9`"), ("47", "not a list")],
+     [("47", "defects.D2"), ("47", "defects.D3"), ("47", "defects.D4")]),
+
     # §15 — `app:` against a spec that genuinely lives in a subdirectory. `apps/consumer`
     # exists; it is simply not the one holding this spec. foreign-profile reports the
     # same finding for a weaker reason — its spec sits at the repo root, so `parts` is
@@ -520,6 +529,12 @@ FLAG_CASES: list[tuple[str, list[str], list[tuple[str, str]],
 # `reject` column is the one that matters: an over-reporting sweep costs the reader
 # more tokens than the check saves, which is the opposite of why it was mechanized.
 CANDIDATE_CASES: list[tuple[str, list[tuple[str, str]], list[tuple[str, str]]]] = [
+    # check 49 — decisions dated after the tests doc's `regenerated_on:` that it
+    # never names. DEC4 (date) and DEC6 (revised_on); DEC1 predates the doc, DEC2
+    # and DEC3 are named bare and qualified, DEC5 has `untested_because:`.
+    ("tests-doc-02e",
+     [("49", "DEC4 (2026-10-14)"), ("49", "DEC6 (2026-10-15)"), ("49", "2 decisions")],
+     [("49", "DEC1"), ("49", "DEC2"), ("49", "DEC3"), ("49", "DEC5")]),
     # check 46 — doc 02 code blocks vs the file they name. The real case: the code got
     # the guard in `finally`, the doc kept teaching the old one. Only the stale block
     # is a candidate; the equal one, the `antes:` one, the ```diff, the one with
@@ -898,6 +913,85 @@ def human_pass_is_complete() -> list[str]:
             "it — it is neither run nor printed" for n in sorted(tagged - listed)]
 
 
+def ship_ready_is_counted() -> list[str]:
+    """31 rounds of `implementing`, then 23 blockers at once at ship time. The count
+    rides on every verdict line of an `implementing` set, from the same gates
+    `ship.py` refuses on, and leaves when the preview already lists them."""
+    problems = []
+    data = run_json("ship-ready")
+    if data.get("ship_ready") != {"blockers": 0, "unbuilt": 0}:
+        problems.append(f"ship-ready: expected 0 blockers, got {data.get('ship_ready')}")
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "ship-ready"
+        shutil.copytree(FIXTURES / "ship-ready", spec)
+        shutil.copy(FIXTURES / "_profile.fixture.yml", Path(tmp) / "_profile.fixture.yml")
+        facts = spec / "_facts.yml"
+        text = facts.read_text(encoding="utf-8")
+        text = text.replace("status: approved, verified_on: 2026-09-20", "status: written")
+        text = text.replace("docs:\n", "changes:\n  - { id: C1, file: src/a.ts, kind: "
+                            "planned, change: 'a' }\ndocs:\n")
+        facts.write_text(text, encoding="utf-8")
+        out = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root",
+                              str(spec)], capture_output=True, text=True).stdout
+        verdict = out.strip().splitlines()[-1]
+        if "ship-ready: 1 blocker + 1 planned without `built_on:`" not in verdict:
+            problems.append(f"ship-ready: verdict line lacks the count: {verdict!r}")
+        prev = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root",
+                               str(spec), "--as-status", "shipped"],
+                              capture_output=True, text=True).stdout
+        if "ship-ready:" in prev:
+            problems.append("ship-ready: --as-status shipped must not repeat the count")
+        opened = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root",
+                                 str(spec), "--open"], capture_output=True, text=True).stdout
+        if "ship-ready: 1 blocker" not in opened.splitlines()[0]:
+            problems.append("ship-ready: --open status line lacks the count")
+    previewed = subprocess.run([sys.executable, str(AUDIT), str(FIXTURES / "fixes-landed"),
+                                "--repo-root", str(FIXTURES / "fixes-landed"), "--open",
+                                "--as-status", "implementing"],
+                               capture_output=True, text=True).stdout
+    if "ship-ready" in previewed:
+        problems.append("ship-ready: --open under --as-status must not print the count")
+    if run_json("fixes-landed").get("ship_ready") is not None:
+        problems.append("ship-ready: printed for a set below `implementing`")
+    return problems
+
+
+def shared_risks_print_once() -> list[str]:
+    """One decision to accept a risk covered six defects of a real set, copied into
+    each. Same expiry and reason print as one line with every id; a different
+    reason stays its own line."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        spec = Path(tmp) / "accepted-risk"
+        shutil.copytree(FIXTURES / "accepted-risk", spec)
+        shutil.copy(FIXTURES / "_profile.fixture.yml", Path(tmp) / "_profile.fixture.yml")
+        facts = spec / "_facts.yml"
+        text = facts.read_text(encoding="utf-8")
+        r1 = text.split("  - { id: R1,", 1)[1].split("\n  - { id: R2,", 1)[0]
+        text = text.replace("defects:\n", "defects:\n  - { id: R9," + r1 + "\n", 1)
+        facts.write_text(text, encoding="utf-8")
+        out = subprocess.run([sys.executable, str(AUDIT), str(spec), "--repo-root",
+                              str(spec), "--today", "2026-09-01"],
+                             capture_output=True, text=True).stdout
+        sec = out.split("## Accepted risks, with their expiry", 1)[-1].split("\n## ", 1)[0]
+        if "defects.R9, defects.R1 — " not in sec or sec.count("se shippea") != 1:
+            problems.append(f"accepted risks: identical copies did not print once:\n{sec}")
+    return problems
+
+
+def next_tag_follows_the_registry() -> list[str]:
+    """An agent wrote `v6` in a changelog while the registry was at `v7`; check 40
+    caught it a round later. `--next-tag` answers before the write."""
+    problems = []
+    for fixture, want in (("ship-ready", "v3"), ("fixes-landed", "v1")):
+        out = subprocess.run([sys.executable, str(AUDIT), str(FIXTURES / fixture),
+                              "--next-tag"], capture_output=True, text=True)
+        if out.returncode != 0 or out.stdout.strip() != want:
+            problems.append(f"--next-tag on {fixture}: expected {want}, got "
+                            f"{out.stdout.strip()!r} {out.stderr!r}")
+    return problems
+
+
 def accepted_risks_come_due() -> list[str]:
     """Four risks of one research set were accepted together and all expire on
     2026-10-23. Printed like a risk due next year, they read as handled until G1
@@ -1044,6 +1138,101 @@ def doc02_code_drift_modes() -> list[str]:
         got = n46(spec, root)
         if got != STALE46:
             problems.append(f"branch: block compared with the checkout, not feat/x: {got}")
+    return problems
+
+
+def planned_landed_and_later_phases() -> list[str]:
+    """Check 48: 19 `kind: planned` entries of a real set merged and kept no
+    `built_on:` through `implementing`. A planned file with commits since
+    `dates.drafted` is a candidate; one with none is not. And #54: once the set
+    dates what it builds, an undated planned file of a later phase is not yet a
+    missing file — until `shipped`, and never in a set that dates nothing."""
+    problems = []
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "repo"
+        (root / "src").mkdir(parents=True)
+        git(root, "init", "-q", "-b", "main")
+        (root / "src" / "old.ts").write_text("old\n")
+        (root / "src" / "quiet.ts").write_text("quiet\n")
+        git(root, "add", ".")
+        old = "2026-01-01T00:00:00"
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit",
+                        "-q", "-m", "init"], cwd=root, check=True,
+                       env={**os.environ, "GIT_AUTHOR_DATE": old,
+                            "GIT_COMMITTER_DATE": old})
+        (root / "src" / "touched.ts").write_text("new\n")
+        (root / "src" / "built.ts").write_text("new\n")
+        (root / "src" / "café.ts").write_text("new\n")
+        git(root, "add", ".")
+        git(root, "commit", "-q", "-m", "work")
+        spec = root / "docs" / "features" / "landed"
+        spec.mkdir(parents=True)
+        shutil.copy(FIXTURES / "_profile.fixture.yml", spec / "_profile.fixture.yml")
+        (spec / "01-master-plan.md").write_text("# plan\n")
+
+        def facts(status: str, dated: bool = True, base: str | None = None,
+                  drafted: str = "2026-06-01") -> dict:
+            built = ", built_on: 2026-10-01" if dated else ""
+            track = f"tracking: {{ base_sha: '{base}' }}\n" if base else ""
+            (spec / "_facts.yml").write_text(
+                f"feature: landed\nstatus: {status}\nprofile: _profile.fixture.yml\n"
+                + track +
+                f"dates: {{ drafted: {drafted} }}\n"
+                "changes:\n"
+                f"  - {{ id: C1, file: src/built.ts, kind: planned, change: 'a'{built} }}\n"
+                "  - { id: C2, file: src/touched.ts, kind: planned, change: 'b' }\n"
+                "  - { id: C3, file: src/quiet.ts, kind: planned, change: 'c' }\n"
+                "  - { id: C4, file: src/later.ts, kind: planned, change: 'd' }\n"
+                "  - { id: C5, file: src/café.ts, kind: planned, change: 'e' }\n"
+                "  - { id: C6, file: src/typo.ts, kind: pending, transferred_from: x, "
+                "change: 'f' }\n"
+                "docs:\n  - { id: \"01\", file: 01-master-plan.md, role: master-plan, "
+                "stage: draft }\n")
+            out = subprocess.run([sys.executable, str(AUDIT), str(spec), "--json"],
+                                 capture_output=True, text=True)
+            if out.returncode not in (0, 1):
+                raise AssertionError(f"landed: audit.py crashed\n{out.stderr}")
+            return json.loads(out.stdout)
+
+        data = facts("implementing")
+        c48 = " ".join(c["what"] for c in data["candidates"].get("48", []))
+        if "C2 (`src/touched.ts`)" not in c48:
+            problems.append(f"landed: check 48 missed the touched planned file: {c48!r}")
+        if "C5 (`src/café.ts`)" not in c48:
+            problems.append(f"landed: check 48 missed a non-ASCII path (git quotes it): {c48!r}")
+        if not matches(data["findings"], "20", "src/typo.ts"):
+            problems.append("landed: the #54 skip must cover `kind: planned` only — a "
+                            "`pending` entry's missing file is still a CONTRADICTION")
+        today = datetime.date.today().isoformat()
+        same_day = " ".join(c["what"] for c in
+                            facts("implementing", drafted=today)["candidates"].get("48", []))
+        if "C2" not in same_day:
+            problems.append("landed: a commit made on the drafted day must count "
+                            f"(git reads a bare date at the current hour): {same_day!r}")
+        if "C3" in c48 or "C1" in c48 or "C4" in c48:
+            problems.append(f"landed: check 48 listed a quiet, dated or absent file: {c48!r}")
+        if matches(data["findings"], "48", ""):
+            problems.append("landed: check 48 must be a candidate, never a finding")
+        if matches(data["findings"], "20", "src/later.ts"):
+            problems.append("landed: check 20 fired on an undated later-phase file "
+                            "while `implementing` (#54)")
+        if not matches(facts("shipped")["findings"], "20", "src/later.ts"):
+            problems.append("landed: check 20 must still fire on a missing file at shipped")
+        if not matches(facts("implementing", dated=False)["findings"], "20", "src/later.ts"):
+            problems.append("landed: a set that dates nothing keeps check 20 as before")
+        if facts("reviewed")["candidates"].get("48"):
+            problems.append("landed: check 48 ran below `implementing`")
+        # `base_sha:` is registry input: an option-shaped value never reaches git
+        evil = Path(tmp) / "evil.txt"
+        data = facts("implementing", base=f"--output={evil}")
+        if evil.exists():
+            problems.append("landed: `tracking.base_sha:` reached git as an option")
+        if "since 2026-06-01" not in " ".join(c["what"] for c in data["candidates"].get("48", [])):
+            problems.append("landed: an invalid `base_sha:` must fall back to `dates.drafted`")
+        sha = git(root, "rev-parse", "HEAD~1")
+        c48 = " ".join(c["what"] for c in facts("implementing", base=sha)["candidates"].get("48", []))
+        if f"since `{sha[:7]}`" not in c48 or "C2" not in c48:
+            problems.append(f"landed: a valid `base_sha:` must bound the range: {c48!r}")
     return problems
 
 
@@ -1765,7 +1954,7 @@ def open_items_lists_pending_actions() -> list[str]:
             data = json.loads(out_json.stdout)
             want_keys = {"status", "tracking", "findings_open", "findings_deferred",
                          "defects_open", "accepted_risks_due", "acceptance_unsigned",
-                         "changes_deferred", "scripts"}
+                         "changes_deferred", "ship_ready", "scripts"}
             if set(data.keys()) != want_keys:
                 problems.append(f"open-items: --json keys {sorted(data.keys())} != {sorted(want_keys)}")
             if [f["id"] for f in data.get("findings_open", [])] != ["R4-F1"]:
@@ -2416,6 +2605,12 @@ def main() -> int:
     total += 1
     failures += accepted_risks_come_due()
     total += 1
+    failures += ship_ready_is_counted()
+    total += 1
+    failures += next_tag_follows_the_registry()
+    total += 1
+    failures += shared_risks_print_once()
+    total += 1
     failures += acceptance_attempts_recorded()
     total += 1
     failures += matrix_is_counted()
@@ -2436,6 +2631,8 @@ def main() -> int:
     failures += rotate_plan_quotes_paths()
     total += 1
     failures += paths_resolve_on_the_spec_branch()
+    total += 1
+    failures += planned_landed_and_later_phases()
     total += 1
     failures += doc02_code_drift_modes()
     total += 1

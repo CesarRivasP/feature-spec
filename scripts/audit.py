@@ -1855,6 +1855,8 @@ def check_file_existence(facts: dict, repo_root: Path, status_rank: int,
     Paths resolve against `tree` — the working tree, or the branch the registry
     names when the checkout is on another one (`spec_tree`)."""
     tree = tree or WorkTree(repo_root)
+    adopted = any(isinstance(e, dict) and e.get("built_on")
+                  for e in facts.get("changes") or [])
     for key in ("changes", "related_docs"):
         for e in facts.get(key) or []:
             if not isinstance(e, dict):
@@ -1868,6 +1870,12 @@ def check_file_existence(facts: dict, repo_root: Path, status_rank: int,
                 continue  # decided not to build it — the file is absent by design
             if key == "changes" and status_rank < STATUS_RANK["implementing"]:
                 continue  # a file this set will create legitimately isn't there yet
+            if key == "changes" and adopted and status_rank < STATUS_RANK["shipped"] \
+                    and norm(e.get("kind")) == "planned" and e.get("built_on") is None:
+                # `built_on:` says what landed; an undated entry of a later phase
+                # is a file this set has not created YET. Real case: 4 entries
+                # built, 13 CONTRADICTIONs for new files of phases not run (#54).
+                continue
             target = confined(repo_root, str(raw))
             if target is None:
                 f.add(DRIFT, f"{key}.{e.get('id', raw)}",
@@ -3683,6 +3691,19 @@ def revision_number(tag) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def next_revision_tag(facts: dict) -> tuple[str, str | None]:
+    """-> (the next `v<n>` after the highest numbered tag in `dates.revisions`, that
+    tag). Real case: an agent wrote `v6` in a changelog while the registry was at
+    `v7`; check 40 caught it a round later. Asking is cheaper than being caught."""
+    dates = facts.get("dates") if isinstance(facts.get("dates"), dict) else {}
+    tags = [str(r.get("tag")) for r in dates.get("revisions") or []
+            if isinstance(r, dict) and revision_number(r.get("tag")) is not None]
+    if not tags:
+        return "v1", None
+    last = max(reversed(tags), key=revision_number)   # v1, v1.1, v1.2 -> v1.2
+    return f"v{revision_number(last) + 1}", last
+
+
 CHANGELOG_HEADING = re.compile(r"^##\s+(changelog|historial|registro de cambios)\b",
                                re.I | re.M)
 CHANGELOG_ENTRY = re.compile(
@@ -3881,6 +3902,51 @@ def check_doc_freshness(facts: dict, prose: dict[str, str], status_rank: int,
                                            if len(hits) > 8 else "")
             c.add("42", name, f"regenerated {stamp}; cites {len(hits)} entr"
                   f"{'y' if len(hits) == 1 else 'ies'} that moved since: {shown}")
+
+
+def check_tests_doc_decisions(facts: dict, prose: dict[str, str],
+                              c: Candidates) -> None:
+    """Check 49, candidates. Check 42 dates the entries a doc cites; a decision the
+    doc never cites is invisible to it. Real case: twelve decisions sat in the
+    registry for several rounds with no test or E2E prose in the tests doc. Lists the
+    decisions dated (`date:` / `revised_on:`) after the tests doc's
+    `regenerated_on:` that it does not name, bare or as `decisions.<key>`. Some
+    decisions need no test (an owner, a name): `untested_because:` says so once."""
+    decisions = facts.get("decisions")
+    if not isinstance(decisions, dict) or not decisions:
+        return
+    for d in facts.get("docs") or []:
+        if not isinstance(d, dict) or norm(d.get("role")) != "tests":
+            continue
+        name = str(d.get("file") or "")
+        stamp = to_date(d.get("regenerated_on"))
+        if name not in prose or stamp is None:
+            continue        # no date: check 42 already asks for one
+        text = blank_fences(prose[name])
+        hits = []
+        for key, e in decisions.items():
+            if not isinstance(e, dict) or e.get("untested_because") \
+                    or e.get("retired_on") \
+                    or norm(e.get("status")) in ("superseded", "retired", "cancelled", "dead"):
+                continue
+            when = max((dt for dt in (to_date(e.get("date")), to_date(e.get("revised_on")))
+                        if dt), default=None)
+            if when is None or when <= stamp:
+                continue
+            k = re.escape(str(key))
+            # bare only for a key that reads as an id (`DEC19`, `scope_trimmed`): a
+            # number would match "Section 5", and `retry` must not match `retry-policy`
+            bare = (r"(?<![\w.-])%s(?![\w-])|" % k) if not str(key).isdigit() else ""
+            if re.search(bare + r"(?<![\w])decisions\.%s(?![\w-])" % k, text):
+                continue
+            hits.append((when, f"{key} ({when})"))
+        hits = [h for _, h in sorted(hits, key=lambda x: x[0], reverse=True)]
+        if hits:
+            shown = ", ".join(hits[:8]) + (f", +{len(hits) - 8} more"
+                                           if len(hits) > 8 else "")
+            c.add("49", name, f"regenerated {stamp}; {len(hits)} decision"
+                  f"{'' if len(hits) == 1 else 's'} dated since that it never names: "
+                  f"{shown}")
 
 
 def check_contract_code(facts: dict, repo_root: Path, f: Findings,
@@ -4237,6 +4303,164 @@ def check_changes_defect_cascade(facts: dict, f: Findings) -> None:
                   "deferral waiting on it may now be permanent, or due), then set "
                   "`reviewed_on:`",
                   "34 changes[] dependency on a revised decision")
+
+
+def _defect_ref(raw) -> str:
+    """`D1` and `defects.D1` name the same defect."""
+    parsed = parse_ref(raw)
+    return parsed[1] if parsed and parsed[0] == "defects" else str(raw).strip()
+
+
+def check_fixes_landed(facts: dict, f: Findings) -> None:
+    """Check 47. `changes[].fixes: [D1, ...]` ties a change to the defects it fixes.
+    Real case: fourteen defects stayed `open` for rounds after the change fixing
+    each had merged, and surfaced only when `ship.py` refused with 23 blockers at
+    once. When every change naming a defect carries `built_on:` and the defect is
+    still `open` with no `outcome:`, the registry is behind the tree."""
+    defects = {str(d.get("id")): d for d in facts.get("defects") or []
+               if isinstance(d, dict) and d.get("id") is not None}
+    fixers: dict[str, list[dict]] = {}
+    for idx, e in enumerate(facts.get("changes") or []):
+        if not isinstance(e, dict) or e.get("fixes") is None:
+            continue
+        cid = str(e.get("id") or e.get("file") or f"[{idx}]")
+        fixes = e["fixes"]
+        if not isinstance(fixes, list):
+            f.add(DRIFT, f"changes.{cid}", "`fixes:` is not a list",
+                  "`fixes: [D1, D4]` — the `defects[]` ids this change fixes",
+                  "47 fix landed, defect open")
+            continue
+        for raw in fixes:
+            key = _defect_ref(raw)
+            if key not in defects:
+                f.add(DRIFT, f"changes.{cid}",
+                      f"`fixes:` names `{raw}`, which is not a `defects[]` id",
+                      "name an existing defect, or drop it from `fixes:`",
+                      "47 fix landed, defect open")
+                continue
+            fixers.setdefault(key, []).append(e)
+    for key, entries in fixers.items():
+        d = defects[key]
+        if norm(d.get("status")) not in ("", "open") or d.get("outcome"):
+            continue
+        if not all(to_date(e.get("built_on")) for e in entries):
+            continue      # a `built_on:` that is not a date is check 39's
+        ids = ", ".join(dict.fromkeys(str(e.get("id") or e.get("file") or "?")
+                                      for e in entries))
+        last = max((to_date(e.get("built_on")) for e in entries
+                    if to_date(e.get("built_on"))), default=None)
+        f.add(DRIFT, f"defects.{key}",
+              f"fix landed ({ids}, built" + (f" {last}" if last else "")
+              + ") and the defect is still `open`",
+              "flip it to `status: fixed` with an `outcome:` naming the change, or "
+              "say in `outcome:` why it stays open — at ship time an open defect "
+              "is a blocker",
+              "47 fix landed, defect open")
+
+
+def check_planned_landed(facts: dict, repo_root: Path, status_rank: int,
+                         root_is_real: bool, c: Candidates,
+                         tree: WorkTree | None = None) -> None:
+    """Check 48, candidates. A `kind: planned` entry with no `built_on:` whose file
+    has commits since the set was drafted is probably built and unregistered. Real
+    case: 19 entries had merged and kept `kind: planned` with no date through the
+    whole of `implementing`; they surfaced as 19 DRIFTs only after the flip to
+    `shipped`. A commit touching a file is not proof it is built — a busy file is
+    touched by unrelated work — so this lists, it does not judge."""
+    if status_rank != STATUS_RANK["implementing"] or not root_is_real:
+        return
+    pending = [(e, raw) for e, raw in change_paths(facts)
+               if norm(e.get("kind")) == "planned" and e.get("built_on") is None
+               and confined(repo_root, raw) is not None]
+    if not pending:
+        return
+    tracking = facts.get("tracking") if isinstance(facts.get("tracking"), dict) else {}
+    ref = tree.sha if isinstance(tree, GitTree) else "HEAD"
+    base = str(tracking.get("base_sha") or "").strip()
+    if base:
+        # The registry is input: only a hex id that resolves to a commit reaches
+        # `git log`, never a value git could read as an option (`--output=...`).
+        base = (_git(repo_root, "rev-parse", "--verify", "--quiet",
+                     f"{base}^{{commit}}")
+                if re.fullmatch(r"[0-9a-fA-F]{7,40}", base) else None) or ""
+    drafted = to_date((facts.get("dates") or {}).get("drafted")
+                      if isinstance(facts.get("dates"), dict) else None)
+    if base:
+        args, since = [f"{base}..{ref}"], f"`{base[:7]}`"
+    elif drafted:
+        # a bare date is read with the current time of day: midnight, explicitly
+        args, since = [f"--since={drafted.isoformat()}T00:00:00", ref], str(drafted)
+    else:
+        return        # no lower bound: the whole history would match every file
+    # Registry paths are literal (no `:(glob)` / `:!` magic), printed unquoted and
+    # relative to the root the set's paths are relative to.
+    out = _git(repo_root, "--literal-pathspecs", "-c", "core.quotePath=false", "log",
+               "--relative", "--format=", "--name-only", *args, "--",
+               *[raw for _, raw in pending])
+    if out is None:
+        return
+    touched = {line.strip() for line in out.splitlines() if line.strip()}
+    hits = [f"{e.get('id') or raw} (`{raw}`)" for e, raw in pending
+            if any(t == raw or t.startswith(raw + "/") for t in touched)]
+    if not hits:
+        return
+    shown = ", ".join(hits[:8]) + (f", +{len(hits) - 8} more" if len(hits) > 8 else "")
+    on = f" on `{tree.label}`" if tree is not None and tree.label else ""
+    c.add("48", "changes", f"{len(hits)} `kind: planned` entr"
+          f"{'y' if len(hits) == 1 else 'ies'} with no `built_on:` have commits"
+          f"{on} since {since}: {shown} — date the ones that landed")
+
+
+def planned_unbuilt(facts: dict) -> list[str]:
+    """`kind: planned` entries with no `built_on:` — what check 39 reports one by one
+    once the set is `shipped`."""
+    return [str(e.get("id") or raw) for e, raw in change_paths(facts)
+            if norm(e.get("kind")) == "planned" and e.get("built_on") is None]
+
+
+def ship_blockers(facts: dict, today: datetime.date | None) -> list[dict]:
+    """The CONTRADICTIONs that would fire the moment `status:` flips to `shipped`.
+    `ship.py` refuses on this list, and `audit` prints its length every round of
+    an `implementing` set, so the two cannot disagree. Real case: 31 rounds of
+    `implementing` with no count, then 23 blockers at once at ship time."""
+    preview = dict(facts)
+    preview["status"] = "shipped"
+    f = Findings()
+    check_basis_gates(preview, f, today)
+    check_acceptance_state(preview, STATUS_RANK["shipped"], f)
+    return [x for x in f.items if x["severity"] == CONTRADICTION]
+
+
+def ship_readiness(facts: dict, today: datetime.date | None) -> dict | None:
+    """`{"blockers": N, "unbuilt": M}` for an `implementing` set, else None. Below
+    `implementing` everything is a blocker, so the count says nothing."""
+    if norm(facts.get("status")) != "implementing":
+        return None
+    return {"blockers": len(ship_blockers(facts, today)),
+            "unbuilt": len(planned_unbuilt(facts))}
+
+
+def group_risks(risks: list) -> list[tuple[list[str], str, str, list]]:
+    """One accepted decision covering several defects is copied into each — six
+    copies in a real set — and printed six times it reads as six decisions. Risks
+    with the same expiry, reason and closing criteria print once, ids together."""
+    out: list[tuple[list[str], str, str, list]] = []
+    index: dict[tuple, int] = {}
+    for rid, detail, because, _left, closing in risks:
+        key = (detail, because, repr(closing))
+        if key in index:
+            out[index[key]][0].append(str(rid))
+            continue
+        index[key] = len(out)
+        out.append(([str(rid)], detail, because, closing))
+    return out
+
+
+def format_ship_readiness(ready: dict) -> str:
+    line = f"ship-ready: {ready['blockers']} blocker{'s' if ready['blockers'] != 1 else ''}"
+    if ready["unbuilt"]:
+        line += f" + {ready['unbuilt']} planned without `built_on:`"
+    return line + " (`--as-status shipped` lists them)"
 
 
 LOG_MAX_LINES = 800
@@ -5341,7 +5565,7 @@ IN_LINE_CAP = 3
 def open_items(facts: dict, spec_dir: Path, repo_root: Path,
                today: datetime.date | None = None,
                as_json: bool = False, compact: bool = False,
-               facts_text: str | None = None) -> None:
+               facts_text: str | None = None, preview: bool = False) -> None:
     """Print only what still demands action in a spec set, exiting without auditing.
 
     In a long-running spec set with tens of log entries, reading _log.md and the
@@ -5643,6 +5867,7 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
             "accepted_risks_due": due_risks,
             "acceptance_unsigned": unsigned_acceptance,
             "changes_deferred": deferred_changes,
+            "ship_ready": None if preview else ship_readiness(facts, today),
             "scripts": {
                 "profile": prof_display,
                 "commands": command_keys,
@@ -5668,6 +5893,9 @@ def open_items(facts: dict, spec_dir: Path, repo_root: Path,
         parts.append(f"tracking.branch: {tracking_branch}")
     if tracking_shipped_in:
         parts.append(f"shipped_in: {tracking_shipped_in}")
+    ready = None if preview else ship_readiness(facts, today)
+    if ready is not None:
+        parts.append(format_ship_readiness(ready))
     print(" · ".join(parts))
     print()
 
@@ -5903,6 +6131,10 @@ HUMAN_PASS = [
      "revised, retired. `sync` moves values; a sentence that stopped being true has "
      "no value to move. Most citations of a moved entry are still right; read each "
      "listed one against the entry as it is now, then bump `regenerated_on:`", None),
+    ("49", "decisions the tests doc never names", "the candidates below are "
+     "decisions dated after the tests doc's `regenerated_on:` that it never names. "
+     "Write the test or E2E step each one needs and bump `regenerated_on:`; a "
+     "decision that needs no test says so once with `untested_because:`", None),
     ("43", "contract vs the code that validates it", "the candidates below are "
      "`contracts.*` fields the `validated_in:` file never names. A validator that "
      "loops over a list defined elsewhere names none and is still right — the "
@@ -5914,6 +6146,10 @@ HUMAN_PASS = [
      "stale: the doc (update the block from the code) or the code (the doc is right "
      "and the fix never landed). A block that shows the pre-change state on purpose "
      "is marked `antes:` / `before:` and is not listed", "02"),
+    ("48", "planned entries already landed", "the candidate below lists `kind: "
+     "planned` entries with no `built_on:` whose file has commits since the set was "
+     "drafted (or since `tracking.base_sha:`). A file touched by unrelated work is "
+     "not built; date the ones that landed with the day they did, leave the rest", None),
     ("28", "`tracking.issues` / `pr` / `milestone` on GitHub", "deliberately NOT "
      "automated: an auditor that makes network calls is a different kind of tool. "
      "`gh issue view` / `gh pr view` and check the state matches `status:`", None),
@@ -6015,7 +6251,8 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
            matrix: dict | None = None,
            tree: tuple[str, str] | None = None,
            baseline: dict | None = None,
-           full: bool = False) -> int:
+           full: bool = False,
+           ready: dict | None = None) -> int:
     sort_findings(f)
     for x in f.items:
         if "fingerprint" not in x:
@@ -6048,6 +6285,7 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
                           "tree": ({"checkout": tree[0], "spec": tree[1]} if tree
                                    else None),
                           "deferred_docs": [d["file"] for d in deferred],
+                          "ship_ready": ready,
                           "baseline": baseline},
                          indent=2, ensure_ascii=False))
         return exit_code
@@ -6110,8 +6348,8 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
         print("## Accepted risks, with their expiry\n")
         print("Recorded decisions to ship with a cause still asserted. Not findings "
               "— until the date passes, and then G1 refuses again:\n")
-        for rid, detail, because, left, closing_crits in risks:
-            print(f"  defects.{rid} — {detail}")
+        for rids, detail, because, closing_crits in group_risks(risks):
+            print(f"  {', '.join('defects.' + r for r in rids)} — {detail}")
             if because:
                 print(f"      {because}")
             for c in closing_crits:
@@ -6178,6 +6416,8 @@ def report(f: Findings, cands: Candidates, facts: dict, in_scope, deferred,
         verdict += f" · {len(risks)} accepted risk(s) with a due date"
     if due:
         verdict += f", {len(due)} due within {EXPIRY_WARNING_DAYS} days"
+    if ready is not None:
+        verdict += " · " + format_ship_readiness(ready)
     if cands.total():
         # Counted apart from the findings on purpose. A candidate has no severity
         # yet, so folding it into the verdict would make the count assert something
@@ -6253,6 +6493,9 @@ def main(argv: list[str] | None = None) -> int:
                     choices=["author", "review", "implement", "validate", "verify", "sync"],
                     default=None,
                     help="mode/action for --entry heading")
+    ap.add_argument("--next-tag", action="store_true",
+                    help="print the next revision tag (`v<n>` after the highest in "
+                         "`dates.revisions`) and exit without auditing")
     ap.add_argument("--rotate-plan", action="store_true",
                     help="print the cut, archive name, stage carry and exact shell "
                          "commands to rotate _log.md, and exit without auditing")
@@ -6346,7 +6589,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.open:
         open_items(facts, spec_dir, repo_root, today=today, as_json=args.json,
                    compact=args.compact,
-                   facts_text=facts_path.read_text(encoding="utf-8"))
+                   facts_text=facts_path.read_text(encoding="utf-8"),
+                   preview=bool(args.as_status)
+                   and norm(args.as_status) != norm(declared_status))
         return 0
 
     if args.doc_index:
@@ -6393,6 +6638,13 @@ def main(argv: list[str] | None = None) -> int:
                 for d in docs], "skipped": skipped}, ensure_ascii=False, indent=2))
         else:
             print_doc_index(docs, str(facts.get("feature") or spec_dir.name), skipped)
+        return 0
+
+    if args.next_tag:
+        tag, last = next_revision_tag(facts)
+        print(tag)
+        print(f"last in `dates.revisions`: {last}" if last
+              else "`dates.revisions` has no numbered tag", file=sys.stderr)
         return 0
 
     if args.get is not None:
@@ -6459,6 +6711,8 @@ def main(argv: list[str] | None = None) -> int:
             entry_date = (today or datetime.date.today()).isoformat()
             print(f"## {entry_id} · {entry_date} · {args.agent} · {args.mode}")
             print(f"add `**Log read through:** R<k>` yourself — the log's last round is R{last}", file=sys.stderr)
+            print(f"a revision this round is `{next_revision_tag(facts)[0]}` "
+                  "(`--next-tag`)", file=sys.stderr)
 
         if read_str is not None:
             print(read_str)
@@ -6498,11 +6752,13 @@ def main(argv: list[str] | None = None) -> int:
     check_dead_dependency_cascade(facts, f)
     check_changes_decision_cascade(facts, f)
     check_changes_defect_cascade(facts, f)
+    check_fixes_landed(facts, f)
     check_defect_status_vocabulary(facts, f)
     check_unique_ids(facts, f)
     tree, checkout = spec_tree(facts, spec_dir, repo_root, root_is_real)
     check_source_coverage(facts, repo_root, rank, f, tree)
     check_built_state(facts, repo_root, rank, f, tree)
+    check_planned_landed(facts, repo_root, rank, root_is_real, c, tree)
     check_revision_order(facts, prose, f)
     check_provisional_markers(facts, prose, f)
     check_contract_code(facts, repo_root, f, c, tree)
@@ -6535,6 +6791,7 @@ def main(argv: list[str] | None = None) -> int:
     check_cross_refs(facts, prose, in_scope, c)
     check_doc02_executability(facts, prose, in_scope, c)
     check_doc_freshness(facts, prose, rank, c)
+    check_tests_doc_decisions(facts, prose, c)
     check_doc02_code_drift(facts, prose, in_scope, rank, repo_root, c, tree)
 
     baseline_dict = None
@@ -6552,6 +6809,8 @@ def main(argv: list[str] | None = None) -> int:
                   and norm(args.as_status) != norm(declared_status) else None)
     matrix = (None if args.no_matrix or not prose
               else correspondence(facts, prose, in_scope))
+    # Under --as-status the preview already IS the list; the count would repeat it.
+    ready = None if audited_as else ship_readiness(facts, today)
 
     if args.write_baseline:
         try:
@@ -6563,14 +6822,14 @@ def main(argv: list[str] | None = None) -> int:
                declared_status=declared_status, audited_as=audited_as, today=today,
                matrix=matrix,
                tree=(checkout, tree.label) if tree.label else None,
-               baseline=None, full=args.full)
+               baseline=None, full=args.full, ready=ready)
         return 0
 
     return report(f, c, facts, in_scope, deferred, prose, args.json,
                   declared_status=declared_status, audited_as=audited_as, today=today,
                   matrix=matrix,
                   tree=(checkout, tree.label) if tree.label else None,
-                  baseline=baseline_dict, full=args.full)
+                  baseline=baseline_dict, full=args.full, ready=ready)
 
 
 if __name__ == "__main__":

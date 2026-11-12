@@ -50,6 +50,7 @@ Three exceptions, all **declared in the registry, never inferred**:
 - `where: external` — the change is real but has no file here (a cron job, a dashboard setting). Real case: `file: "cron.job jobid 1 (comando SQL, no vive en el repo)"`.
 - `kind: deferred` / `kind: moved_out` — decided against, so the file is absent by design.
 - a `changes[]` file the set has not created yet, while `status:` is below `implementing`.
+- at `implementing`, a `kind: planned` entry with no `built_on:` in a set where some entry carries `built_on:` — a later phase not built yet. The set dates what lands, so an undated entry is one it has not written (#54). At `shipped` it fires again, and a set that dates nothing keeps the old rule. The cost: a `planned` entry that edits an existing file under a mistyped path is also silent until `shipped`; the `ship-ready` count includes it among the planned entries with no `built_on:`.
 
 A path that resolves **outside** the repo root is a fourth outcome and not one of the three exceptions: `DRIFT`, reported as escaping rather than as missing, and never stat'd. Whether such a file exists is not this audit's business — see check 18.
 
@@ -286,3 +287,12 @@ Doc 02 must stay paste-ready, so its blocks are never replaced by `path:line` an
 - **A phase not built yet** also shows while the set is `implementing`: the human half decides (doc ahead of the code, or doc behind it).
 
 *Real case:* the code was fixed in the repo and doc 02c still taught the old `finally` without the guard; whoever rebuilt from the doc reintroduced the bug.
+
+### 47. Fix landed, defect still open — [script]
+`changes[].fixes: [D1, ...]` (bare id or `defects.D1`) ties a change to the defects it is the fix for. Author-declared, like `depends_on:` in check 34: nothing is inferred from prose.
+- **Every change naming a defect in `fixes:` carries `built_on:`, and the defect is `status: open` with no `outcome:` → `DRIFT`** on the defect. Flip it to `fixed` with an `outcome:` naming the change, or say in `outcome:` why it stays open (waiting on the device run). A defect with two fixing changes and only one built stays silent.
+- **`fixes:` naming an id that is not in `defects[]`, or not a list → `DRIFT`.**
+
+The audit's verdict line on an `implementing` set also carries **`ship-ready: N blockers`** — the CONTRADICTIONs `ship.py` would refuse on (the same function, so they cannot disagree), plus the `kind: planned` entries with no `built_on:` that check 39 reports once the set is `shipped`. `--open` prints it on its status line. It is a count, not a finding; `--as-status shipped` lists them.
+
+*Real case:* a set ran 31 rounds of `implementing` and then `ship.py --dry` refused with 23 blockers at once: fourteen defects still `open` though their fixes had merged, three criteria with no `status:`. Nothing had shown the count while it could still be closed a few per round.

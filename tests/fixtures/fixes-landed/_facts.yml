@@ -1,0 +1,24 @@
+# Check 47. Fourteen defects of a real set stayed `open` after the changes fixing
+# them merged, and surfaced only at ship time. D1's only fix (C1) is built: DRIFT.
+# D2 has two fixes and only C2 is built: silent. D3 is already fixed: silent. D4
+# is open with an `outcome:` saying why: silent. C6 names a defect that does not
+# exist; C7's `fixes:` is a string, not a list.
+feature: fixes-landed
+status: reviewed
+profile: ../_profile.fixture.yml
+defects:
+  - { id: D1, claim: 'a', basis: asserted, status: open, falsified_by: 'w', log_line: null }
+  - { id: D2, claim: 'b', basis: asserted, status: open, falsified_by: 'w', log_line: null }
+  - { id: D3, claim: 'c', basis: asserted, status: fixed, falsified_by: 'w', log_line: null }
+  - { id: D4, claim: 'd', basis: asserted, status: open, falsified_by: 'w', log_line: null,
+      outcome: 'fix landed, stays open until the device run' }
+changes:
+  - { id: C1, file: src/a.ts, kind: planned, change: 'a', fixes: [D1], built_on: 2026-11-02 }
+  - { id: C2, file: src/b.ts, kind: planned, change: 'b', fixes: [defects.D2], built_on: 2026-11-02 }
+  - { id: C3, file: src/c.ts, kind: planned, change: 'c', fixes: [D2] }
+  - { id: C4, file: src/d.ts, kind: planned, change: 'd', fixes: [D3], built_on: 2026-11-02 }
+  - { id: C5, file: src/e.ts, kind: planned, change: 'e', fixes: [D4], built_on: 2026-11-02 }
+  - { id: C6, file: src/f.ts, kind: planned, change: 'f', fixes: [D9] }
+  - { id: C7, file: src/g.ts, kind: planned, change: 'g', fixes: D1 }
+docs:
+  - { id: "01", file: 01-master-plan.md, role: master-plan, stage: draft }

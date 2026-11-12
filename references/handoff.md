@@ -55,9 +55,12 @@ Required fields. A missing one is an audit finding, not a style choice. **The la
 python3 scripts/audit.py docs/features/<slug>/ --read-line [FILE ...]   # the whole `**Read:**` line
 python3 scripts/audit.py docs/features/<slug>/ --edits-line FILE[=WHAT] ...   # the `**Edits:**` line
 python3 scripts/audit.py docs/features/<slug>/ --entry [R<n>] --agent NAME --mode ACTION --read-line ... [--edits-line ...]  # entry stub
+python3 scripts/audit.py docs/features/<slug>/ --next-tag   # the next revision tag, before writing a changelog entry
 git hash-object <file>        # blob sha, needs no commit and no staging
 shasum -a 256 <file> | cut -c1-7   # fallback outside a git repo
 ```
+
+**Never build these lines by hand** (`wc -l`, a pasted sha): macOS pads `wc -l` with spaces, a hand-copied blob drifts from the file, and check 16 re-measures every one. The commands print exactly what it will compare. *Real case:* a hand-built `Edits:` line cost a round of check 16 findings.
 
 `--read-line` prints the line ready to paste, each file measured the way check 16 will re-measure it. With no `FILE` it lists every file of the set — the registry, each `docs[]` file on disk, the profile. **Keep the ones you opened:** `Read:` claims what was read, not what exists, and a line naming a file nobody opened is the fabrication this field exists to make checkable.
 
